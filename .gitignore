@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+venv/
+env/
+
+# Logs & data
+*.log
+*.csv
+*.json
+
+# Configuration (contains network details)
+config/settings.yaml
+!config/settings.yaml.example
+
+# IDE
+.vscode/
+.idea/

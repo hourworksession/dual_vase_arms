@@ -1,0 +1,30 @@
+# IP addresses and hardware settings
+arms:
+  left:
+    ip: "192.168.1.10"
+  right:
+    ip: "192.168.1.11"
+
+moonraker:
+  host: "192.168.1.20"   # Raspberry Pi IP
+  port: 7125
+
+turntable:
+  port: "/dev/ttyUSB0"   # check with `ls /dev/tty*`
+  baudrate: 115200
+  endstop_pin: null      # if your MCU sends endstop state (future)
+
+# Default motion & extrusion parameters
+defaults:
+  travel_speed: 150      # mm/s arm move when not extruding
+  print_speed: 30        # mm/s arm move when extruding
+  extrusion_feedrate: 5  # mm/s of filament (provisional, per your volcano/nozzle)
+  temperature:
+    tool0: 200           # Celsius
+    tool1: 200
+
+# Optional: software limits (arm coordinates)
+limits:
+  x: [100, 700]
+  y: [-300, 300]
+  z: [50, 500]
