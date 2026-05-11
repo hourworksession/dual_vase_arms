@@ -2,4 +2,5 @@ xarm-python-sdk
 pyyaml
 requests
 pyserial
-websocket-client  # for future Moonraker WebSocket upgrade
+websocket-client
+tqdm

@@ -10,20 +10,20 @@ moonraker:
   port: 7125
 
 turntable:
-  port: "/dev/ttyUSB0"   # check with `ls /dev/tty*`
+  port: "/dev/ttyUSB0"   # Windows: e.g., "COM3", Linux: "/dev/ttyUSB0"
   baudrate: 115200
-  endstop_pin: null      # if your MCU sends endstop state (future)
+  endstop_pin: null      # future
 
 # Default motion & extrusion parameters
 defaults:
   travel_speed: 150      # mm/s arm move when not extruding
   print_speed: 30        # mm/s arm move when extruding
-  extrusion_feedrate: 5  # mm/s of filament (provisional, per your volcano/nozzle)
+  extrusion_feedrate: 5  # mm/s of filament (adjust for your volcano/normal nozzle)
   temperature:
     tool0: 200           # Celsius
     tool1: 200
 
-# Optional: software limits (arm coordinates)
+# Optional: software limits
 limits:
   x: [100, 700]
   y: [-300, 300]

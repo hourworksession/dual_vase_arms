@@ -19,22 +19,19 @@ class ArmController:
         logger.info(f"{self.name} connected at {self.ip}")
 
     def home(self, wait=True):
-        """Homing with default sequence; ensure no obstacles."""
+        """Homing with default sequence."""
         self.arm.move_gohome(wait=wait)
-        # Optionally set a custom home position after:
-        # self.arm.set_position(x=..., y=..., z=..., roll=..., pitch=..., yaw=..., wait=True)
 
     def move_to(self, x, y, z, roll=180, pitch=0, yaw=0,
                 speed=None, wait=False):
         """Move tool-centre-point to Cartesian pose (mm, degrees)."""
         if speed is None:
-            speed = self.arm.get_default_move_speed() or 100
+            speed = 100
         self.arm.set_position(x=x, y=y, z=z,
                               roll=roll, pitch=pitch, yaw=yaw,
                               speed=speed, wait=wait)
 
     def get_pose(self):
-        """Return current pose (x,y,z,roll,pitch,yaw)."""
         code, pose = self.arm.get_position()
         if code == 0:
             return pose[1:]  # ignore error code
