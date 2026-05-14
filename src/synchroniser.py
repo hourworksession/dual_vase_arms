@@ -1,7 +1,16 @@
+"""
+Print synchroniser – coordinates arms, extruders, and turntable.
+
+Executes a list of ``Segment`` objects in order, moving the hardware
+and logging every step.
+"""
+
 import time
 import logging
 from typing import List
+
 from tqdm import tqdm
+
 from .arm_controller import ArmController
 from .extruder_controller import ExtruderController
 from .turntable_controller import TurntableController
@@ -10,25 +19,31 @@ from .logger import DataLogger
 
 logger = logging.getLogger(__name__)
 
+
 class PrintSynchroniser:
-    def __init__(self,
-                 arm_left: ArmController,
-                 arm_right: ArmController,
-                 extruder: ExtruderController,
-                 turntable: TurntableController,
-                 default_speed: float = 50,
-                 default_extrusion_feedrate: float = 5.0,
-                 logger_instance: DataLogger = None):
-        """
-        Args:
-            arm_left: Left arm controller.
-            arm_right: Right arm controller.
-            extruder: Extruder controller (Klipper/Moonraker).
-            turntable: Turntable controller (serial).
-            default_speed: Default arm speed (mm/s) if segment doesn't specify.
-            default_extrusion_feedrate: Default filament feedrate (mm/s).
-            logger_instance: Optional DataLogger. If None, a default one is created.
-        """
+    """Orchestrates a print sequence across all hardware.
+
+    Args:
+        arm_left: Left arm controller.
+        arm_right: Right arm controller.
+        extruder: Extruder controller (Klipper/Moonraker).
+        turntable: Turntable controller (Aerotech iXC4).
+        default_speed: Default arm speed in mm/s.
+        default_extrusion_feedrate: Default filament feedrate in mm/s.
+        logger_instance: Optional :class:`DataLogger`. A default one is
+            created if not provided.
+    """
+
+    def __init__(
+        self,
+        arm_left: ArmController,
+        arm_right: ArmController,
+        extruder: ExtruderController,
+        turntable: TurntableController,
+        default_speed: float = 50,
+        default_extrusion_feedrate: float = 5.0,
+        logger_instance: DataLogger = None,
+    ) -> None:
         self.left = arm_left
         self.right = arm_right
         self.extruder = extruder
@@ -37,21 +52,33 @@ class PrintSynchroniser:
         self.default_extrusion_feedrate = default_extrusion_feedrate
         self.data_logger = logger_instance or DataLogger()
 
-    def execute_segment(self, seg: Segment, seg_idx: int = 0):
-        """Run one segment: arms, turntable, and extrusion in sync, then log it."""
+    # ------------------------------------------------------------------
+    # Segment execution
+    # ------------------------------------------------------------------
+
+    def execute_segment(self, seg: Segment, seg_idx: int = 0) -> None:
+        """Run one segment: turntable, arms, extrusion, then log.
+
+        Args:
+            seg: The segment to execute.
+            seg_idx: 1‑based index for logging.
+        """
         # 1. Turntable move (sequential for safety)
         if seg.has_turntable_move:
             if seg.turntable_abs_angle is not None:
-                self.turntable.rotate_absolute(seg.turntable_abs_angle,
-                                               seg.turntable_speed or 20,
-                                               wait=False)
+                self.turntable.rotate_absolute(
+                    seg.turntable_abs_angle,
+                    seg.turntable_speed or 20,
+                    wait=True,
+                )
             else:
-                self.turntable.rotate_relative(seg.turntable_rel_angle,
-                                               seg.turntable_speed or 20,
-                                               wait=False)
-            self.turntable.wait_ok()
+                self.turntable.rotate_relative(
+                    seg.turntable_rel_angle,
+                    seg.turntable_speed or 20,
+                    wait=True,
+                )
 
-        # 2. Start arm motions (non-blocking)
+        # 2. Start arm motions (non‑blocking)
         if seg.left_pose is not None:
             s = seg.left_speed or self.default_speed
             self.left.move_to(**seg.left_pose, speed=s, wait=False)
@@ -76,7 +103,7 @@ class PrintSynchroniser:
         while self.right.arm.get_state()[1] == 1:
             time.sleep(0.05)
 
-        # 5. Log the completed segment with full command data
+        # 5. Log the completed segment
         self.data_logger.log(
             segment_idx=seg_idx,
             left_pose=seg.left_pose,
@@ -87,13 +114,17 @@ class PrintSynchroniser:
             turntable_abs_angle=seg.turntable_abs_angle,
             turntable_rel_angle=seg.turntable_rel_angle,
             turntable_speed=seg.turntable_speed,
-            status="OK"
+            status="OK",
         )
-        logger.debug(f"Segment {seg_idx} complete")
+        logger.debug("Segment %d complete", seg_idx)
 
-    def execute_sequence(self, segments: List[Segment]):
-        """Run a full sequence of coordinated segments with a progress bar."""
+    def execute_sequence(self, segments: List[Segment]) -> None:
+        """Run a full sequence of coordinated segments with a progress bar.
+
+        Args:
+            segments: Ordered list of segments to execute.
+        """
         for i, seg in enumerate(tqdm(segments, desc="Printing", unit="seg")):
-            logger.info(f"Executing segment {i+1}/{len(segments)}")
-            self.execute_segment(seg, seg_idx=i+1)
+            logger.info("Executing segment %d/%d", i + 1, len(segments))
+            self.execute_segment(seg, seg_idx=i + 1)
         logger.info("Sequence finished")
