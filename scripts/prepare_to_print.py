@@ -15,8 +15,10 @@ def main():
 
     left = ArmController(cfg['arms']['left']['ip'], "left")
     right = ArmController(cfg['arms']['right']['ip'], "right")
-    turntable = TurntableController(host=cfg['turntable']['controller_ip'], axis=cfg['turntable']['axis'])
-    extruder = ExtruderController(cfg['moonraker']['host'], cfg['moonraker']['port'])
+    turntable = TurntableController(host=cfg['turntable']['controller_ip'],
+                                    axis=cfg['turntable']['axis'])
+    extruder = ExtruderController(cfg['moonraker']['host'],
+                                  cfg['moonraker']['port'])
 
     left.connect()
     right.connect()
@@ -24,6 +26,7 @@ def main():
 
     left.home(wait=True)
     right.home(wait=True)
+    extruder.send_gcode("SET_KINEMATIC_POSITION X=0 Y=0 Z=0")
 
     temp = cfg['defaults']['temperature']['tool0']
     logger.info(f"Heating both extruders to {temp}°C")
@@ -31,8 +34,8 @@ def main():
     extruder.set_temperature(1, temp, wait=False)
 
     logger.info("Moving arms to safe position while heating...")
-    left.arm.set_position(572.5, 225, 153, 180, 45, 0, speed=100, wait=False)
-    right.arm.set_position(572.5, 230, 165, 180, 45, 0, speed=100, wait=False)
+    left.arm.set_position(572.5, 230, 153, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(572.5, 235, 165, 180, 45, 0, speed=100, wait=False)
 
     extruder.heat_and_wait(0, temp)
     extruder.heat_and_wait(1, temp)
@@ -43,10 +46,10 @@ def main():
     time.sleep(5)
 
     logger.info("Purging nozzles (25 mm each)...")
-    extruder.extrude(0, 25, feedrate_mm_s=5)
-    extruder.extrude(1, 25, feedrate_mm_s=5)
+    extruder.extrude_sync(length_t0=25, speed_t0=5,
+                          length_t1=25, speed_t1=5)
 
-    logger.info("✅ Ready to print. Hardware remains connected.")
+    logger.info("Ready to print. Hardware remains connected.")
 
 if __name__ == "__main__":
     main()

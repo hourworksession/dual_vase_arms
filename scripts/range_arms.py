@@ -13,33 +13,55 @@ left = ArmController(config['arms']['left']['ip'], "left")
 right = ArmController(config['arms']['right']['ip'], "right")
 left.connect(); right.connect()
 n = 0
-
-while n < 5:
+m = 0
+print("Testing box motion")
+while n < 2:
 #normal side
-    left.arm.set_position(577, 210, 180, 180, 45, 0, speed=100, wait=False)
-    right.arm.set_position(577, 210, 180, 180, 45, 0, speed=100, wait=True)
-
-    left.arm.set_position(350, 210, 180, 180, 45, 0, speed=100, wait=False)
-    right.arm.set_position(350, 210, 180, 180, 45, 0, speed=100, wait=True)
-
-    left.arm.set_position(350, -210, 180, 180, 45, 0, speed=100, wait=False)
-    right.arm.set_position(350, -210, 180, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 1 {n}")
+    left.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 2 {n}")
+    left.arm.set_position(350, 210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(350, 210, 190, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 3 {n}")
+    left.arm.set_position(350, -210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(350, -210, 190, 180, 45, 0, speed=100, wait=True)
 #flipped
-    left.arm.set_position(577, -210, 180, 180, 45, 0, speed=100, wait=False)
-    right.arm.set_position(577, -210, 180, 180, 45, 0, speed=100, wait=True)
-
-    left.arm.set_position(350, -210, 180, 180, 45, 0, speed=100, wait=False)
-    right.arm.set_position(350, -210, 180, 180, 45, 0, speed=100, wait=True)
-
-    left.arm.set_position(350, 210, 180, 180, 45, 0, speed=100, wait=False)
-    right.arm.set_position(350, 210, 180, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 4 {n}")
+    left.arm.set_position(577, -210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(577, -210, 190, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 3 {n}")
+    left.arm.set_position(350, -210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(350, -210, 190, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 2 {n}")
+    left.arm.set_position(350, 210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(350, 210, 190, 180, 45, 0, speed=100, wait=True)
 #back to normal
-    left.arm.set_position(577, 210, 180, 180, 45, 0, speed=100, wait=False)
-    right.arm.set_position(577, 210, 180, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 1 {n}")
+    left.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=True)
 
     n = n+1
 
+print("Testing quarter slice motion")
+while m < 2:
+    print(f"Point 1 {m}")
+    left.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 2 {m}")
+    left.arm.set_position(350, 210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(350, 210, 190, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 3 {m}")
+    left.arm.set_position(350, 0, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(350, 0, 190, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 2 {m}")
+    left.arm.set_position(350, 210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(350, 210, 190, 180, 45, 0, speed=100, wait=True)
+    print(f"Point 1 {m}")
+    left.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=False)
+    right.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=True)
 
+    m = m + 1
 
 # Turntable zeroing (if supported)
 #tt = TurntableController(config['turntable']['port'], config['turntable']['baudrate'])

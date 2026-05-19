@@ -1,6 +1,6 @@
 import time
 import threading
-import tkinter as tk
+import tk
 from tkinter import ttk, messagebox
 import logging
 

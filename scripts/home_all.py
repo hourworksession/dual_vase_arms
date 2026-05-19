@@ -26,7 +26,7 @@ tt = TurntableController(
 )
 tt.connect()
 print("Zeroing turntable...")
-tt.rotate_absolute(0, 30, wait=True)
+tt.rotate_absolute(0, 40,)
 tt.disconnect()
 
 print("All axes homed/zeroed")
