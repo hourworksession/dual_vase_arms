@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+<head><title>Dual Arm Simulator</title></head>
+<body>
+  <h1>Dual xArm 8 Simulator</h1>
+  <button onclick="fetch('/move', {method:'POST', body:JSON.stringify({arm:'left', q:[0,0,0,0,0,0]})})">Home Left</button>
+  <button onclick="window.open('/swift')">Open Swift View</button>
+  <!-- The code tester can be a textarea + run button -->
+</body>
+</html>

@@ -3,6 +3,11 @@ pyyaml
 requests
 pyserial
 websocket-client
-tqdm
-automation1
-tKinter
+#tqdm
+#automation1
+tk
+plotly
+pydantic
+numpy
+fullcontrol
+roboticstoolbox-python
