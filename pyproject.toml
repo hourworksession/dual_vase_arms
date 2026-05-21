@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dual_arm_printer"
+version = "0.1.0"
+description = "Dual xArm 850 cooperative 3D printing on an Aerotech ADRS rotary stage"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Wil" }]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pyyaml>=6.0",
+    "pydantic>=2.5",
+    "matplotlib>=3.8",
+    "trimesh>=4.0",
+    "open3d>=0.18; platform_system != 'Windows' or python_version < '3.13'",
+    "pybullet>=3.2.6",
+    "rich>=13.7",
+    "click>=8.1",
+    "fullcontrol>=0.5.0",
+    "xarm-python-sdk>=1.13.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov>=4.1", "ruff>=0.4", "mypy>=1.10"]
+
+[project.scripts]
+dual-arm-printer = "dual_arm_printer.cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

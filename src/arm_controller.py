@@ -12,36 +12,65 @@ class ArmController:
         self.arm = None
 
     def connect(self):
-        self.arm = XArmAPI(self.ip)
-        self.arm.motion_enable(enable=True)
-        self.arm.set_mode(0)        # position mode
-        self.arm.set_state(0)       # sport state
-        logger.info(f"{self.name} connected at {self.ip}")
+        """Connect to the xArm and enable motion."""
+        try:
+            self.arm = XArmAPI(self.ip)
+            self.arm.motion_enable(enable=True)
+            self.arm.set_mode(0)        # position mode
+            self.arm.set_state(0)       # sport state
+            logger.info("%s connected at %s", self.name, self.ip)
+        except Exception as e:
+            logger.error("Failed to connect %s: %s", self.name, e)
+            raise
 
     def home(self, wait=True):
-        """Homing with default sequence."""
-        self.arm.move_gohome(wait=wait)
+        """Homing with default sequence; ensure no obstacles."""
+        try:
+            self.arm.move_gohome(wait=wait)
+        except Exception as e:
+            logger.error("Failed to home %s: %s", self.name, e)
+            raise
 
     def move_to(self, x, y, z, roll=180, pitch=0, yaw=0,
                 speed=None, wait=False):
         """Move tool-centre-point to Cartesian pose (mm, degrees)."""
-        if speed is None:
-            speed = 100
-        self.arm.set_position(x=x, y=y, z=z,
+        try:
+            if speed is None:
+                speed = self.arm.get_default_move_speed() or 100
+            self.arm.set_position(x=x, y=y, z=z,
                               roll=roll, pitch=pitch, yaw=yaw,
                               speed=speed, wait=wait)
+        except Exception as e:
+            logger.error("Failed to move %s to position: %s", self.name, e)
+            raise
 
     def get_pose(self):
-        code, pose = self.arm.get_position()
-        if code == 0:
-            return pose[1:]  # ignore error code
-        else:
-            logger.error(f"Failed to get pose: {code}")
-            return None
+        """Return current pose (x,y,z,roll,pitch,yaw)."""
+        try:
+            code, pose = self.arm.get_position()
+            if code == 0:
+                return pose[1:]  # ignore error code
+            else:
+                logger.error("Failed to get pose: %s", code)
+                return None
+        except Exception as e:
+            logger.error("Error retrieving pose for %s: %s", self.name, e)
+            raise
 
     def emergency_stop(self):
-        self.arm.emergency_stop()
+        """Trigger emergency stop."""
+        try:
+            self.arm.emergency_stop()
+        except Exception as e:
+            logger.error("Failed to emergency stop %s: %s", self.name, e)
+            raise
 
     def disconnect(self):
-        if self.arm:
-            self.arm.disconnect()
+        """Disconnect from the xArm."""
+        try:
+            if self.arm:
+                self.arm.disconnect()
+                logger.info("%s disconnected", self.name)
+        except Exception as e:
+            logger.error("Failed to disconnect %s: %s", self.name, e)
+            raise

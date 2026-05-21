@@ -1,0 +1,31 @@
+# Cell-level geometry. All distances mm, angles degrees, unless noted.
+# Coordinate convention:
+#   - World origin = centre of the disc top surface, +Z up.
+#   - Disc lies in the world XY plane; +X = 0° on the disc.
+#   - "disc frame" rotates with the turntable; "world frame" is fixed.
+
+cell:
+  disc:
+    radius_mm: 300.0
+    centre_world_xyz: [0.0, 0.0, 0.0]
+    surface_thickness_mm: 6.0          # acrylic plate
+  arms:
+    left:
+      base_world_xyz: [-700.0, 0.0, 0.0]
+      base_yaw_deg: 0.0                # arm forward axis points +X
+      reach_mm: 850.0
+      home_joint_deg: [0, -45, -45, 0, 90, 0]
+    right:
+      base_world_xyz: [ 700.0, 0.0, 0.0]
+      base_yaw_deg: 180.0
+      reach_mm: 850.0
+      home_joint_deg: [0, -45, -45, 0, 90, 0]
+  workspace:
+    # Cylindrical printable volume, centred on disc.
+    inner_radius_mm: 0.0
+    outer_radius_mm: 295.0             # 5 mm margin from disc edge
+    max_height_mm: 400.0
+  safety:
+    arm_arm_min_distance_mm: 80.0
+    arm_disc_min_clearance_mm: 5.0
+    nozzle_to_disc_z_min_mm: 0.2

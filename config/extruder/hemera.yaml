@@ -1,0 +1,16 @@
+# E3D Hemera direct-drive extruder mounted on each xArm end effector.
+model: e3d_hemera
+nozzle_diameter_mm: 0.4
+filament_diameter_mm: 1.75
+max_flow_mm3_s: 24.0
+default_temp_c: 215
+default_bed_temp_c: 0          # disc is unheated acrylic
+retract_mm: 1.0
+retract_speed_mm_s: 40.0
+
+# Mechanical offset from arm tool flange centre to nozzle tip.
+# Measured in tool frame (Z = forward out of flange).
+nozzle_offset_mm: [0.0, 0.0, 95.0]
+
+# Hemera mass + payload check.
+mass_kg: 0.43

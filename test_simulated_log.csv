@@ -1,0 +1,1 @@
+segment,timestamp_iso,timestamp_unix,left_x,left_y,left_z,left_roll,left_pitch,left_yaw,left_speed,right_x,right_y,right_z,right_roll,right_pitch,right_yaw,right_speed,left_extrude_mm,left_extrude_feedrate,right_extrude_mm,right_extrude_feedrate,turntable_angle,turntable_rel_angle,turntable_speed,status

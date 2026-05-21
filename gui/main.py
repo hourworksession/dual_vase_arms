@@ -4,7 +4,7 @@ Main entry point for the dual‑arm printer control GUI.
 """
 import sys
 import os
-import tk
+import tkinter as tk
 
 # Make sure the project root is on the Python path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
