@@ -66,27 +66,27 @@ class ControlPanel:
             .grid(row=1, column=2, padx=2, pady=2)
 
         # ---------- Synchronous extrusion test ----------
-        ext_frame = ttk.LabelFrame(root, text="Synchronous Extrude Test", padding=5)
-        ext_frame.pack(fill="x", padx=5, pady=5)
+#        ext_frame = ttk.LabelFrame(root, text="Synchronous Extrude Test", padding=5)
+#        ext_frame.pack(fill="x", padx=5, pady=5)
 
-        ttk.Label(ext_frame, text="Length (mm):").grid(row=0, column=0, padx=2)
-        self.ext_len = tk.DoubleVar(value=20.0)
-        ttk.Entry(ext_frame, textvariable=self.ext_len, width=8)\
-            .grid(row=0, column=1, padx=2)
+#        ttk.Label(ext_frame, text="Length (mm):").grid(row=0, column=0, padx=2)
+        #self.ext_len = tk.DoubleVar(value=20.0)
+#        ttk.Entry(ext_frame, textvariable=self.ext_len, width=8)\
+#            .grid(row=0, column=1, padx=2)
 
-        ttk.Label(ext_frame, text="E speed (mm/s):").grid(row=0, column=2, padx=2)
-        self.e_speed = tk.DoubleVar(value=10.0)
-        ttk.Entry(ext_frame, textvariable=self.e_speed, width=8)\
-            .grid(row=0, column=3, padx=2)
+#        ttk.Label(ext_frame, text="E speed (mm/s):").grid(row=0, column=2, padx=2)
+        #self.e_speed = tk.DoubleVar(value=10.0)
+#        ttk.Entry(ext_frame, textvariable=self.e_speed, width=8)\
+#            .grid(row=0, column=3, padx=2)
 
-        ttk.Label(ext_frame, text="X speed (mm/s):").grid(row=0, column=4, padx=2)
-        self.x_speed = tk.DoubleVar(value=10.0)
-        ttk.Entry(ext_frame, textvariable=self.x_speed, width=8)\
-            .grid(row=0, column=5, padx=2)
+#        ttk.Label(ext_frame, text="X speed (mm/s):").grid(row=0, column=4, padx=2)
+        #self.x_speed = tk.DoubleVar(value=10.0)
+#        ttk.Entry(ext_frame, textvariable=self.x_speed, width=8)\
+#            .grid(row=0, column=5, padx=2)
 
-        ttk.Button(ext_frame, text="Extrude Both",
-                   command=self.extrude_both)\
-            .grid(row=0, column=6, padx=5)
+#        ttk.Button(ext_frame, text="Extrude Both",
+#                   command=self.extrude_both)\
+#            .grid(row=0, column=6, padx=5)
 
         # ---------- Style for emergency button ----------
         style = ttk.Style()
@@ -144,7 +144,7 @@ class ControlPanel:
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Homing Error", str(e)))
 
-    # ---------- Prepare to print ----------
+            # ---------- Prepare to print ----------
     def prepare_to_print(self):
         if not self.hw_connected:
             messagebox.showwarning("Warning", "Hardware not connected.")
@@ -154,33 +154,25 @@ class ControlPanel:
     def _prepare_thread(self):
         try:
             temp = self.config['defaults']['temperature']['tool0']
-            # Heat both
+
+                # Heat both extruders (non‑blocking)
             self.extruder.set_temperature(0, temp, wait=False)
-            self.extruder.send_gcode(f"SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET={temp}")
-            # Move to safe position
-            self.left.move_to(572.5, 225, 153, roll=180, pitch=45, yaw=0, speed=100, wait=False)
-            self.right.move_to(572.5, 230, 165, roll=180, pitch=45, yaw=0, speed=100, wait=False)
-            # Wait for T0
+            self.extruder.set_temperature(1, temp, wait=False) 
+            # Move arms to safe position while heating
+            self.left.arm.set_position(572.5, 225, 153, 180, 45, 0, speed=100, wait=False)
+            self.right.arm.set_position(572.5, 230, 165, 180, 45, 0, speed=100, wait=False)
+            # Wait for both to reach temperature
             self.extruder.heat_and_wait(0, temp)
-            # Wait for heater_bed (second nozzle)
-            if self.use_real:
-                while True:
-                    status = self.extruder.get_printer_status()
-                    t1 = status.get('heater_bed', {}).get('temperature', 0.0)
-                    if t1 >= temp:
-                        break
-                    time.sleep(2)
-            else:
-                self.extruder._temps["heater_bed"] = temp  # mock
+            self.extruder.heat_and_wait(1, temp)   
             # Move to print-ready positions
-            self.left.move_to(572, 202.4, 152.2, roll=180, pitch=45, yaw=0, speed=100, wait=False)
-            self.right.move_to(573, 217.5, 160.9, roll=180, pitch=45, yaw=0, speed=100, wait=False)
-            time.sleep(5)
+            self.left.arm.set_position(572, 202.4, 152.2, 180, 45, 0, speed=100, wait=False)
+            self.right.arm.set_position(573, 217.5, 160.9, 180, 45, 0, speed=100, wait=False)
+            time.sleep(5)  
             self.root.after(0, lambda: messagebox.showinfo("Info", "Ready to print."))
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Prepare Error", str(e)))
+            self.root.after(0, lambda e=e: messagebox.showerror("Prepare Error", str(e)))
 
-    # ---------- Demo print ----------
+            # ---------- Demo print ----------
     def start_print(self):
         if not self.hw_connected:
             messagebox.showwarning("Warning", "Hardware not connected.")

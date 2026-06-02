@@ -57,25 +57,13 @@ class TurntableController:
         self._connected = True
         logger.info(f"Axis '{self.axis}' enabled and homed.")
 
-    def is_moving(self, tolerance: float = 0.5) -> bool:
-        """Return True if the rotary axis is still rotating.
-
-        Polls the actual position vs the last commanded absolute target.
-        """
+    def is_moving(self) -> bool:
+        """Return True if the turntable axis is still executing a motion."""
         if self.controller is None or not self._connected:
             return False
-
-        try:
-            # Get the axis status (contains InPosition, motion state, etc.)
-            axis = self.controller.runtime.axes[self.axis]
-            # axis.motion_state values: "Stopped" when done
-            return axis.motion_state != "Stopped"
-        except Exception:
-            # Fallback: compare current position to last target
-            if not hasattr(self, '_last_target_angle'):
-                return False
-            actual = self.controller.runtime.axes[self.axis].actual_position
-            return abs(actual - self._last_target_angle) > tolerance
+        # Use the task status – works reliably
+        task_status = self.controller.runtime.tasks[1].status
+        return task_status.task_state == "Running"
 
     def disconnect(self) -> None:
         """Disable the axis and disconnect from the controller."""

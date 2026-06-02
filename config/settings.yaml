@@ -1,18 +1,17 @@
 # IP addresses and hardware settings
 arms:
   left:
-    ip: "192.168.1.10"
+    ip: "192.168.1.236"
   right:
-    ip: "192.168.1.155"
+    ip: "192.168.1.235"
 
 moonraker:
-  host: "192.168.1.20"   # Raspberry Pi IP
+  host: "192.168.1.100"   # Raspberry Pi IP
   port: 7125
 
 turntable:
-  port: "/dev/ttyUSB0"   # check with `ls /dev/tty*`
-  baudrate: 115200
-  endstop_pin: null      # if your MCU sends endstop state (future)
+  controller_ip: "192.168.7.1"   # Aerotech iXC4 IP address
+  axis: "U"       # if your MCU sends endstop state (future)
 
 # Default motion & extrusion parameters
 defaults:
@@ -20,8 +19,8 @@ defaults:
   print_speed: 30        # mm/s arm move when extruding
   extrusion_feedrate: 5  # mm/s of filament (provisional, per your volcano/nozzle)
   temperature:
-    tool0: 200           # Celsius
-    tool1: 200
+    tool0: 220           # Celsius
+    tool1: 220
 
 # Optional: software limits (arm coordinates)
 limits:

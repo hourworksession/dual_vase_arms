@@ -15,7 +15,7 @@ left.connect(); right.connect()
 n = 0
 m = 0
 print("Testing box motion")
-while n < 2:
+while n < 3:
 #normal side
     print(f"Point 1 {n}")
     left.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=False)
@@ -44,7 +44,7 @@ while n < 2:
     n = n+1
 
 print("Testing quarter slice motion")
-while m < 2:
+while m < 3:
     print(f"Point 1 {m}")
     left.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=False)
     right.arm.set_position(577, 210, 190, 180, 45, 0, speed=100, wait=True)
