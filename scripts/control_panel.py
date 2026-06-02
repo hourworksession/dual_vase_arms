@@ -312,23 +312,32 @@ class ControlPanel:
             print(f"Demo print error: {e}")
 
     def _run_spiral(self):
-        """Print a merging spiral – left starts offset, then blends into right’s path."""
+        """
+        Phased dual-arm print:
+          Phase 1 (layers 1-3): RIGHT extruder. Layer 1 = circle, layers 2-3 = spiral.
+          Phase 2: RIGHT retracts to a holding position.
+          Phase 3 (layers 4-6): LEFT extruder prints 3 layers on the SAME toolpath, stacked on top.
+          Phase 4 (layer 7+): halfway through layer 7's bed rotation, RIGHT rejoins and both
+                              arms co-print the SAME toolpath (commanded to same point, one layer
+                              up in Z; physically 180 deg apart on the circle) for the remainder.
+        """
         try:
+            # ---------- Turntable centers (as seen by each arm) ----------
             TT_CX_LEFT  = 575.1
             TT_CY_LEFT  = -11.1
             TT_CX_RIGHT = 575.6
             TT_CY_RIGHT = 3.5
-
-            # ---------- Final print geometry ----------
+    
+            # ---------- Path geometry ----------
             RADIUS          = 120.0
-            LEFT_R_OFFSET   = 5.0         # left arm’s final radius tuning
-            RIGHT_R_OFFSET  = 8.5         # right arm’s final radius tuning
-            START_ANGLE_DEG = 135.0        # Angle on a circle plotted on an XY plot starting with quadrant 1 Y = 0 as 0deg counterclockwise positive (135 in quadrant 2)
-
+            LEFT_R_OFFSET   = 5.0
+            RIGHT_R_OFFSET  = 8.5
+            START_ANGLE_DEG = 135.0
+    
             # ---------- Yaw ----------
             LEFT_YAW  = 20.0
             RIGHT_YAW = 20.0
-
+    
             # ---------- Motion & layer ----------
             SPEED_LEFT      = 3.0
             SPEED_RIGHT     = 3.0
@@ -336,100 +345,186 @@ class ControlPanel:
             Z_RIGHT_START   = 151.9
             ROLL            = 180.0
             PITCH           = 45.0
-            TOTAL_REVS      = 50
-            Z_RISE_PER_REV  = 0.4         # mm per revolution
+            Z_RISE_PER_REV  = 0.4          # mm per revolution (== layer height)
             TURNTABLE_DEG_S = 15
             PRE_EXTRUDE_TIME = 1.5
-
-            # ---------- MERGE parameters (anti‑collision) ----------
-            MERGE_REVS          = 3        # revolutions over which merging happens
-            LEFT_MERGE_EXTRA_R  = 1.2      # extra radius for left at start (mm)
-            LEFT_MERGE_EXTRA_Z  = 0.4      # extra height for left at start (mm)
-
-            # ---------- Derived values ----------
-            effective_radius_left_final  = RADIUS + LEFT_R_OFFSET
-            effective_radius_right       = RADIUS + RIGHT_R_OFFSET
-
-            total_rotation_deg = TOTAL_REVS * 360.0
-            total_time = total_rotation_deg / TURNTABLE_DEG_S
-            total_z_rise = TOTAL_REVS * Z_RISE_PER_REV
-
-            left_len  = SPEED_LEFT  * total_time
-            right_len = SPEED_RIGHT * total_time
-
-            # ---------- Helper ----------
+    
+            # ---------- Phase definitions ----------
+            RIGHT_PHASE1_REVS = 3          # layers 1-3 (right): circle then spiral
+            LEFT_REVS         = 3          # layers 4-6 (left)
+            TOTAL_REVS        = 110        # total layers across the whole print
+            REJOIN_LAYER      = 7          # 1-indexed layer where right rejoins
+            REJOIN_AT_FRAC    = 0.5        # halfway through that layer's rotation
+    
+            # ---------- Holding position for the idle right arm ----------
+            HOLD_X = 450.0
+            HOLD_Y = 150.0
+            HOLD_Z = 220.0
+    
+            # ---------- Derived ----------
+            eff_radius_left  = RADIUS + LEFT_R_OFFSET
+            eff_radius_right = RADIUS + RIGHT_R_OFFSET
+            start_rad        = math.radians(START_ANGLE_DEG)
+            sec_per_rev      = 360.0 / TURNTABLE_DEG_S
+            update_interval  = 0.5
+    
+            # Layer index (0-based) at which the right arm rejoins, in revolutions
+            right_rejoin_rev = (REJOIN_LAYER - 1) + REJOIN_AT_FRAC   # e.g. 6.5
+    
             def circle_point(angle_rad, radius, cx, cy):
-                return cx + radius * math.cos(angle_rad), cy + radius * math.sin(angle_rad)
-
-            start_rad = math.radians(START_ANGLE_DEG)
-
-            # ---------- Start extrusion ----------
-            self.extruder.extrude_sync(left_len, SPEED_LEFT,
+                return (cx + radius * math.cos(angle_rad),
+                        cy + radius * math.sin(angle_rad))
+    
+            # The shared toolpath point at a given total revolution count.
+            # Layer 1 (rev < 1) is a flat circle (no Z rise); spiral begins at layer 2.
+            def path_z(base_z, rev):
+                if rev <= 1.0:
+                    return base_z                      # circle: constant Z for first layer
+                return base_z + (rev - 1.0) * Z_RISE_PER_REV
+    
+            # =========================================================
+            # PHASE 1 — RIGHT extruder: layers 1-3 (circle + spiral)
+            # =========================================================
+            phase1_rot_deg = RIGHT_PHASE1_REVS * 360.0
+            phase1_time    = phase1_rot_deg / TURNTABLE_DEG_S
+    
+            right_len = SPEED_RIGHT * phase1_time
+            self.extruder.extrude_sync(0.0, SPEED_LEFT,
                                        right_len, SPEED_RIGHT,
                                        wait=False)
             time.sleep(PRE_EXTRUDE_TIME)
-
-            # ---------- Move RIGHT arm to its FINAL path (stays there) ----------
-            right_x, right_y = circle_point(start_rad, effective_radius_right,
-                                            TT_CX_RIGHT, TT_CY_RIGHT)
-            self.right.arm.set_position(right_x, right_y, Z_RIGHT_START,
+    
+            rx, ry = circle_point(start_rad, eff_radius_right, TT_CX_RIGHT, TT_CY_RIGHT)
+            self.right.arm.set_position(rx, ry, Z_RIGHT_START,
                                         ROLL, PITCH, RIGHT_YAW, speed=100, wait=True)
-
-            # ---------- Move LEFT arm to its OUTER, HIGHER start ----------
-            left_initial_radius = effective_radius_left_final + LEFT_MERGE_EXTRA_R
-            left_initial_z      = Z_LEFT_START + LEFT_MERGE_EXTRA_Z
-            left_x_initial, left_y_initial = circle_point(start_rad, left_initial_radius,
-                                                          TT_CX_LEFT, TT_CY_LEFT)
-            self.left.arm.set_position(left_x_initial, left_y_initial, left_initial_z,
-                                       ROLL, PITCH, LEFT_YAW, speed=100, wait=True)
-
-            # ---------- Start turntable ----------
-            self.turntable.rotate_absolute(total_rotation_deg, TURNTABLE_DEG_S, wait=False)
-
-            # ---------- Synchronised Z‑rise with radius blending ----------
-            update_interval = 0.5   # seconds between Z steps
-            steps = max(1, int(total_time / update_interval))
-            start_time = time.time()
-
-            for i in range(steps):
-                elapsed = time.time() - start_time
-                frac = elapsed / total_time
-                current_rev = frac * TOTAL_REVS
-
-                # -- Left arm: merge logic --
-                if current_rev < MERGE_REVS:
-                    t = current_rev / MERGE_REVS          # 0 → 1
-                    extra_r = LEFT_MERGE_EXTRA_R * (1 - t)
-                    extra_z = LEFT_MERGE_EXTRA_Z * (1 - t)
-                else:
-                    extra_r = 0.0
-                    extra_z = 0.0
-
-                left_radius = effective_radius_left_final + extra_r
-                left_z      = Z_LEFT_START + frac * total_z_rise + extra_z
-
-                # Left XY moves radially along the fixed start angle
-                left_x, left_y = circle_point(start_rad, left_radius,
-                                              TT_CX_LEFT, TT_CY_LEFT)
-
-                # -- Right arm: only Z changes (XY is constant) --
-                right_z = Z_RIGHT_START + frac * total_z_rise
-
-                # Move both arms (left XY + Z, right Z only)
-                self.left.arm.set_position(left_x, left_y, left_z,
-                                           ROLL, PITCH, LEFT_YAW, speed=10, wait=False)
-                self.right.arm.set_position(right_x, right_y, right_z,
+    
+            self.turntable.rotate_absolute(phase1_rot_deg, TURNTABLE_DEG_S, wait=False)
+    
+            steps = max(1, int(phase1_time / update_interval))
+            t0 = time.time()
+            for _ in range(steps):
+                frac = min(1.0, (time.time() - t0) / phase1_time)
+                rev  = frac * RIGHT_PHASE1_REVS
+                rz   = path_z(Z_RIGHT_START, rev)
+                self.right.arm.set_position(rx, ry, rz,
                                             ROLL, PITCH, RIGHT_YAW, speed=10, wait=True)
-
                 time.sleep(update_interval)
-
-            # ---------- Wait for turntable to finish ----------
+    
             while self.turntable.is_moving():
                 time.sleep(0.1)
             self.turntable.wait_ok()
-
-            print("Merged spiral printed successfully.")
-
+    
+            # =========================================================
+            # PHASE 2 — RIGHT retracts to holding position
+            # =========================================================
+            self.extruder.stop_right() if hasattr(self.extruder, "stop_right") else None
+            self.right.arm.set_position(HOLD_X, HOLD_Y, HOLD_Z,
+                                        ROLL, PITCH, RIGHT_YAW, speed=100, wait=True)
+    
+            # =========================================================
+            # PHASE 3 — LEFT extruder: layers 4-6, SAME toolpath, stacked on top
+            # =========================================================
+            # Left continues where the right left off in Z (3 layers already laid down).
+            z_left_phase3_base = Z_LEFT_START + RIGHT_PHASE1_REVS * Z_RISE_PER_REV
+            phase3_rot_deg = LEFT_REVS * 360.0
+            phase3_time    = phase3_rot_deg / TURNTABLE_DEG_S
+    
+            left_len = SPEED_LEFT * phase3_time
+            self.extruder.extrude_sync(left_len, SPEED_LEFT,
+                                       0.0, SPEED_RIGHT,
+                                       wait=False)
+            time.sleep(PRE_EXTRUDE_TIME)
+    
+            lx, ly = circle_point(start_rad, eff_radius_left, TT_CX_LEFT, TT_CY_LEFT)
+            self.left.arm.set_position(lx, ly, z_left_phase3_base,
+                                       ROLL, PITCH, LEFT_YAW, speed=100, wait=True)
+    
+            # Reset turntable origin so phase-3 rotation starts clean
+            self.turntable.rotate_absolute(phase1_rot_deg + phase3_rot_deg,
+                                            TURNTABLE_DEG_S, wait=False)
+    
+            steps = max(1, int(phase3_time / update_interval))
+            t0 = time.time()
+            for _ in range(steps):
+                frac = min(1.0, (time.time() - t0) / phase3_time)
+                rev  = RIGHT_PHASE1_REVS + frac * LEFT_REVS    # absolute layer count
+                lz   = path_z(Z_LEFT_START, rev)
+                self.left.arm.set_position(lx, ly, lz,
+                                           ROLL, PITCH, LEFT_YAW, speed=10, wait=False)
+                time.sleep(update_interval)
+    
+            while self.turntable.is_moving():
+                time.sleep(0.1)
+            self.turntable.wait_ok()
+    
+            # =========================================================
+            # PHASE 4 — Layers 7..TOTAL_REVS: co-printing
+            #   Both arms commanded to the SAME point, one layer up in Z.
+            #   (Physically they sit 180 deg apart on the circle.)
+            #   RIGHT rejoins halfway through layer 7's rotation.
+            # =========================================================
+            revs_done    = RIGHT_PHASE1_REVS + LEFT_REVS        # = 6
+            phase4_revs  = TOTAL_REVS - revs_done               # remaining layers
+            phase4_deg   = phase4_revs * 360.0
+            phase4_time  = phase4_deg / TURNTABLE_DEG_S
+    
+            # Left extrudes for the whole phase; right extrudes only after it rejoins.
+            left_len  = SPEED_LEFT  * phase4_time
+            right_len = SPEED_RIGHT * (phase4_time * (1 - (REJOIN_AT_FRAC / phase4_revs)))
+            self.extruder.extrude_sync(left_len, SPEED_LEFT,
+                                       right_len, SPEED_RIGHT,
+                                       wait=False)
+    
+            # Left re-anchors on the shared path at the start of layer 7.
+            lz_start = path_z(Z_LEFT_START, revs_done)
+            lx, ly = circle_point(start_rad, eff_radius_left, TT_CX_LEFT, TT_CY_LEFT)
+            self.left.arm.set_position(lx, ly, lz_start,
+                                       ROLL, PITCH, LEFT_YAW, speed=100, wait=True)
+    
+            self.turntable.rotate_absolute(phase1_rot_deg + phase3_rot_deg + phase4_deg,
+                                            TURNTABLE_DEG_S, wait=False)
+    
+            steps = max(1, int(phase4_time / update_interval))
+            t0 = time.time()
+            right_active = False
+            right_extrude_started = False
+    
+            for _ in range(steps):
+                frac = min(1.0, (time.time() - t0) / phase4_time)
+                abs_rev = revs_done + frac * phase4_revs        # absolute layer count
+    
+                # --- Left arm follows shared toolpath ---
+                lz = path_z(Z_LEFT_START, abs_rev)
+                self.left.arm.set_position(lx, ly, lz,
+                                           ROLL, PITCH, LEFT_YAW, speed=10, wait=False)
+    
+                # --- Right arm rejoins at layer 7 + halfway ---
+                if abs_rev >= right_rejoin_rev:
+                    # Commanded to the SAME point as left, one layer (Z_RISE) up.
+                    # Physically the arm geometry places it 180 deg opposite on the circle.
+                    rx, ry = circle_point(start_rad, eff_radius_right, TT_CX_RIGHT, TT_CY_RIGHT)
+                    rz = path_z(Z_RIGHT_START, abs_rev) + Z_RISE_PER_REV
+    
+                    if not right_active:
+                        # Rapid move into position the first time, then settle.
+                        self.right.arm.set_position(rx, ry, rz,
+                                                    ROLL, PITCH, RIGHT_YAW, speed=100, wait=True)
+                        right_active = True
+                    else:
+                        self.right.arm.set_position(rx, ry, rz,
+                                                    ROLL, PITCH, RIGHT_YAW, speed=10, wait=True)
+                else:
+                    # Right not yet rejoined; let the left move settle.
+                    time.sleep(0)
+    
+                time.sleep(update_interval)
+    
+            while self.turntable.is_moving():
+                time.sleep(0.1)
+            self.turntable.wait_ok()
+    
+            print("Phased dual-arm spiral printed successfully.")
+    
         except Exception as e:
             print(f"Spiral print error: {e}")
 
