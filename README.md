@@ -1,7 +1,7 @@
 # dual_arm_printer
 
 Slice → split → simulate → drive: a Python control stack for cooperative 3D printing
-on an Aerotech ADRS rotary stage (300 mm radius acrylic disc) with two UFactory xArm 850
+on an Aerotech ADRS rotary stage (300 mm diameter acrylic disc) with two UFactory xArm 850
 manipulators carrying Hemera direct-drive extruders.
 
 ## What it does
