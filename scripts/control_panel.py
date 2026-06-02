@@ -315,10 +315,10 @@ class ControlPanel:
         """
         Phased dual-arm print, frame-stepped turntable control.
     
-          Phase 1 (layers 1-3): LEFT arm.  Layer 1 = circle, layers 2-3 = spiral.
-          Phase 2: LEFT arm retracts to holding position.
-          Phase 3 (layers 4-6): RIGHT arm prints 3 layers on the SAME toolpath, stacked on top.
-          Phase 4 (layer 7+): halfway through layer 7's rotation the LEFT arm rejoins; both
+          Phase 1 (layers 1-3): RIGHT arm.  Layer 1 = circle, layers 2-3 = spiral.
+          Phase 2: RIGHT arm retracts to holding position.
+          Phase 3 (layers 4-6): LEFT arm prints 3 layers on the SAME toolpath, stacked on top.
+          Phase 4 (layer 7+): halfway through layer 7's rotation the RIGHT arm rejoins; both
                               arms co-print the SAME toolpath to max layer height.
     
         Turntable is driven in fixed angular steps per frame (10 deg/s implied by
@@ -360,13 +360,13 @@ class ControlPanel:
             STEP_DEG        = TURNTABLE_DEG_S * FRAME_DT   # bed advance per frame (5 deg)
     
             # ---------- Phase definitions ----------
-            LEFT_PHASE1_REVS = 3           # layers 1-3 (left): circle then spiral
-            RIGHT_REVS       = 3           # layers 4-6 (right)
-            TOTAL_REVS       = 110         # total layers to max height
-            REJOIN_LAYER     = 7           # 1-indexed layer where left rejoins
-            REJOIN_AT_FRAC   = 0.5         # halfway through that layer's rotation
+            RIGHT_PHASE1_REVS = 3          # layers 1-3 (right): circle then spiral
+            LEFT_REVS         = 3          # layers 4-6 (left)
+            TOTAL_REVS        = 110        # total layers to max height
+            REJOIN_LAYER      = 7          # 1-indexed layer where right rejoins
+            REJOIN_AT_FRAC    = 0.5        # halfway through that layer's rotation
     
-            # ---------- Holding position for the idle left arm ----------
+            # ---------- Holding position for the idle right arm ----------
             HOLD_X = 450.0
             HOLD_Y = 150.0
             HOLD_Z = 220.0
@@ -375,7 +375,7 @@ class ControlPanel:
             eff_radius_left  = RADIUS + LEFT_R_OFFSET
             eff_radius_right = RADIUS + RIGHT_R_OFFSET
             start_rad        = math.radians(START_ANGLE_DEG)
-            left_rejoin_rev  = (REJOIN_LAYER - 1) + REJOIN_AT_FRAC    # e.g. 6.5
+            right_rejoin_rev = (REJOIN_LAYER - 1) + REJOIN_AT_FRAC    # e.g. 6.5
     
             def circle_point(angle_rad, radius, cx, cy):
                 return (cx + radius * math.cos(angle_rad),
@@ -389,7 +389,6 @@ class ControlPanel:
     
             # --- Geometry-based extrusion length ---
             # Filament/path length = circumference of the printed circle * number of revs.
-            # (Previously this was speed*time, which under-fed; arc length is the right basis.)
             def extrude_len(radius, revs):
                 return 2.0 * math.pi * radius * revs
     
@@ -398,22 +397,57 @@ class ControlPanel:
                 return max(1, int(math.ceil(revs * 360.0 / STEP_DEG)))
     
             # =========================================================
-            # PHASE 1 — LEFT arm: layers 1-3 (circle + spiral)
+            # PHASE 1 — RIGHT arm: layers 1-3 (circle + spiral)
+            # =========================================================
+            rx, ry = circle_point(start_rad, eff_radius_right, TT_CX_RIGHT, TT_CY_RIGHT)
+    
+            # RIGHT arm moves -> LEFT extruder slot feeds it.
+            len_p1 = extrude_len(eff_radius_right, RIGHT_PHASE1_REVS)
+            self.extruder.extrude_sync(len_p1, 1.0, 0.0, 1.0, wait=False)
+            time.sleep(PRE_EXTRUDE_TIME)
+    
+            self.right.arm.set_position(rx, ry, Z_RIGHT_START,
+                                        ROLL, PITCH, RIGHT_YAW, speed=100, wait=True)
+    
+            bed_deg = 0.0
+            n = steps_for(RIGHT_PHASE1_REVS)
+            for i in range(n):
+                bed_deg = min(RIGHT_PHASE1_REVS * 360.0, bed_deg + STEP_DEG)
+                self.turntable.rotate_absolute(bed_deg, TURNTABLE_DEG_S, wait=True)
+    
+                rev = bed_deg / 360.0
+                rz  = path_z(Z_RIGHT_START, rev)
+                self.right.arm.set_position(rx, ry, rz,
+                                            ROLL, PITCH, RIGHT_YAW, speed=10, wait=True)
+                time.sleep(FRAME_DT)
+    
+            self.turntable.wait_ok()
+    
+            # =========================================================
+            # PHASE 2 — RIGHT arm retracts to holding position
+            # =========================================================
+            # RIGHT arm idle -> stop the LEFT extruder slot (which fed it).
+            self.extruder.stop_left() if hasattr(self.extruder, "stop_left") else None
+            self.right.arm.set_position(HOLD_X, HOLD_Y, HOLD_Z,
+                                        ROLL, PITCH, RIGHT_YAW, speed=100, wait=True)
+    
+            # =========================================================
+            # PHASE 3 — LEFT arm: layers 4-6, SAME toolpath, stacked on top
             # =========================================================
             lx, ly = circle_point(start_rad, eff_radius_left, TT_CX_LEFT, TT_CY_LEFT)
     
             # LEFT arm moves -> RIGHT extruder slot feeds it.
-            len_p1 = extrude_len(eff_radius_left, LEFT_PHASE1_REVS)
-            self.extruder.extrude_sync(0.0, 1.0, len_p1, 1.0, wait=False)
+            len_p3 = extrude_len(eff_radius_left, LEFT_REVS)
+            self.extruder.extrude_sync(0.0, 1.0, len_p3, 1.0, wait=False)
             time.sleep(PRE_EXTRUDE_TIME)
     
-            self.left.arm.set_position(lx, ly, Z_LEFT_START,
+            self.left.arm.set_position(lx, ly, path_z(Z_LEFT_START, RIGHT_PHASE1_REVS),
                                        ROLL, PITCH, LEFT_YAW, speed=100, wait=True)
     
-            bed_deg = 0.0
-            n = steps_for(LEFT_PHASE1_REVS)
+            bed_target = (RIGHT_PHASE1_REVS + LEFT_REVS) * 360.0
+            n = steps_for(LEFT_REVS)
             for i in range(n):
-                bed_deg = min(LEFT_PHASE1_REVS * 360.0, bed_deg + STEP_DEG)
+                bed_deg = min(bed_target, bed_deg + STEP_DEG)
                 self.turntable.rotate_absolute(bed_deg, TURNTABLE_DEG_S, wait=True)
     
                 rev = bed_deg / 360.0
@@ -425,97 +459,57 @@ class ControlPanel:
             self.turntable.wait_ok()
     
             # =========================================================
-            # PHASE 2 — LEFT arm retracts to holding position
-            # =========================================================
-            # LEFT arm idle -> stop the RIGHT extruder slot (which fed it).
-            self.extruder.stop_right() if hasattr(self.extruder, "stop_right") else None
-            self.left.arm.set_position(HOLD_X, HOLD_Y, HOLD_Z,
-                                       ROLL, PITCH, LEFT_YAW, speed=100, wait=True)
-    
-            # =========================================================
-            # PHASE 3 — RIGHT arm: layers 4-6, SAME toolpath, stacked on top
-            # =========================================================
-            rx, ry = circle_point(start_rad, eff_radius_right, TT_CX_RIGHT, TT_CY_RIGHT)
-    
-            # RIGHT arm moves -> LEFT extruder slot feeds it.
-            len_p3 = extrude_len(eff_radius_right, RIGHT_REVS)
-            self.extruder.extrude_sync(len_p3, 1.0, 0.0, 1.0, wait=False)
-            time.sleep(PRE_EXTRUDE_TIME)
-    
-            self.right.arm.set_position(rx, ry, path_z(Z_RIGHT_START, LEFT_PHASE1_REVS),
-                                        ROLL, PITCH, RIGHT_YAW, speed=100, wait=True)
-    
-            bed_target = (LEFT_PHASE1_REVS + RIGHT_REVS) * 360.0
-            n = steps_for(RIGHT_REVS)
-            for i in range(n):
-                bed_deg = min(bed_target, bed_deg + STEP_DEG)
-                self.turntable.rotate_absolute(bed_deg, TURNTABLE_DEG_S, wait=True)
-    
-                rev = bed_deg / 360.0
-                rz  = path_z(Z_RIGHT_START, rev)
-                self.right.arm.set_position(rx, ry, rz,
-                                            ROLL, PITCH, RIGHT_YAW, speed=10, wait=True)
-                time.sleep(FRAME_DT)
-    
-            self.turntable.wait_ok()
-    
-            # Z height the RIGHT arm finished at — the LEFT arm stacks on top of THIS.
-            right_stop_rev = LEFT_PHASE1_REVS + RIGHT_REVS      # = 6
-    
-            # =========================================================
             # PHASE 4 — Layers 7..TOTAL_REVS: co-printing to max height
-            #   RIGHT arm prints the whole phase.
-            #   LEFT arm rejoins halfway through layer 7, printing ON TOP of where
-            #   the right arm stopped: it uses the RIGHT arm's path radius (not its
-            #   own edge radius) so it stacks rather than spiralling in.
+            #   LEFT arm prints the whole phase.
+            #   RIGHT arm rejoins halfway through layer 7 at EXACTLY the Z the left
+            #   arm is currently at, on the SAME commanded XY (left arm's path on the
+            #   left TT center). The 180-deg physical separation is handled by the
+            #   arm geometry, not by the commanded coordinates.
             # =========================================================
-            revs_done   = right_stop_rev                        # = 6
+            revs_done   = RIGHT_PHASE1_REVS + LEFT_REVS         # = 6
             phase4_revs = TOTAL_REVS - revs_done
     
-            # LEFT arm rejoins on the RIGHT arm's path radius (stack on top, same XY path).
-            lx_join, ly_join = circle_point(start_rad, eff_radius_right,
-                                            TT_CX_LEFT, TT_CY_LEFT)
-    
             # Geometry-based lengths.
-            #   RIGHT arm runs the full phase on radius eff_radius_right.
-            #   LEFT arm runs only from the rejoin point to the end, also on eff_radius_right.
-            right_phase4_len = extrude_len(eff_radius_right, phase4_revs)
-            left_run_revs    = TOTAL_REVS - left_rejoin_rev
-            left_phase4_len  = extrude_len(eff_radius_right, left_run_revs)
+            #   LEFT arm runs the full phase on radius eff_radius_left.
+            #   RIGHT arm runs only from the rejoin point to the end, on the SAME path.
+            left_phase4_len  = extrude_len(eff_radius_left, phase4_revs)
+            right_run_revs   = TOTAL_REVS - right_rejoin_rev
+            right_phase4_len = extrude_len(eff_radius_left, right_run_revs)
     
-            # RIGHT arm moving -> LEFT extruder slot. LEFT arm moving -> RIGHT extruder slot.
+            # LEFT arm moving -> RIGHT extruder slot. RIGHT arm moving -> LEFT extruder slot.
             self.extruder.extrude_sync(right_phase4_len, 1.0,
                                        left_phase4_len, 1.0, wait=False)
     
-            # Re-anchor the RIGHT arm at the start of layer 7.
-            rx, ry = circle_point(start_rad, eff_radius_right, TT_CX_RIGHT, TT_CY_RIGHT)
-            self.right.arm.set_position(rx, ry, path_z(Z_RIGHT_START, revs_done),
-                                        ROLL, PITCH, RIGHT_YAW, speed=100, wait=True)
+            # Re-anchor the LEFT arm at the start of layer 7.
+            lx, ly = circle_point(start_rad, eff_radius_left, TT_CX_LEFT, TT_CY_LEFT)
+            self.left.arm.set_position(lx, ly, path_z(Z_LEFT_START, revs_done),
+                                       ROLL, PITCH, LEFT_YAW, speed=100, wait=True)
     
             bed_target = TOTAL_REVS * 360.0
             n = steps_for(phase4_revs)
-            left_active = False
+            right_active = False
             for i in range(n):
                 bed_deg = min(bed_target, bed_deg + STEP_DEG)
                 self.turntable.rotate_absolute(bed_deg, TURNTABLE_DEG_S, wait=True)
     
                 abs_rev = bed_deg / 360.0
     
-                # RIGHT arm follows shared toolpath.
-                rz = path_z(Z_RIGHT_START, abs_rev)
-                self.right.arm.set_position(rx, ry, rz,
-                                            ROLL, PITCH, RIGHT_YAW, speed=10, wait=False)
+                # LEFT arm follows shared toolpath.
+                lz = path_z(Z_LEFT_START, abs_rev)
+                self.left.arm.set_position(lx, ly, lz,
+                                           ROLL, PITCH, LEFT_YAW, speed=10, wait=False)
     
-                # LEFT arm rejoins at layer 7 + halfway, ON TOP of the right arm's layer.
-                if abs_rev >= left_rejoin_rev:
-                    lz = path_z(Z_LEFT_START, abs_rev) + Z_RISE_PER_REV   # one layer up
-                    if not left_active:
-                        self.left.arm.set_position(lx_join, ly_join, lz,
-                                                   ROLL, PITCH, LEFT_YAW, speed=100, wait=True)
-                        left_active = True
+                # RIGHT arm rejoins at layer 7 + halfway, at EXACTLY the left arm's Z,
+                # on the SAME commanded XY (left arm's path / left TT center).
+                if abs_rev >= right_rejoin_rev:
+                    rz_join = path_z(Z_LEFT_START, abs_rev)        # match active arm's Z exactly
+                    if not right_active:
+                        self.right.arm.set_position(lx, ly, rz_join,
+                                                    ROLL, PITCH, RIGHT_YAW, speed=100, wait=True)
+                        right_active = True
                     else:
-                        self.left.arm.set_position(lx_join, ly_join, lz,
-                                                   ROLL, PITCH, LEFT_YAW, speed=10, wait=True)
+                        self.right.arm.set_position(lx, ly, rz_join,
+                                                    ROLL, PITCH, RIGHT_YAW, speed=10, wait=True)
     
                 time.sleep(FRAME_DT)
     
