@@ -152,20 +152,23 @@ def steps_for(revs):
 # --------------------------------------------------------------------------
 # Core per-phase printing loop (turntable = master clock)
 # --------------------------------------------------------------------------
-def print_phase(arm, tool, eff_radius, cx, cy, base_z,
+def print_phase(arm_ctrl, tool, eff_radius, cx, cy, base_z,
                 rev_start, rev_end, turntable, extruder,
-                second_arm=None, second_cfg=None):
+                second_cfg=None):
     """
     Print one phase by stepping the turntable in fixed angular increments.
 
+    `arm_ctrl` is an ArmController (NOT the raw XArmAPI); we call its
+    `move_to(...)` wrapper, which forwards to XArmAPI.set_position.
+
     For each frame:
       * advance the bed STEP_DEG (blocking)  -> the master clock tick,
-      * move `arm` to the new disc angle (non-blocking),
+      * move the arm to the new disc angle (non-blocking),
       * extrude the filament for the arc swept this frame on `tool`.
 
-    `second_arm`/`second_cfg` optionally co-prints a second arm in the same
-    frames (used in phase 4 once the right arm has re-joined). `second_cfg`
-    is a dict: {arm, tool, eff_radius, cx, cy, base_z, active_from_rev}.
+    `second_cfg` optionally co-prints a second arm in the same frames (used in
+    phase 4 once the right arm has re-joined). It is a dict:
+    {arm_ctrl, tool, eff_radius, cx, cy, base_z, active_from_rev}.
     """
     n = steps_for(rev_end - rev_start)
     rev_span = rev_end - rev_start
@@ -173,8 +176,8 @@ def print_phase(arm, tool, eff_radius, cx, cy, base_z,
 
     # Move arm to the start point of this phase before stepping.
     sx, sy = disc_point(START_RAD, eff_radius, cx, cy)
-    arm.move_to(sx, sy, path_z(base_z, rev_start),
-                roll=180, pitch=45, yaw=0, speed=TRAIL_SPEED, wait=True)
+    arm_ctrl.move_to(sx, sy, path_z(base_z, rev_start),
+                     roll=180, pitch=45, yaw=0, speed=TRAIL_SPEED, wait=True)
 
     second_started = False
     for i in range(n):
@@ -193,8 +196,8 @@ def print_phase(arm, tool, eff_radius, cx, cy, base_z,
         # ---- 2. arm move for the new disc angle (non-blocking) ----
         x, y = disc_point(angle, eff_radius, cx, cy)
         z = path_z(base_z, cur_rev)
-        arm.move_to(x, y, z, roll=180, pitch=45, yaw=0,
-                    speed=PRINT_ARM_SPEED, wait=False)
+        arm_ctrl.move_to(x, y, z, roll=180, pitch=45, yaw=0,
+                         speed=PRINT_ARM_SPEED, wait=False)
 
         # ---- 2b. optional second (re-joining) arm, co-printing ----
         if second_cfg is not None:
@@ -203,12 +206,12 @@ def print_phase(arm, tool, eff_radius, cx, cy, base_z,
                 # Re-join ON TOP of the active bead: identical commanded XY/Z,
                 # 180° physical separation handled by arm geometry.
                 if not second_started:
-                    s["arm"].move_to(x, y, z, roll=180, pitch=45, yaw=0,
-                                     speed=RAPID_SPEED, wait=True)
+                    s["arm_ctrl"].move_to(x, y, z, roll=180, pitch=45, yaw=0,
+                                          speed=RAPID_SPEED, wait=True)
                     second_started = True
                 else:
-                    s["arm"].move_to(x, y, z, roll=180, pitch=45, yaw=0,
-                                     speed=PRINT_ARM_SPEED, wait=False)
+                    s["arm_ctrl"].move_to(x, y, z, roll=180, pitch=45, yaw=0,
+                                          speed=PRINT_ARM_SPEED, wait=False)
 
         # ---- 3. extrusion increment for THIS frame's arc (decoupled) ----
         # Arc length on the primary path this frame.
@@ -268,7 +271,7 @@ def main():
     # PHASE 1 — RIGHT arm: circle (rev 0) then spiral up
     # =========================================================
     logger.info("PHASE 1: right arm, revs 0..%d", RIGHT_PHASE1_REVS)
-    rev_now = print_phase(right.arm, right_tool, EFF_R_RIGHT,
+    rev_now = print_phase(right, right_tool, EFF_R_RIGHT,
                           TT_CX_RIGHT, TT_CY_RIGHT, Z_RIGHT,
                           rev_start=0.0, rev_end=float(RIGHT_PHASE1_REVS),
                           turntable=turntable, extruder=extruder)
@@ -278,8 +281,8 @@ def main():
     # =========================================================
     logger.info("PHASE 2: right arm to holding pose")
     extruder.extrude(right_tool, -2.0, 10.0, wait=True)          # small retract
-    right.arm.move_to(HOLD_X, HOLD_Y, HOLD_Z, 180, 45, 0,
-                      speed=RAPID_SPEED, wait=True)
+    right.arm.set_position(HOLD_X, HOLD_Y, HOLD_Z, 180, 45, 0,
+                           speed=RAPID_SPEED, wait=True)
 
     # =========================================================
     # PHASE 3 — LEFT arm continues the SAME tower upward
@@ -292,7 +295,7 @@ def main():
                  180, 45, 0, speed=TRAIL_SPEED, wait=True)
     extruder.extrude(left_tool, PRE_EXTRUDE, PRE_EXTRUDE_FEED, wait=True)
 
-    rev_now = print_phase(left.arm, left_tool, EFF_R_LEFT,
+    rev_now = print_phase(left, left_tool, EFF_R_LEFT,
                           TT_CX_LEFT, TT_CY_LEFT, Z_LEFT,
                           rev_start=float(RIGHT_PHASE1_REVS),
                           rev_end=float(RIGHT_PHASE1_REVS + LEFT_REVS),
@@ -306,12 +309,12 @@ def main():
                 TOTAL_REVS, rejoin_rev)
     # Right arm pre-positions near the tower (above current bead height) so its
     # drop-in is short; it does NOT extrude until print_phase activates it.
-    right.arm.move_to(SAFE_X, sy_r, SAFE_Z, 180, 45, 0,
-                      speed=RAPID_SPEED, wait=True)
+    right.arm.set_position(SAFE_X, sy_r, SAFE_Z, 180, 45, 0,
+                           speed=RAPID_SPEED, wait=True)
     extruder.extrude(right_tool, PRE_EXTRUDE, PRE_EXTRUDE_FEED, wait=True)
 
     right_cfg = {
-        "arm": right.arm,
+        "arm_ctrl": right,
         "tool": right_tool,
         "eff_radius": EFF_R_RIGHT,
         "cx": TT_CX_RIGHT,
@@ -320,7 +323,7 @@ def main():
         "active_from_rev": rejoin_rev,
     }
 
-    rev_now = print_phase(left.arm, left_tool, EFF_R_LEFT,
+    rev_now = print_phase(left, left_tool, EFF_R_LEFT,
                           TT_CX_LEFT, TT_CY_LEFT, Z_LEFT,
                           rev_start=float(RIGHT_PHASE1_REVS + LEFT_REVS),
                           rev_end=float(TOTAL_REVS),
@@ -338,12 +341,12 @@ def main():
     turntable.wait_ok()
 
     final_z = path_z(Z_LEFT, TOTAL_REVS)
-    left.arm.move_to(SAFE_X, sy_l, max(SAFE_Z, final_z + 20),
-                     180, 45, 0, speed=RAPID_SPEED, wait=False)
-    right.arm.move_to(SAFE_X, sy_r, max(SAFE_Z, final_z + 20),
-                      180, 45, 0, speed=RAPID_SPEED, wait=True)
-    left.arm.move_to(572.0, 202.4, 152.2, 180, 45, 0, speed=RAPID_SPEED, wait=False)
-    right.arm.move_to(573.0, 217.5, 160.9, 180, 45, 0, speed=RAPID_SPEED, wait=True)
+    left.arm.set_position(SAFE_X, sy_l, max(SAFE_Z, final_z + 20),
+                          180, 45, 0, speed=RAPID_SPEED, wait=False)
+    right.arm.set_position(SAFE_X, sy_r, max(SAFE_Z, final_z + 20),
+                           180, 45, 0, speed=RAPID_SPEED, wait=True)
+    left.arm.set_position(572.0, 202.4, 152.2, 180, 45, 0, speed=RAPID_SPEED, wait=False)
+    right.arm.set_position(573.0, 217.5, 160.9, 180, 45, 0, speed=RAPID_SPEED, wait=True)
 
     logger.info("Phased dual-arm spiral complete. Final height %.1f mm", final_z)
 
