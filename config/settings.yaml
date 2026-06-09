@@ -1,3 +1,4 @@
+
 # IP addresses and hardware settings
 arms:
   left:
@@ -13,14 +14,15 @@ turntable:
   controller_ip: "192.168.7.1"   # Aerotech iXC4 IP address
   axis: "U"       # if your MCU sends endstop state (future)
 
+
 # Default motion & extrusion parameters
 defaults:
   travel_speed: 150      # mm/s arm move when not extruding
   print_speed: 30        # mm/s arm move when extruding
   extrusion_feedrate: 5  # mm/s of filament (provisional, per your volcano/nozzle)
   temperature:
-    tool0: 220           # Celsius
-    tool1: 220
+    tool0: 235           # Celsius
+    tool1: 235
 
 # Optional: software limits (arm coordinates)
 limits:

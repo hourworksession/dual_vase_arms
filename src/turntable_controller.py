@@ -32,6 +32,60 @@ class TurntableController:
     # Connection management
     # ------------------------------------------------------------------
 
+    def moving_q(self, axis_status) -> bool:  
+            axis_status = int(axis_status)
+            #Defining Bit Masks From AeroTech API
+            jogging = 1 << 8
+    
+            #Need To Add Leading Zeros To Pack Enum To 26 Bits
+            binary = bin(axis_status)[2:] #Get Raw Binary Number 
+            pad_bin = int(binary.zfill(26)) #Pad To Make 26 Bits
+    
+            value = pad_bin & jogging != 0
+    
+            return value
+    
+    def wait_motion_start(self, timeout=5.0):
+        """Wait until the rotary axis task is Running (motion has actually started)."""
+        if self.controller is None:
+            return
+        start = time.time()
+        while True:
+            state = self.controller.runtime.tasks[1].status.task_state
+            if state == "Running":
+                break
+            if time.time() - start > timeout:
+                logger.warning("Turntable motion did not start within %.1f s", timeout)
+                break
+            time.sleep(0.02)    
+
+
+    def get_angle(self) -> float:
+        """Return current absolute angle of the rotary axis in degrees."""
+        config = a1.StatusItemConfiguration()
+        config.axis.add(a1.AxisStatusItem.ProgramPosition, self.axis)
+        status = self.controller.runtime.status.get_status_items(config)
+        return status.axis.get(a1.AxisStatusItem.ProgramPosition, self.axis).value
+
+    def is_moving(self) -> bool:
+        """Return True if the rotary axis is currently executing a motion."""
+        if self.controller is None or not self._connected:
+            return False
+    
+        try:
+            # Request the AxisStatus item for our axis
+            config = a1.StatusItemConfiguration()
+            config.axis.add(a1.AxisStatusItem.AxisStatus, self.axis)
+            status_item = self.controller.runtime.status.get_status_items(config)
+            axis_status = status_item.axis.get(a1.AxisStatusItem.AxisStatus, self.axis).value
+    
+            # Bit 8 = jogging / moving
+            return (axis_status >> 8) & 1 == 1
+        except Exception:
+            # Fallback: use task state
+            task_status = self.controller.runtime.tasks[1].status
+            return task_status.task_state == "Running"
+
     def connect(self) -> None:
         """Establish connection to the iXC4 and enable the rotary axis."""
         if self._connected:
@@ -41,29 +95,30 @@ class TurntableController:
         logger.info(f"Connecting to iXC4 at {self.host}...")
         self.controller = a1.Controller.connect(host=self.host)
         logger.info("Connected to iXC4.")
-
+        
         # Start the controller runtime if not already running
         self.controller.start()
         logger.info("Controller started.")
 
+        config_temp = a1.StatusItemConfiguration()
+        config_temp.axis.add(a1.AxisStatusItem.AxisStatus, self.axis)
+        axis_status = 0
+        print(f"Axis Status:",{axis_status})
+        axis_status = self.controller.runtime.status.get_status_items(config_temp).axis.get(a1.AxisStatusItem.AxisStatus, self.axis).value
+        print(f"Axis Status:",{axis_status})
+        testing_value = self.moving_q(axis_status)
+        if testing_value == True:
+            self.controller.runtime.commands.motion.movefreerunstop(self.axis)
         # Enable the axis
         self.controller.runtime.commands.motion.enable([self.axis])
         self._wait_for_task("Enabling axis")
-
         # Home the axis
         self.controller.runtime.commands.motion.home([self.axis])
         self._wait_for_task("Homing axis")
-
         self._connected = True
         logger.info(f"Axis '{self.axis}' enabled and homed.")
 
-    def is_moving(self) -> bool:
-        """Return True if the turntable axis is still executing a motion."""
-        if self.controller is None or not self._connected:
-            return False
-        # Use the task status – works reliably
-        task_status = self.controller.runtime.tasks[1].status
-        return task_status.task_state == "Running"
+    
 
     def disconnect(self) -> None:
         """Disable the axis and disconnect from the controller."""
@@ -104,6 +159,9 @@ class TurntableController:
         )
         if wait:
             self._wait_for_task("Rotate absolute")
+    
+    def rotate_linear(self, angle_deg, speed_dps):
+        self.controller.runtime.commands.motion.movelinear(self.axis, [angle_deg], speed_dps)
 
     def rotate_relative(self, angle_deg: float, speed_dps: float,
                         wait: bool = True) -> None:

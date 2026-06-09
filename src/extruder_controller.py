@@ -19,14 +19,7 @@ class ExtruderController:
     # ------------------------------------------------------------------
 
     def send_gcode(self, script: str, timeout: int = 300, async_mode: bool = False) -> dict:
-        """Send raw G‑code to Moonraker.
-
-        Args:
-            script: G‑code lines to execute.
-            timeout: HTTP timeout in seconds.
-            async_mode: If True, Moonraker returns immediately and the
-                        command runs in the background.
-        """
+        """Send raw G‑code to Moonraker."""
         url = f"{self.base_url}/printer/gcode/script"
         if async_mode:
             url += "?async=true"
@@ -53,40 +46,46 @@ class ExtruderController:
         else:
             raise ValueError(f"Invalid tool index: {tool}")
 
-    def heat_and_wait(self, tool: int, temp: float, timeout: int = 120) -> None:
-        """Send non‑blocking heat command, then poll until target reached."""
+    def heat_and_wait(self, tool: int, temp: float, timeout: int = 120,
+                      tolerance: float = 5.0) -> None:
+        """Set target temperature, then wait until the measured temperature
+        is within `tolerance` degrees of the target (default ±5 °C).
+        """
+        self.set_temperature(tool, temp, wait=False)   # non‑blocking target
         if tool == 0:
-            self.send_gcode(f"M104 S{temp} T0")
-            logger.info(f"Heating T0 to {temp}°C, waiting...")
-            self._wait_for_extruder(temp, timeout)
+            logger.info(f"Heating T0 to {temp}°C (tolerance ±{tolerance}°C)")
+            self._wait_for_extruder(temp, timeout, tolerance)
         elif tool == 1:
-            self.send_gcode(f"SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET={temp}")
-            logger.info(f"Heating heater_bed (second nozzle) to {temp}°C, waiting...")
-            self._wait_for_heater_bed(temp, timeout)
+            logger.info(f"Heating heater_bed to {temp}°C (tolerance ±{tolerance}°C)")
+            self._wait_for_heater_bed(temp, timeout, tolerance)
         else:
             raise ValueError(f"Invalid tool index: {tool}")
 
-    def _wait_for_extruder(self, target, timeout=120):
+    def _wait_for_extruder(self, target: float, timeout: float = 120,
+                           tolerance: float = 5.0):
         start = time.time()
         while True:
             current = self.get_temperature(0)
-            if current >= target:
+            if abs(current - target) <= tolerance:
                 break
             if time.time() - start > timeout:
-                raise TimeoutError(f"T0 did not reach {target}°C within {timeout}s")
+                raise TimeoutError(
+                    f"T0 did not reach {target}°C ±{tolerance}°C within {timeout}s")
             time.sleep(2)
-        logger.info(f"T0 at {target}°C")
+        logger.info(f"T0 at {current:.1f}°C (target {target}°C)")
 
-    def _wait_for_heater_bed(self, target, timeout=120):
+    def _wait_for_heater_bed(self, target: float, timeout: float = 120,
+                             tolerance: float = 5.0):
         start = time.time()
         while True:
             current = self.get_temperature(1)
-            if current >= target:
+            if abs(current - target) <= tolerance:
                 break
             if time.time() - start > timeout:
-                raise TimeoutError(f"heater_bed did not reach {target}°C within {timeout}s")
+                raise TimeoutError(
+                    f"heater_bed did not reach {target}°C ±{tolerance}°C within {timeout}s")
             time.sleep(2)
-        logger.info(f"heater_bed at {target}°C")
+        logger.info(f"heater_bed at {current:.1f}°C (target {target}°C)")
 
     def get_temperature(self, tool: int) -> float:
         """Return current temperature. tool=0 → extruder, tool=1 → heater_bed."""
@@ -120,8 +119,7 @@ class ExtruderController:
             tool: 0 for E axis, 1 for X axis.
             length_mm: Positive = forward, negative = retract.
             feedrate_mm_s: Extrusion speed in mm/s.
-            wait: If False, the command is sent but the HTTP response is
-                  not waited for (the move runs in the background).
+            wait: If False, fire‑and‑forget (non‑blocking).
         """
         self.set_relative_extrusion()
         feedrate_mm_min = feedrate_mm_s * 60.0
@@ -135,11 +133,9 @@ class ExtruderController:
         if wait:
             self.send_gcode(script)
         else:
-            # Fire‑and‑forget: send with a very short timeout, ignore any timeout
             try:
                 self.send_gcode(script, async_mode=True, timeout=10)
             except requests.exceptions.ReadTimeout:
-                # The command was accepted and is now running in Klipper
                 pass
 
     # ------------------------------------------------------------------
@@ -149,30 +145,13 @@ class ExtruderController:
     def extrude_sync(self, length_t0: float, speed_t0: float,
                      length_t1: float, speed_t1: float,
                      wait: bool = True) -> None:
-        """Extrude both tools simultaneously with one G1 command.
-
-        Args:
-            length_t0: Filament length for tool 0 (E axis) in mm.
-            speed_t0:  Desired linear speed for tool 0 (mm/s).
-            length_t1: Filament length for tool 1 (X axis) in mm.
-            speed_t1:  Desired linear speed for tool 1 (mm/s).
-            wait: If False, the command is sent in the background.
-
-        Both moves start and end together.
-        """
+        """Extrude both tools simultaneously with one G1 command."""
         if speed_t0 <= 0 or speed_t1 <= 0:
             raise ValueError("Speeds must be positive.")
-
-        # Time each axis would take at its requested speed
         time_t0 = abs(length_t0) / speed_t0
         time_t1 = abs(length_t1) / speed_t1
-
-        # Use the longer time so both finish together
         duration = max(time_t0, time_t1)
-
-        # Combined path length
         L = (length_t0**2 + length_t1**2) ** 0.5
-        # Feedrate in mm/min to cover L in 'duration' seconds
         F = (L / duration) * 60.0
 
         self.set_relative_extrusion()
