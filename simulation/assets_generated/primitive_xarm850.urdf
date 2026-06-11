@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<robot name="uf850_primitive">
+  <link name="link_base">
+    <visual><origin xyz="0.0000 0.0000 0.1820" rpy="0 0.0000 0.0000"/><geometry><cylinder radius="0.0550" length="0.3640"/></geometry><material name="seg"><color rgba="0.35 0.35 0.38 1"/></material></visual>
+    <collision><origin xyz="0.0000 0.0000 0.1820" rpy="0 0.0000 0.0000"/><geometry><cylinder radius="0.0550" length="0.3640"/></geometry></collision>
+    <inertial><mass value="0.5"/><inertia ixx="0.002" iyy="0.002" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="joint1" type="revolute">
+    <parent link="link_base"/><child link="link1"/>
+    <origin xyz="0.0000 0.0000 0.3640" rpy="0.0000 0.0000 0.0000"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.11018" upper="3.11018" effort="200" velocity="3.14"/>
+  </joint>
+  <link name="link1">
+    <visual><geometry><sphere radius="0.0500"/></geometry><material name="knk"><color rgba="0.2 0.2 0.22 1"/></material></visual>
+    <inertial><mass value="0.5"/><inertia ixx="0.002" iyy="0.002" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="joint2" type="revolute">
+    <parent link="link1"/><child link="link2"/>
+    <origin xyz="0.0000 0.0000 0.0000" rpy="1.5708 -1.5708 0.0000"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.30383" upper="2.30383" effort="200" velocity="3.14"/>
+  </joint>
+  <link name="link2">
+    <visual><geometry><sphere radius="0.0500"/></geometry><material name="knk"><color rgba="0.2 0.2 0.22 1"/></material></visual>
+    <visual><origin xyz="0.1950 0.0000 0.0000" rpy="0 1.5708 0.0000"/><geometry><cylinder radius="0.0450" length="0.3900"/></geometry><material name="seg"><color rgba="0.30 0.65 0.35 1"/></material></visual>
+    <collision><origin xyz="0.1950 0.0000 0.0000" rpy="0 1.5708 0.0000"/><geometry><cylinder radius="0.0450" length="0.3900"/></geometry></collision>
+    <inertial><mass value="0.5"/><inertia ixx="0.002" iyy="0.002" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="joint3" type="revolute">
+    <parent link="link2"/><child link="link3"/>
+    <origin xyz="0.3900 0.0000 0.0000" rpy="-3.1416 0.0000 -1.5708"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-4.22370" upper="0.06109" effort="200" velocity="3.14"/>
+  </joint>
+  <link name="link3">
+    <visual><geometry><sphere radius="0.0500"/></geometry><material name="knk"><color rgba="0.2 0.2 0.22 1"/></material></visual>
+    <visual><origin xyz="0.0750 0.2130 0.0000" rpy="0 1.5708 1.2322"/><geometry><cylinder radius="0.0450" length="0.4516"/></geometry><material name="seg"><color rgba="0.30 0.45 0.80 1"/></material></visual>
+    <collision><origin xyz="0.0750 0.2130 0.0000" rpy="0 1.5708 1.2322"/><geometry><cylinder radius="0.0450" length="0.4516"/></geometry></collision>
+    <inertial><mass value="0.5"/><inertia ixx="0.002" iyy="0.002" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="joint4" type="revolute">
+    <parent link="link3"/><child link="link4"/>
+    <origin xyz="0.1500 0.4260 0.0000" rpy="-1.5708 0.0000 0.0000"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.11018" upper="3.11018" effort="200" velocity="3.14"/>
+  </joint>
+  <link name="link4">
+    <visual><geometry><sphere radius="0.0500"/></geometry><material name="knk"><color rgba="0.2 0.2 0.22 1"/></material></visual>
+    <inertial><mass value="0.5"/><inertia ixx="0.002" iyy="0.002" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="joint5" type="revolute">
+    <parent link="link4"/><child link="link5"/>
+    <origin xyz="0.0000 0.0000 0.0000" rpy="-1.5708 0.0000 0.0000"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-2.16420" upper="2.16420" effort="200" velocity="3.14"/>
+  </joint>
+  <link name="link5">
+    <visual><geometry><sphere radius="0.0500"/></geometry><material name="knk"><color rgba="0.2 0.2 0.22 1"/></material></visual>
+    <visual><origin xyz="0.0000 -0.0450 0.0000" rpy="0 1.5708 -1.5708"/><geometry><cylinder radius="0.0450" length="0.0900"/></geometry><material name="seg"><color rgba="0.65 0.35 0.80 1"/></material></visual>
+    <collision><origin xyz="0.0000 -0.0450 0.0000" rpy="0 1.5708 -1.5708"/><geometry><cylinder radius="0.0450" length="0.0900"/></geometry></collision>
+    <inertial><mass value="0.5"/><inertia ixx="0.002" iyy="0.002" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="joint6" type="revolute">
+    <parent link="link5"/><child link="link6"/>
+    <origin xyz="0.0000 -0.0900 0.0000" rpy="1.5708 0.0000 0.0000"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.11018" upper="3.11018" effort="200" velocity="3.14"/>
+  </joint>
+  <link name="link6">
+    <visual><geometry><sphere radius="0.0500"/></geometry><material name="knk"><color rgba="0.2 0.2 0.22 1"/></material></visual>
+    <inertial><mass value="0.5"/><inertia ixx="0.002" iyy="0.002" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="tool_mount" type="fixed">
+    <parent link="link6"/><child link="extruder"/>
+    <origin xyz="0 0 0" rpy="0.0000 0.7854 0.0000"/>
+  </joint>
+  <link name="extruder">
+    <visual><origin xyz="0 0 0.0450"/><geometry><box size="0.05 0.045 0.0900"/></geometry><material name="ext"><color rgba="0.15 0.15 0.15 1"/></material></visual>
+    <inertial><mass value="0.5"/><inertia ixx="0.002" iyy="0.002" izz="0.002" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="nozzle" type="fixed">
+    <parent link="extruder"/><child link="tool_tip"/>
+    <origin xyz="0 0 0.1000" rpy="0 0 0"/>
+  </joint>
+  <link name="tool_tip">
+    <visual><origin xyz="0 0 -0.012"/><geometry><cylinder radius="0.006" length="0.024"/></geometry><material name="noz"><color rgba="0.9 0.9 0.2 1"/></material></visual>
+    <inertial><mass value="0.05"/><inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+</robot>

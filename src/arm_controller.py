@@ -57,6 +57,23 @@ class ArmController:
             logger.error("Error retrieving pose for %s: %s", self.name, e)
             raise
 
+    def get_joints(self):
+        """Return current joint angles (servo angles) in degrees, or None.
+
+        Used by the digital twin to mirror the arm's exact configuration
+        instead of inferring it from the TCP pose. Wraps the xArm SDK's
+        ``get_servo_angle`` (is_radian=False -> degrees).
+        """
+        try:
+            code, angles = self.arm.get_servo_angle(is_radian=False)
+            if code == 0:
+                return angles[:6]
+            logger.error("Failed to get joints for %s: %s", self.name, code)
+            return None
+        except Exception as e:
+            logger.error("Error retrieving joints for %s: %s", self.name, e)
+            return None
+
     def emergency_stop(self):
         """Trigger emergency stop."""
         try:

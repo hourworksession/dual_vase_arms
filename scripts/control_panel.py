@@ -11,6 +11,19 @@ from src.turntable_controller import TurntableController
 from src.extruder_controller import ExtruderController
 from config_loader import load_config
 
+# --- Digital twin (optional). Imported defensively so the hardware panel keeps
+#     working even if the sim modules or pybullet are unavailable. ---
+try:
+    from src.system_state import SystemState, StateSource
+    from simulation.state_provider import poller_from_controllers
+    from simulation.twin_launcher import TwinLauncher
+    _TWIN_AVAILABLE = True
+    _TWIN_IMPORT_ERROR = None
+except Exception as _e:  # pragma: no cover
+    _TWIN_AVAILABLE = False
+    _TWIN_IMPORT_ERROR = _e
+
+
 class ControlPanel:
     def __init__(self, root):
         self.root = root
@@ -19,6 +32,13 @@ class ControlPanel:
         self.hw_connected = False
         self.left = self.right = self.turntable = self.extruder = None
         self.running = True
+
+        # --- Digital twin wiring ---
+        self.state = SystemState() if _TWIN_AVAILABLE else None
+        self.poller = None
+        self.twin = None
+        self._twin_pub_stop = None
+        self._tt_cmd = 0.0   # tracked commanded turntable angle (for offline twin)
 
         # Virtual base offsets for manual coordinate entry
         self.left_base = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # x, y, z, roll, pitch, yaw
@@ -51,6 +71,7 @@ class ControlPanel:
         ttk.Button(btn_frame, text="EMERGENCY STOP", command=self.emergency_stop, style="Red.TButton").grid(row=1, column=0, padx=2, pady=2)
         ttk.Button(btn_frame, text="Turntable +90°", command=lambda: self.jog_turntable(90)).grid(row=1, column=1, padx=2, pady=2)
         ttk.Button(btn_frame, text="Turntable -90°", command=lambda: self.jog_turntable(-90)).grid(row=1, column=2, padx=2, pady=2)
+        ttk.Button(btn_frame, text="Open 3D Twin", command=self.open_twin).grid(row=1, column=3, padx=2, pady=2)
 
         # Extrusion test (synchronous)
         ext_frame = ttk.LabelFrame(root, text="Synchronous Extrude Test", padding=5)
@@ -120,6 +141,7 @@ class ControlPanel:
             return
         target = self._get_adjusted_coords(self.left_base)
         self.left.arm.set_position(*target, speed=50, wait=False)
+        self._push_commanded("left", target)
 
     def send_right_move(self):
         if not self.hw_connected or not self.right:
@@ -127,6 +149,20 @@ class ControlPanel:
             return
         target = self._get_adjusted_coords(self.right_base)
         self.right.arm.set_position(*target, speed=50, wait=False)
+        self._push_commanded("right", target)
+
+    def _push_commanded(self, arm, pose6):
+        """Mirror a commanded move into the shared state so the twin reflects it
+        even with no hardware feedback (offline / between polls)."""
+        if not self.state:
+            return
+        try:
+            if arm == "left":
+                self.state.update_left(tuple(pose6), StateSource.COMMANDED)
+            else:
+                self.state.update_right(tuple(pose6), StateSource.COMMANDED)
+        except Exception:
+            pass
 
     def _get_adjusted_coords(self, base_offset):
         """Return list of 6 coordinates: entered value minus base offset."""
@@ -182,8 +218,71 @@ class ControlPanel:
             self.turntable.connect()
             self.hw_connected = True
             print("All hardware connected")
+            self._start_poller()
         except Exception as e:
             print(f"Connection failed: {e}")
+
+    def _start_poller(self):
+        """Begin polling real hardware into the shared state (live twin source)."""
+        if not (_TWIN_AVAILABLE and self.state) or self.poller is not None:
+            return
+        try:
+            self.poller = poller_from_controllers(
+                self.state,
+                is_live=lambda: self.hw_connected,
+                left=self.left, right=self.right,
+                turntable=self.turntable, extruder=self.extruder,
+                hz=15.0,
+            )
+            self.poller.start()
+        except Exception as e:
+            print(f"Could not start state poller: {e}")
+            self.poller = None
+
+    def open_twin(self):
+        """Open the live 3D digital twin (separate process) and stream state to it."""
+        if not _TWIN_AVAILABLE:
+            messagebox.showerror(
+                "Twin unavailable",
+                f"Digital twin modules failed to import:\n{_TWIN_IMPORT_ERROR}",
+            )
+            return
+        if self.twin is not None and self.twin.is_running():
+            messagebox.showinfo("Twin", "The 3D twin is already open.")
+            return
+        try:
+            import pybullet  # noqa: F401  (presence check)
+        except Exception:
+            messagebox.showerror(
+                "PyBullet missing",
+                "The 3D twin needs PyBullet.\nInstall it with:\n\n    pip install pybullet",
+            )
+            return
+        # ensure the live poller is running if hardware is already connected
+        if self.hw_connected:
+            self._start_poller()
+        try:
+            self.twin = TwinLauncher(fps=30)
+            self.twin.start()
+            self._start_twin_publisher()
+            print("3D twin opened.")
+        except Exception as e:
+            messagebox.showerror("Twin error", f"Could not open twin:\n{e}")
+            self.twin = None
+
+    def _start_twin_publisher(self):
+        """Background thread: stream the latest shared state to the twin process."""
+        self._twin_pub_stop = threading.Event()
+
+        def pump():
+            while not self._twin_pub_stop.is_set() and self.twin and self.twin.is_running():
+                try:
+                    self.twin.publish(self.state.snapshot())
+                except Exception:
+                    pass
+                time.sleep(1 / 30)
+
+        threading.Thread(target=pump, name="TwinPublisher", daemon=True).start()
 
     def home_all(self):
         if not self.hw_connected: return
@@ -529,6 +628,13 @@ class ControlPanel:
     def jog_turntable(self, angle):
         if self.turntable:
             self.turntable.rotate_relative(angle, 30, wait=True)
+        # track commanded angle so the offline twin can reflect the jog
+        self._tt_cmd += angle
+        if self.state:
+            try:
+                self.state.update_turntable(self._tt_cmd, StateSource.COMMANDED)
+            except Exception:
+                pass
 
     def extrude_both(self):
         if not self.extruder: return
@@ -560,6 +666,15 @@ class ControlPanel:
 
     def on_closing(self):
         self.running = False
+        try:
+            if self._twin_pub_stop is not None:
+                self._twin_pub_stop.set()
+            if self.twin is not None:
+                self.twin.stop()
+            if self.poller is not None:
+                self.poller.stop(join=False)
+        except Exception:
+            pass
         self.root.destroy()
 
 if __name__ == "__main__":
