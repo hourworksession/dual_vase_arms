@@ -1,6 +1,3 @@
-# P.O.F -> J code = J18286
-
-
 #!/usr/bin/env python3
 import sys, os, time, math, threading, logging
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
