@@ -1,0 +1,5 @@
+segment,timestamp_iso,timestamp_unix,left_x,left_y,left_z,left_roll,left_pitch,left_yaw,left_speed,right_x,right_y,right_z,right_roll,right_pitch,right_yaw,right_speed,left_extrude_mm,left_extrude_feedrate,right_extrude_mm,right_extrude_feedrate,turntable_angle,turntable_rel_angle,turntable_speed,status
+1,2026-05-12T10:32:55.031904,1778581975.031904,200,-50,100,180,0,0,0,200,50,100,180,0,0,0,0.0,0.0,0.0,0.0,,,,OK
+2,2026-05-12T10:32:55.032015,1778581975.0320146,300,-50,100,180,0,0,0,300,50,100,180,0,0,0,10,5,10,5,,,,OK
+3,2026-05-12T10:32:55.032083,1778581975.0320833,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.0,0.0,0.0,0.0,90,,20,OK
+4,2026-05-12T10:32:55.032164,1778581975.0321643,200,-50,100,180,0,0,0,200,50,100,180,0,0,0,8,4.5,8,4.5,,,,OK

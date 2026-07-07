@@ -1,0 +1,63 @@
+# ---------------------------------------------------------------------------
+# Frame calibration: arm base frames  <->  shared world frame
+# ---------------------------------------------------------------------------
+# World frame (matches config/system.yaml):
+#   * origin   = centre of the disc top surface
+#   * +Z       = up
+#   * disc lies in the world XY plane
+#
+# Each xArm reports its TCP as (x, y, z, roll, pitch, yaw) in ITS OWN base
+# frame (mm / degrees). To draw both arms around one disc we need, per arm:
+#
+#   turntable_centre_in_base_mm : the (x, y) the arm reads when its nozzle is
+#                                 over the disc centre.  This is the measured
+#                                 anchor that ties the arm to the world origin.
+#   disc_surface_z_in_base_mm   : the arm-frame z at which the nozzle touches
+#                                 the disc top surface (world z = 0).
+#   base_yaw_deg                : rotation of the arm base frame about world +Z.
+#                                 0   -> arm +X points along world +X
+#                                 180 -> arm +X points along world -X
+#
+# The values below are the measured anchors currently hard-coded in
+# scripts/control_panel.py (_run_demo): TT_CX/TT_CY and the first-layer Z.
+# They are the *authoritative* geometry -- the idealised +-700 mm base
+# positions in system.yaml are nominal and are intentionally NOT used here.
+#
+# Re-calibration: jog each nozzle to the true disc centre, read the pose, and
+# paste x,y into turntable_centre_in_base_mm and z into disc_surface_z_in_base_mm.
+# ---------------------------------------------------------------------------
+
+world:
+  disc_radius_mm: 300.0
+  disc_surface_thickness_mm: 6.0
+
+arms:
+  left:
+    base_yaw_deg: 0.0
+    turntable_centre_in_base_mm: [575.1, -11.1]
+    disc_surface_z_in_base_mm: 151.8
+  right:
+    base_yaw_deg: 180.0
+    turntable_centre_in_base_mm: [575.6, 3.5]
+    disc_surface_z_in_base_mm: 152.0
+
+turntable:
+  # World disc angle = home_offset_deg + direction * commanded_angle_deg.
+  # direction = +1 if a positive turntable command rotates CCW about world +Z.
+  home_offset_deg: 0.0
+  direction: 1
+
+# Safe printing zones: the disc is split into two halves by a line through the
+# centre, rotated 45 deg clockwise from the vertical split. The RIGHT arm owns
+# the half centred at -45 deg (lower-right); the LEFT arm owns the opposite half
+# (centred +135 deg). The dividing line therefore runs along y = x (45 deg).
+# Flip right_zone_center_deg by 180 if the assignment is mirrored.
+safe_zones:
+  right_zone_center_deg: -45.0
+  left_zone_center_deg: 135.0
+
+# NOTE: base_yaw_deg (the 180 deg between the two arms) is assumed from the
+# cell layout, not yet measured. A single shared anchor (the disc centre)
+# fixes translation but not relative rotation; to validate the 180, touch both
+# nozzles to the SAME off-centre disc point at a known turntable angle and
+# confirm both map to the same world (x, y). See src/calibration.py:cross_check.

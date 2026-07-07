@@ -1,0 +1,37 @@
+# Configuration for the dual-spiral toolpath splitter.
+#
+# Each layer is unfolded in the rotating disc frame (r, theta, z). A spiral
+# toolpath visits radii r = r_min..r_max while theta advances monotonically.
+# We split the spiral into two phase-offset sub-spirals so that arm-A and arm-B
+# each cover half the angular range at any radius. Tuning here is the main
+# knob for cooperative throughput.
+
+strategy: dual_spiral
+
+split:
+  # Angular phase offset between the two arms. 180° = perfectly opposite.
+  phase_offset_deg: 180.0
+  # Each arm prints this angular sector centred on its phase.
+  sector_width_deg: 180.0
+  # Sub-layer height for spiral pitch (mm). Should equal layer height in slicer.
+  spiral_pitch_mm: 0.2
+  # Direction of spiral growth: "out" (centre→edge) or "in" (edge→centre).
+  growth: out
+
+handoff:
+  # When a feature crosses the sector boundary, transition via Pivot-Move
+  # (Li 2026): arm raises Z, retracts, moves out of the way, then re-engages.
+  enabled: true
+  z_lift_mm: 3.0
+  retract_mm: 1.5
+  lateral_clearance_mm: 30.0
+
+safety:
+  # Minimum angular gap between the two TCPs on the disc surface.
+  arm_arm_min_angular_gap_deg: 20.0
+  # Forbid arms from entering the central hub if the disc has a fixture there.
+  central_hub_radius_mm: 0.0
+
+# Optional: alternative strategies — uncomment to use.
+# strategy: reeb_decomposition      # Khatkar 2024
+# strategy: safezone                # Stone 2025

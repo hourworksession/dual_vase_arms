@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+.env
+build/
+dist/
+.pytest_cache/
+.coverage
+.mypy_cache/
+.ruff_cache/
+*.gcode
+!tests/fixtures/*.gcode
+*.plan.json
+!tests/fixtures/*.plan.json

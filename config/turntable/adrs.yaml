@@ -1,0 +1,19 @@
+# Aerotech ADRS rotary stage carrying the 600 mm diameter (300 mm radius) acrylic disc.
+model: aerotech_adrs
+controller: a3200                   # Aerotech A3200 / Soloist (set in driver)
+connection:
+  protocol: ethernet                # or "serial"
+  host: 192.168.1.50
+  port: 5002
+
+# Hardware spec (verify with your unit).
+max_speed_deg_s: 360.0
+max_accel_deg_s2: 720.0
+encoder_counts_per_rev: 1_000_000
+backlash_arcsec: 0.0
+home_offset_deg: 0.0
+
+# Coordination policy.
+# "follow_part": disc rotates so the active sector is always within each arm's
+# preferred workspace. "free": disc held fixed; arms do all the motion.
+mode: follow_part
