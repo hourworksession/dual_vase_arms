@@ -63,9 +63,9 @@ class TurntableController:
     def get_angle(self) -> float:
         """Return current absolute angle of the rotary axis in degrees."""
         config = a1.StatusItemConfiguration()
-        config.axis.add(a1.AxisStatusItem.ProgramPosition, self.axis)
+        config.axis.add(a1.AxisStatusItem.PositionFeedback, self.axis)
         status = self.controller.runtime.status.get_status_items(config)
-        return status.axis.get(a1.AxisStatusItem.ProgramPosition, self.axis).value
+        return status.axis.get(a1.AxisStatusItem.PositionFeedback, self.axis).value
 
     def is_moving(self) -> bool:
         """Return True if the rotary axis is currently executing a motion."""
@@ -184,6 +184,24 @@ class TurntableController:
         )
         if wait:
             self._wait_for_task("Rotate relative")
+
+
+    def rotate_velocity(self, speed_dps: float) -> None:
+        """Start rotating at a constant velocity (asynchronous, free‑run).
+        Use speed_dps = 0 to stop the motion.
+        """
+        if not self._connected:
+            raise RuntimeError("Turntable not connected.")
+        logger.info(f"Setting axis '{self.axis}' free‑run velocity to {speed_dps:.1f}°/s")
+        self.controller.runtime.commands.motion.movefreerun(
+            [self.axis],     # list of axes
+            [speed_dps]      # list of corresponding velocities
+        )
+
+    def stop_rotation(self) -> None:
+        """Convenience method to stop the free‑run motion."""
+        self.rotate_velocity(0.0)
+
 
     def wait_ok(self, timeout: Optional[float] = None) -> None:
         """Wait until the turntable motion is complete.

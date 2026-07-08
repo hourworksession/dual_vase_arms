@@ -39,7 +39,7 @@ class ArmController:
                 speed = self.arm.get_default_move_speed() or 100
             self.arm.set_position(x=x, y=y, z=z,
                               roll=roll, pitch=pitch, yaw=yaw,
-                              speed=speed, wait=wait)
+                              speed=speed, wait=False)
         except Exception as e:
             logger.error("Failed to move %s to position: %s", self.name, e)
             raise

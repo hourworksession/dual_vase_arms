@@ -219,7 +219,7 @@ class ControlPanel:
             TT_CY_LEFT  = -5.4
 
             RADIUS          = 100.0
-            LEFT_R_OFFSET   = 0.08
+            LEFT_R_OFFSET   = 0.0
             RIGHT_R_OFFSET  = 0
             START_ANGLE_DEG = 135.0
 
@@ -339,6 +339,9 @@ class ControlPanel:
                 logger.info("Phase complete.")
 
             # ---------- Start spiral ----------
+            self.extruder.extrude_sync(20, 5,
+                                       20, 5, wait=False)
+            time.sleep(0.5)
             logger.info("Parking arms on opposite sides...")
             self.right.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, 20, speed=100, wait=True)
             self.left.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, 20, speed=100, wait=True)
@@ -351,6 +354,9 @@ class ControlPanel:
             logger.info("=== PHASE 2: Park right ===")
             self.right.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, 20, speed=100, wait=True)
 
+
+            self.extruder.extrude_sync(20, 5,
+                                       20, 5, wait=False)
             # Phase 3: left arm continues
             logger.info("=== PHASE 3: Left arm ===")
             start_z = path_z(Z_LEFT, RIGHT_REVS)
