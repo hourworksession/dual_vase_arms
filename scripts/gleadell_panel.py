@@ -91,6 +91,22 @@ class ControlPanel:
         # Initialize a default set of 36 nodes around the 360-degree circle
         self.polar_nodes = [i * (2 * math.pi / 36) for i in range(36)]
 
+        # --- NEW: Simulation state (animated nozzle preview) ---
+        self.sim_running = False
+        self.sim_after_id = None
+        self.sim_angle = 0.0          # accumulated angle in radians (0 -> total_revs*2pi)
+        self.sim_total_angle = 0.0    # target accumulated angle
+        self.sim_angle_step = 0.0     # radians advanced per frame
+        self.sim_frame_ms = 20        # animation frame interval
+        self.sim_geom = {}            # cached canvas geometry for the run
+        self.sim_pts_left = []        # accumulated [x,y,...] canvas points
+        self.sim_pts_right = []
+        self.sim_seg_left = []        # list of canvas line-item ids (per height band)
+        self.sim_seg_right = []
+        self.sim_dot_left = None      # moving nozzle dot item ids
+        self.sim_dot_right = None
+        self.sim_band_rev = -1        # which colour band the current segment belongs to
+
         self._build_gui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.update_status()
@@ -248,6 +264,17 @@ class ControlPanel:
         ttk.Checkbutton(pattern_frame, text="Left", variable=self.pattern_arm_left).grid(row=5, column=1, sticky='w')
         ttk.Checkbutton(pattern_frame, text="Right", variable=self.pattern_arm_right).grid(row=5, column=2, sticky='w')
 
+        # --- NEW: Turntable speed adjuster directly under the wave parameters ---
+        ttk.Separator(pattern_frame, orient='horizontal').grid(row=6, column=0, columnspan=4, sticky='ew', pady=3)
+        ttk.Label(pattern_frame, text="Turntable Speed (rad/s):").grid(row=7, column=0, sticky='w')
+        ttk.Entry(pattern_frame, textvariable=self.turntable_speed_var, width=8).grid(row=7, column=1)
+        tt_wave_btn_frame = ttk.Frame(pattern_frame)
+        tt_wave_btn_frame.grid(row=7, column=2, columnspan=2, padx=2)
+        for val, txt in [(-0.1, '-0.1'), (-0.01, '-0.01'), (0.01, '+0.01'), (0.1, '+0.1')]:
+            ttk.Button(tt_wave_btn_frame, text=txt, width=4,
+                       command=lambda v=val: self.turntable_speed_var.set(round(self.turntable_speed_var.get() + v, 3))
+                       ).pack(side=tk.LEFT, padx=1)
+
         # Extruder Control
         extr_frame = ttk.LabelFrame(right_col, text="Extruder Control", padding=5)
         extr_frame.pack(fill=tk.X)
@@ -308,7 +335,7 @@ class ControlPanel:
         # ----- Preview canvas (Polar) -----
         preview_frame = ttk.LabelFrame(right_frame, text="Polar Toolpath Preview", padding=5)
         preview_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
         self.canvas = tk.Canvas(preview_frame, bg='white', height=300)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         # Bind left mouse click for adding/removing nodes on the preview
@@ -318,6 +345,9 @@ class ControlPanel:
         btn_preview_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Button(btn_preview_frame, text="Reset Nodes (Default)", command=self.reset_nodes).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_preview_frame, text="Update Preview", command=self.update_preview).pack(side=tk.LEFT, padx=2)
+        # --- NEW: Simulate button ---
+        self.sim_btn = ttk.Button(btn_preview_frame, text="▶ Simulate", command=self.toggle_simulation)
+        self.sim_btn.pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_preview_frame, text="Save Config", command=self.save_config).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_preview_frame, text="Load Config", command=self.load_config).pack(side=tk.LEFT, padx=2)
 
@@ -355,6 +385,8 @@ class ControlPanel:
     # ======================================================================
     def on_canvas_click(self, event):
         """Add or remove a polar node based on where the user clicks."""
+        if self.sim_running:
+            return  # ignore edits while a simulation is playing
         w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
         if w < 10 or h < 10:
@@ -363,7 +395,7 @@ class ControlPanel:
         cx, cy = w / 2, h / 2
         dx = event.x - cx
         dy = event.y - cy
-        
+
         # Only respond if click is within the graph area
         if math.hypot(dx, dy) < 20:
             return
@@ -371,7 +403,7 @@ class ControlPanel:
         theta = math.atan2(-dy, dx)  # Canvas Y is inverted, so negative dy
         if theta < 0:
             theta += 2 * math.pi
-        
+
         # Check if we clicked near an existing node (remove it)
         threshold = 12.0
         for i, node_theta in enumerate(self.polar_nodes):
@@ -388,6 +420,17 @@ class ControlPanel:
         self.polar_nodes.append(theta)
         self.polar_nodes.sort()
         self.update_preview()
+
+    # ======================================================================
+    def _wave_value(self, phase, amp, waveform):
+        """Return the radial pattern displacement for a given phase (radians)."""
+        if waveform == 'sine':
+            return amp * math.sin(phase)
+        elif waveform == 'triangle':
+            return amp * (2/math.pi * math.asin(math.sin(phase)))
+        elif waveform == 'square':
+            return amp * (1 if math.sin(phase) >= 0 else -1)
+        return 0.0
 
     # ======================================================================
     def update_preview(self):
@@ -443,12 +486,7 @@ class ControlPanel:
             pat = 0.0
             if pat_enabled:
                 phase = theta * wave_count + phase_offset
-                if waveform == 'sine':
-                    pat = amp * math.sin(phase)
-                elif waveform == 'triangle':
-                    pat = amp * (2/math.pi * math.asin(math.sin(phase)))
-                elif waveform == 'square':
-                    pat = amp * (1 if math.sin(phase) >= 0 else -1)
+                pat = self._wave_value(phase, amp, waveform)
 
             r_left = radius + radial_left + pat
             r_right = radius + radial_right + pat
@@ -473,10 +511,7 @@ class ControlPanel:
             # Draw left node
             if pat_enabled:
                 phase = theta * wave_count + phase_offset
-                if waveform == 'sine': pat = amp * math.sin(phase)
-                elif waveform == 'triangle': pat = amp * (2/math.pi * math.asin(math.sin(phase)))
-                elif waveform == 'square': pat = amp * (1 if math.sin(phase) >= 0 else -1)
-                else: pat = 0.0
+                pat = self._wave_value(phase, amp, waveform)
             else:
                 pat = 0.0
 
@@ -492,6 +527,185 @@ class ControlPanel:
 
         # --- 5. Legend ---
         self.canvas.create_text(cx, cy, text=f"Left (Blue) / Right (Red)\nNodes: {len(nodes)}", fill='black', font=('Arial', 9))
+
+    # ======================================================================
+    # ============ NEW: Animated nozzle simulation =========================
+    # ======================================================================
+    def _lerp_color(self, c0, c1, t):
+        """Linearly interpolate between two (r,g,b) tuples -> #rrggbb hex."""
+        t = max(0.0, min(1.0, t))
+        r = int(round(c0[0] + (c1[0] - c0[0]) * t))
+        g = int(round(c0[1] + (c1[1] - c0[1]) * t))
+        b = int(round(c0[2] + (c1[2] - c0[2]) * t))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def toggle_simulation(self):
+        """Start or stop the animated nozzle preview."""
+        if self.sim_running:
+            self.stop_simulation()
+        else:
+            self.start_simulation()
+
+    def start_simulation(self):
+        """Begin animating the nozzles drawing their wave path as height climbs."""
+        # Read parameters up-front and cache the geometry so the run is stable.
+        try:
+            radius = self.param_vars['radius'].get()
+            total_revs = self.param_vars['total_revs'].get()
+            wave_count = self.pattern_wave_count.get()
+            amp = self.pattern_amplitude.get()
+        except (ValueError, tk.TclError):
+            messagebox.showwarning("Simulation", "Check that the numeric parameters are valid.")
+            return
+
+        if total_revs <= 0:
+            messagebox.showwarning("Simulation", "Total Revs must be greater than 0 to simulate.")
+            return
+
+        # Draw a fresh static backdrop (grid) then set up geometry.
+        self.canvas.delete("all")
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w < 10 or h < 10:
+            w, h = 400, 300
+        cx, cy = w / 2, h / 2
+        graph_max_radius = min(w, h) / 2 - 40
+        # Leave headroom so the wave crests don't clip the edge.
+        denom = radius + abs(amp) if (radius + abs(amp)) > 0 else 1.0
+        scale_factor = graph_max_radius / denom
+
+        # Grid
+        grid_rings = 4
+        for i in range(1, grid_rings + 1):
+            r = (graph_max_radius / grid_rings) * i
+            self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, outline='lightgray', width=1)
+        for i in range(12):
+            angle = i * (2 * math.pi / 12)
+            x1 = cx + graph_max_radius * math.cos(angle)
+            y1 = cy - graph_max_radius * math.sin(angle)
+            self.canvas.create_line(cx, cy, x1, y1, fill='lightgray', width=1)
+
+        self.sim_geom = dict(cx=cx, cy=cy, scale=scale_factor)
+
+        # Angular resolution: enough points per wave cycle for a smooth curve,
+        # but complete the whole simulation in a reasonable wall-clock time.
+        eff_wave = max(1.0, abs(wave_count))
+        total_frames = int(max(400, min(4000, total_revs * eff_wave * 8)))
+        self.sim_total_angle = total_revs * 2 * math.pi
+        self.sim_angle = 0.0
+        self.sim_angle_step = self.sim_total_angle / total_frames
+
+        # Reset accumulators / canvas items
+        self.sim_pts_left = []
+        self.sim_pts_right = []
+        self.sim_seg_left = []
+        self.sim_seg_right = []
+        self.sim_band_rev = -1
+        self.sim_dot_left = self.canvas.create_oval(0, 0, 0, 0, fill='blue', outline='black')
+        self.sim_dot_right = self.canvas.create_oval(0, 0, 0, 0, fill='red', outline='black')
+        self.sim_info = self.canvas.create_text(cx, cy, text="", fill='black', font=('Arial', 9))
+
+        self.sim_running = True
+        self.sim_btn.config(text="■ Stop")
+        self._sim_step()
+
+    def stop_simulation(self):
+        """Stop the animation and leave the drawn path on screen."""
+        self.sim_running = False
+        if self.sim_after_id is not None:
+            try:
+                self.root.after_cancel(self.sim_after_id)
+            except Exception:
+                pass
+            self.sim_after_id = None
+        try:
+            self.sim_btn.config(text="▶ Simulate")
+        except Exception:
+            pass
+
+    def _sim_step(self):
+        """Advance the simulation by one frame (called via root.after)."""
+        if not self.sim_running:
+            return
+
+        # Read live pattern parameters each frame so tweaks are reflected.
+        try:
+            radius = self.param_vars['radius'].get()
+            radial_left = self.param_vars['radial_offset_left'].get()
+            radial_right = self.param_vars['radial_offset_right'].get()
+            amp = self.pattern_amplitude.get()
+            wave_count = self.pattern_wave_count.get()
+            phase_offset = math.radians(self.pattern_phase_offset.get())
+            waveform = self.pattern_waveform.get()
+            pat_enabled = self.pattern_enabled.get()
+            total_revs = self.param_vars['total_revs'].get()
+        except (ValueError, tk.TclError):
+            # Bad transient value in an entry box; try again next frame.
+            self.sim_after_id = self.root.after(self.sim_frame_ms, self._sim_step)
+            return
+
+        cx = self.sim_geom['cx']; cy = self.sim_geom['cy']; scale = self.sim_geom['scale']
+
+        theta = self.sim_angle                      # accumulated angle (radians)
+        rev = self.sim_angle / (2 * math.pi)        # revolution number (= height progress)
+        frac = rev / total_revs if total_revs > 0 else 0.0
+
+        # Pattern displacement — matches the print thread: phase advances with the
+        # accumulated rotation, giving `wave_count` cycles per revolution.
+        pat_l = pat_r = 0.0
+        if pat_enabled:
+            phase = theta * wave_count + phase_offset
+            wv = self._wave_value(phase, amp, waveform)
+            if self.pattern_arm_left.get():
+                pat_l = wv
+            if self.pattern_arm_right.get():
+                pat_r = wv
+
+        disp_theta = theta % (2 * math.pi)
+        r_l = (radius + radial_left + pat_l) * scale
+        r_r = (radius + radial_right + pat_r) * scale
+        x_l = cx + r_l * math.cos(disp_theta); y_l = cy - r_l * math.sin(disp_theta)
+        x_r = cx + r_r * math.cos(disp_theta); y_r = cy - r_r * math.sin(disp_theta)
+
+        # Colour by height: dark at the base, light near the top.
+        band = int(rev)
+        if band != self.sim_band_rev:
+            # Start a new colour band => new line item, seeded with the last point
+            # of the previous band so the path stays visually continuous.
+            self.sim_band_rev = band
+            seed_l = self.sim_pts_left[-2:] if len(self.sim_pts_left) >= 2 else [x_l, y_l]
+            seed_r = self.sim_pts_right[-2:] if len(self.sim_pts_right) >= 2 else [x_r, y_r]
+            self.sim_pts_left = list(seed_l)
+            self.sim_pts_right = list(seed_r)
+            col_l = self._lerp_color((0, 0, 130), (120, 190, 255), frac)   # dark->light blue
+            col_r = self._lerp_color((130, 0, 0), (255, 170, 170), frac)   # dark->light red
+            self.sim_seg_left.append(self.canvas.create_line(*seed_l, seed_l[0], seed_l[1], fill=col_l, width=2))
+            self.sim_seg_right.append(self.canvas.create_line(*seed_r, seed_r[0], seed_r[1], fill=col_r, width=2))
+
+        self.sim_pts_left.extend([x_l, y_l])
+        self.sim_pts_right.extend([x_r, y_r])
+        if len(self.sim_pts_left) >= 4:
+            self.canvas.coords(self.sim_seg_left[-1], *self.sim_pts_left)
+        if len(self.sim_pts_right) >= 4:
+            self.canvas.coords(self.sim_seg_right[-1], *self.sim_pts_right)
+
+        # Move the nozzle dots
+        self.canvas.coords(self.sim_dot_left, x_l-4, y_l-4, x_l+4, y_l+4)
+        self.canvas.coords(self.sim_dot_right, x_r-4, y_r-4, x_r+4, y_r+4)
+        self.canvas.tag_raise(self.sim_dot_left)
+        self.canvas.tag_raise(self.sim_dot_right)
+
+        # Info text
+        self.canvas.itemconfig(self.sim_info,
+            text=f"rev {rev:0.1f}/{total_revs:0.0f}\nLeft (blue) / Right (red)")
+
+        # Advance / finish
+        self.sim_angle += self.sim_angle_step
+        if self.sim_angle >= self.sim_total_angle:
+            self.canvas.coords(self.sim_dot_left, x_l-4, y_l-4, x_l+4, y_l+4)
+            self.stop_simulation()
+            return
+        self.sim_after_id = self.root.after(self.sim_frame_ms, self._sim_step)
 
     # ======================================================================
     def save_config(self):
@@ -707,7 +921,7 @@ class ControlPanel:
                 wave_count = safe('wave_count', self.pattern_wave_count)
                 phase_offset = safe('pattern_phase_offset', self.pattern_phase_offset)
                 waveform = self.pattern_waveform.get()
-                
+
                 phase = ((rev * wave_count) % 1.0) * 2 * math.pi + math.radians(phase_offset)
 
                 if waveform == 'sine':
@@ -933,6 +1147,7 @@ class ControlPanel:
         if self.printing:
             self.stop_requested = True
             time.sleep(0.5)
+        self.stop_simulation()
         if self.hw_connected:
             try:
                 self.left.disconnect()
