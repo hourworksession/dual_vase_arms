@@ -219,7 +219,7 @@ class ControlPanel:
             TT_CY_LEFT  = -5.4
 
             RADIUS          = 100.0
-            LEFT_R_OFFSET   = 0.05          # radial offset (mm) for left arm
+            LEFT_R_OFFSET   = 0.1
             RIGHT_R_OFFSET  = 0
             START_ANGLE_DEG = 135.0
 
@@ -234,20 +234,16 @@ class ControlPanel:
 
             RIGHT_REVS      = 5
             LEFT_REVS       = 5
-            COMBINED_REVS   = 20
+            COMBINED_REVS   = 10
 
-            # ---------- Tunable factors ----------
-            EXTRUSION_FACTOR_RIGHT_SOLO = 1.0
-            EXTRUSION_FACTOR_LEFT_SOLO  = 1.01
-            EXTRUSION_FACTOR_LEFT_COMB  = 1.12     # Phase 4
-            EXTRUSION_FACTOR_RIGHT_COMB = 1.12
-            LOOP_SAFETY = 1.01
+            TURNTABLE_SPEED_FIXED = 30
 
-            # ---------- Fine alignment ----------
-            LEFT_YAW_OFFSET = -0.65          # degrees, added to left arm's base yaw (20°)
-            BASE_YAW = 20.0
-
-            RIGHT_Z_OFFSET = -0.2   # mm, negative = lower the right nozzle
+            # ---------- Tunable factors (separate for each section) ----------
+            EXTRUSION_FACTOR_RIGHT_SOLO = 1.0   # Phase 1 – already good
+            EXTRUSION_FACTOR_LEFT_SOLO  = 1.004   # Phase 3 – increase until left doesn't run dry
+            EXTRUSION_FACTOR_LEFT_COMB  = 1.06    # Phase 4 left – start high, reduce if blob
+            EXTRUSION_FACTOR_RIGHT_COMB = 1.06    # Phase 4 right – tune independently
+            LOOP_SAFETY = 1.01                    # keeps arms in place after motion stops
 
             PARK_X = 400.0
             PARK_Y = 174.0
@@ -276,10 +272,7 @@ class ControlPanel:
             def nozzle_pos(angle_deg, rad, off, cx, cy):
                 r = rad + off
                 a = math.radians(angle_deg)
-                x_raw = cx + r * math.cos(a)
-                y_raw = cy + r * math.sin(a)
-                # Snap to 0.1 mm grid
-                return round(x_raw, 1), round(y_raw, 1)
+                return cx + r * math.cos(a), cy + r * math.sin(a)
 
             eff_radius_left  = RADIUS + LEFT_R_OFFSET
             eff_radius_right = RADIUS + RIGHT_R_OFFSET
@@ -290,7 +283,7 @@ class ControlPanel:
             TOOL_RIGHT = 0
             TOOL_LEFT  = 1
 
-            def print_phase(arm, tool, base_z, start_rev, end_rev, fixed_xy, extrusion_factor, yaw):
+            def print_phase(arm, tool, base_z, start_rev, end_rev, fixed_xy, extrusion_factor):
                 revs = end_rev - start_rev
                 if revs <= 0:
                     return
@@ -301,115 +294,156 @@ class ControlPanel:
                 rev_time = len_per_rev / FEED_RATE
                 turntable_speed = 360.0 / rev_time
 
+                # Padded loop duration
                 loop_time = rev_time * revs * LOOP_SAFETY
+                # Actual extrusion length (tunable)
                 extrude_len = theoretical_len * extrusion_factor
 
                 logger.info("Phase %.0f–%.0f revs, filament %.0f mm (×%.2f = %.0f mm), loop %.1f s",
-                            start_rev, end_rev, theoretical_len, extrusion_factor, extrude_len, loop_time)
+                            start_rev, end_rev, theoretical_len, extrusion_factor,
+                            extrude_len, loop_time)
 
+                # Move to start Z
                 start_z = path_z(base_z, start_rev)
-                arm.move_to(*fixed_xy, start_z, roll=180, pitch=45, yaw=yaw, speed=80, wait=True)
+                arm.move_to(*fixed_xy, start_z, roll=180, pitch=45, yaw=20, speed=80, wait=True)
 
-                self.extruder.extrude(tool, extrude_len, FEED_RATE, wait=False)
-
+                # Start the turntable (non‑blocking)
                 target_angle = end_rev * 360.0
                 self.turntable.rotate_absolute(target_angle, turntable_speed, wait=False)
-                time.sleep(0.1)
 
+                # Short delay to let the motion start (otherwise fraction jumps instantly)
+                time.sleep(0.3)
+
+                # Start extrusion (non‑blocking)
+                self.extruder.extrude(tool, extrude_len, FEED_RATE, wait=False)
+
+                # Timed Z‑update loop – runs for the padded loop_time
                 t_start = time.time()
                 while time.time() - t_start < loop_time:
                     elapsed = time.time() - t_start
+                    # fraction of the *theoretical* move (clamped to 1.0 after it finishes)
                     frac = elapsed / (rev_time * revs)
                     if frac > 1.0:
                         frac = 1.0
                     cur_rev = start_rev + frac * revs
                     cur_z = path_z(base_z, cur_rev)
-                    arm.move_to(*fixed_xy, cur_z, roll=180, pitch=45, yaw=yaw, speed=100, wait=False)
+                    arm.move_to(*fixed_xy, cur_z, roll=180, pitch=45, yaw=20, speed=100, wait=False)
                     time.sleep(0.1)
 
+                # Wait until the turntable has *actually* stopped before continuing
                 logger.info("Phase complete.")
 
             # ---------- Start spiral ----------
-            logger.info("Parking arms...")
-            self.right.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, BASE_YAW, speed=100, wait=True)
-            self.left.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, BASE_YAW + LEFT_YAW_OFFSET, speed=100, wait=True)
+            logger.info("Parking arms on opposite sides...")
+            self.right.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, 20, speed=100, wait=True)
+            self.left.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, 20, speed=100, wait=True)
 
-            # Phase 1: right arm solo
+            # Phase 1: right arm base
             logger.info("=== PHASE 1: Right arm ===")
-            print_phase(self.right, TOOL_RIGHT, Z_RIGHT, 0.0, float(RIGHT_REVS), right_xy,
-                        EXTRUSION_FACTOR_RIGHT_SOLO, BASE_YAW)
+            print_phase(self.right, TOOL_RIGHT, Z_RIGHT, 0.0, float(RIGHT_REVS), right_xy, EXTRUSION_FACTOR_RIGHT_SOLO)
 
             # Phase 2: park right
             logger.info("=== PHASE 2: Park right ===")
-            self.right.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, BASE_YAW, speed=100, wait=True)
+            self.right.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, 20, speed=100, wait=True)
 
-            # Phase 3: left arm solo
+            # Phase 3: left arm continues
             logger.info("=== PHASE 3: Left arm ===")
             start_z = path_z(Z_LEFT, RIGHT_REVS)
-            self.left.move_to(PARK_X, PARK_Y, SAFE_Z, 180, 45, BASE_YAW + LEFT_YAW_OFFSET, speed=100, wait=True)
-            self.left.move_to(*left_xy, start_z, 180, 45, BASE_YAW + LEFT_YAW_OFFSET, speed=100, wait=True)
-            print_phase(self.left, TOOL_LEFT, Z_LEFT, float(RIGHT_REVS), float(RIGHT_REVS + LEFT_REVS),
-                        left_xy, EXTRUSION_FACTOR_LEFT_SOLO, BASE_YAW + LEFT_YAW_OFFSET)
+            self.left.move_to(PARK_X, PARK_Y, SAFE_Z, 180, 45, 20, speed=100, wait=True)
+            self.left.move_to(*left_xy, start_z, 180, 45, 20, speed=100, wait=True)
+            print_phase(self.left, TOOL_LEFT, Z_LEFT, float(RIGHT_REVS),
+                        float(RIGHT_REVS + LEFT_REVS), left_xy, EXTRUSION_FACTOR_LEFT_SOLO)
 
-            # Phase 4: combined spiral (flat start, jump, ramp)
+            # Phase 4: both extruders together – constant 0.4 mm Z offset, smooth ramps
             total_revs = RIGHT_REVS + LEFT_REVS + COMBINED_REVS
-            logger.info("=== PHASE 4: Both arms – merged spiral ===")
-            start_rev_co = float(RIGHT_REVS + LEFT_REVS)
+            logger.info("=== PHASE 4: Both arms – synchronous extrusion ===")
+            start_rev_co = float(RIGHT_REVS + LEFT_REVS)   # = 10
 
-            Z_0 = path_z(Z_LEFT, start_rev_co)
+            layer_z = path_z(Z_LEFT, start_rev_co)         # 155.4 mm
 
-            # --- Geometry ---
-            FLAT_REVS = 0.5
-            JUMP = 0.2                # mm, after flat zone
-            COMBINED_PITCH = 0.7      # mm/rev after jump
+            # --- Constant vertical offset between the two spirals ---
+            LAYER_OFFSET = 0.6               # left always this much higher than right
 
-            # Move right arm back to the spiral (left stays at its last Z)
-            self.right.move_to(PARK_X, PARK_Y, SAFE_Z, 180, 45, BASE_YAW, speed=100, wait=True)
-            self.right.move_to(*right_xy, SAFE_Z, 180, 45, BASE_YAW, speed=100, wait=True)
-            self.right.move_to(*right_xy, Z_0, 180, 45, BASE_YAW, speed=50, wait=True)
+            # --- Right bonding ramp: starts 0.1 mm lower, returns to 0 over 1 rev ---
+            RIGHT_BOND_LOW = -0.1
+            BOND_START_FRAC = 0.0
+            BOND_END_FRAC   = 0.10           # 10% of COMBINED_REVS = 1 rev
 
-            # Extrusion (still calculated for a 0.4 mm layer, but you'll scale factors)
+            # --- Global lift (both nozzles together) ---
+            GLOBAL_LIFT_AMOUNT = 0.2
+            LIFT_START_FRAC = 0.05            # 5%
+            LIFT_END_FRAC   = 0.15            # 15%  (1 rev later)
+
+            # Move right arm into position (left stays where it is)
+            self.right.move_to(PARK_X, PARK_Y, SAFE_Z, 180, 45, 0, speed=100, wait=True)
+            self.right.move_to(*right_xy, SAFE_Z, 180, 45, 0, speed=100, wait=True)
+            # Right starts at its lowest bonding offset
+            self.right.move_to(*right_xy,
+                               layer_z + RIGHT_BOND_LOW,  # base + bond offset
+                               180, 45, 20, speed=50, wait=True)
+
+            # --- Extrusion parameters (normal layer height) ---
             len_per_rev_left  = filament_per_rev(eff_radius_left)
             len_per_rev_right = filament_per_rev(eff_radius_right)
+
             rev_time = max(len_per_rev_left, len_per_rev_right) / FEED_RATE
             turntable_speed = 360.0 / rev_time
+
+            # Very generous – loop runs twice theoretical time, covers deceleration
+            LOOP_SAFETY = 2.0
+            loop_time = rev_time * COMBINED_REVS * LOOP_SAFETY
 
             extrude_len_left  = len_per_rev_left  * COMBINED_REVS * EXTRUSION_FACTOR_LEFT_COMB
             extrude_len_right = len_per_rev_right * COMBINED_REVS * EXTRUSION_FACTOR_RIGHT_COMB
 
-            logger.info("Flat: %.1f rev, Jump: %.2f mm, Pitch: %.2f mm/rev", FLAT_REVS, JUMP, COMBINED_PITCH)
+            logger.info("Left: %.0f mm, Right: %.0f mm, turntable %.1f°/s, loop %.1f s",
+                        extrude_len_left, extrude_len_right, turntable_speed, loop_time)
 
-            self.extruder.extrude_sync(extrude_len_left, FEED_RATE,
-                                       extrude_len_right, FEED_RATE, wait=False)
+            # Start turntable (full speed)
             target_angle = total_revs * 360.0
             self.turntable.rotate_absolute(target_angle, turntable_speed, wait=False)
             time.sleep(0.3)
 
+            self.extruder.extrude_sync(extrude_len_left, FEED_RATE,
+                                       extrude_len_right, FEED_RATE, wait=False)
+
+            # --- Continuous Z‑update loop with smooth ramps ---
             t_start = time.time()
-            loop_time = rev_time * COMBINED_REVS * LOOP_SAFETY
             while time.time() - t_start < loop_time:
                 elapsed = time.time() - t_start
-                frac = elapsed / (rev_time * COMBINED_REVS)
-                if frac > 1.0:
-                    frac = 1.0
+                frac = elapsed / (rev_time * COMBINED_REVS)   # can go beyond 1.0
+                frac_clamped = min(frac, 1.0)
 
-                cur_rev = start_rev_co + frac * COMBINED_REVS
-                drev = cur_rev - start_rev_co
+                cur_rev = start_rev_co + frac_clamped * COMBINED_REVS
+                # Base Z from the continuous spiral (0.4 mm/rev)
+                base_z = layer_z + (cur_rev - start_rev_co) * Z_STEP_PER_REV
 
-                if drev <= FLAT_REVS:
-                    z = Z_0
-                else:
-                    z = Z_0 + JUMP + COMBINED_PITCH * (drev - FLAT_REVS)
+                # --- Global lift ramp (0 → GLOBAL_LIFT_AMOUNT) ---
+                lift_frac = (frac_clamped - LIFT_START_FRAC) / (LIFT_END_FRAC - LIFT_START_FRAC)
+                lift_frac = max(0.0, min(1.0, lift_frac))
+                global_lift = lift_frac * GLOBAL_LIFT_AMOUNT
 
-                self.left.move_to(*left_xy,  z, 180, 45, BASE_YAW + LEFT_YAW_OFFSET, speed=100, wait=False)
-                self.right.move_to(*right_xy, z + RIGHT_Z_OFFSET, 180, 45, BASE_YAW, speed=100, wait=False)
+                # --- Right bonding ramp (RIGHT_BOND_LOW → 0) ---
+                bond_frac = (frac_clamped - BOND_START_FRAC) / (BOND_END_FRAC - BOND_START_FRAC)
+                bond_frac = max(0.0, min(1.0, bond_frac))
+                right_extra = RIGHT_BOND_LOW * (1.0 - bond_frac)   # decays to 0
+
+                # Apply offsets – note the global lift is added to BOTH arms
+                cur_z_left  = base_z + LAYER_OFFSET + global_lift
+                cur_z_right = base_z + right_extra + global_lift
+
+                self.left.move_to(*left_xy,  cur_z_left,  180, 45, 20, speed=100, wait=False)
+                self.right.move_to(*right_xy, cur_z_right, 180, 45, 20, speed=100, wait=False)
                 time.sleep(0.1)
 
-            # Park
-            self.right.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, BASE_YAW, speed=100, wait=True)
-            self.left.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, BASE_YAW + LEFT_YAW_OFFSET, speed=100, wait=True)
+            # Loop finished – turntable definitely stopped
+            # No extra sleep, no wait_ok()
 
-            logger.info("✅ Twisted spiral complete.")
+            # Park
+            self.right.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, 0, speed=100, wait=True)
+            self.left.arm.set_position(PARK_X, PARK_Y, PARK_Z, 180, 45, 0, speed=100, wait=True)
+
+            logger.info("✅ Spiral complete.")
 
         except Exception as e:
             print(f"Spiral error: {e}")
