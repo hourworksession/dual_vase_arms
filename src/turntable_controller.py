@@ -9,7 +9,8 @@ import time
 import logging
 from typing import Optional
 
-import automation1 as a1
+#import automation1 as a1
+import pyautomation as a1
 
 logger = logging.getLogger(__name__)
 

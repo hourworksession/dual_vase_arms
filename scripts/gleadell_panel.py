@@ -66,6 +66,7 @@ class ControlPanel:
 
         # Turntable speed (rad/s)
         self.turntable_speed_var = tk.DoubleVar(value=0.6)
+        self.tt_speed_max = 2.0  # upper bound for the live speed slider (rad/s)
 
         # Base arm speed (mm/s)
         self.base_arm_speed_var = tk.DoubleVar(value=100.0)
@@ -113,7 +114,13 @@ class ControlPanel:
 
     # ----------------------------------------------------------------
     def _build_gui(self):
-        main_pw = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
+        # Tabbed layout: the original live-control UI plus a slicer/3MF tab.
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        live_tab = ttk.Frame(self.notebook)
+        self.notebook.add(live_tab, text="Live Control")
+
+        main_pw = tk.PanedWindow(live_tab, orient=tk.HORIZONTAL, sashrelief=tk.RAISED)
         main_pw.pack(fill=tk.BOTH, expand=True)
 
         # ----- Left panel -----
@@ -264,16 +271,28 @@ class ControlPanel:
         ttk.Checkbutton(pattern_frame, text="Left", variable=self.pattern_arm_left).grid(row=5, column=1, sticky='w')
         ttk.Checkbutton(pattern_frame, text="Right", variable=self.pattern_arm_right).grid(row=5, column=2, sticky='w')
 
-        # --- NEW: Turntable speed adjuster directly under the wave parameters ---
+        # --- NEW: LIVE turntable speed control (adjustable during a print) ---
         ttk.Separator(pattern_frame, orient='horizontal').grid(row=6, column=0, columnspan=4, sticky='ew', pady=3)
-        ttk.Label(pattern_frame, text="Turntable Speed (rad/s):").grid(row=7, column=0, sticky='w')
-        ttk.Entry(pattern_frame, textvariable=self.turntable_speed_var, width=8).grid(row=7, column=1)
+        ttk.Label(pattern_frame, text="Live Turntable Speed (rad/s)",
+                  font=('Arial', 9, 'bold')).grid(row=7, column=0, columnspan=2, sticky='w')
+        # Numeric entry stays in sync with the slider and the copy in Cylinder Parameters.
+        ttk.Entry(pattern_frame, textvariable=self.turntable_speed_var, width=8).grid(row=7, column=2)
         tt_wave_btn_frame = ttk.Frame(pattern_frame)
-        tt_wave_btn_frame.grid(row=7, column=2, columnspan=2, padx=2)
-        for val, txt in [(-0.1, '-0.1'), (-0.01, '-0.01'), (0.01, '+0.01'), (0.1, '+0.1')]:
-            ttk.Button(tt_wave_btn_frame, text=txt, width=4,
-                       command=lambda v=val: self.turntable_speed_var.set(round(self.turntable_speed_var.get() + v, 3))
+        tt_wave_btn_frame.grid(row=7, column=3, padx=2)
+        for val, txt in [(-0.01, '-'), (0.01, '+')]:
+            ttk.Button(tt_wave_btn_frame, text=txt, width=2,
+                       command=lambda v=val: self._nudge_turntable_speed(v)
                        ).pack(side=tk.LEFT, padx=1)
+
+        # Drag-able slider: the print thread reads this value live, so moving it
+        # while a job is running changes the turntable speed on the fly.
+        self.tt_speed_slider = tk.Scale(
+            pattern_frame, variable=self.turntable_speed_var,
+            from_=0.0, to=self.tt_speed_max, resolution=0.005,
+            orient=tk.HORIZONTAL, length=240, showvalue=True)
+        self.tt_speed_slider.grid(row=8, column=0, columnspan=4, sticky='ew', pady=(2, 0))
+        ttk.Label(pattern_frame, text="(safe to drag during a print)",
+                  font=('Arial', 8, 'italic')).grid(row=9, column=0, columnspan=4, sticky='w')
 
         # Extruder Control
         extr_frame = ttk.LabelFrame(right_col, text="Extruder Control", padding=5)
@@ -354,6 +373,23 @@ class ControlPanel:
         style = ttk.Style()
         style.configure("Red.TButton", foreground="red", font=('Arial', 10, 'bold'))
 
+        # ----- Slicer / 3MF tab -----
+        slicer_frame = ttk.Frame(self.notebook)
+        self.notebook.add(slicer_frame, text="Slicer / 3MF")
+        try:
+            from slicer_tab import SlicerTab
+            self.slicer_tab = SlicerTab(slicer_frame, self)
+        except Exception as e:
+            self.slicer_tab = None
+            logger.warning(f"Slicer tab unavailable: {e}")
+            ttk.Label(slicer_frame,
+                      text=("Slicer tab could not load:\n"
+                            f"{e}\n\n"
+                            "Ensure slicer_tab.py, slicer.py and planner.py are alongside "
+                            "control_panel.py, and that trimesh/shapely/numpy/scipy/networkx "
+                            "are installed."),
+                      justify="left", padding=20).pack(anchor="w")
+
     # ======================================================================
     def safe_get(self, var, name):
         if not hasattr(self, '_safe_cache'):
@@ -365,6 +401,16 @@ class ControlPanel:
             return float_val
         except (ValueError, tk.TclError):
             return self._safe_cache.get(name, 0.0)
+
+    # ======================================================================
+    def _nudge_turntable_speed(self, delta):
+        """Bump the live turntable speed by delta, clamped to [0, tt_speed_max]."""
+        try:
+            new_val = self.turntable_speed_var.get() + delta
+        except (ValueError, tk.TclError):
+            new_val = 0.0
+        new_val = max(0.0, min(self.tt_speed_max, round(new_val, 3)))
+        self.turntable_speed_var.set(new_val)
 
     # ======================================================================
     def calc_rads_from_mms(self):
