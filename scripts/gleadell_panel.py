@@ -23,6 +23,14 @@ class ControlPanel:
         self.stop_requested = False
         self.paused = False
 
+        # Which devices to connect / drive. The left arm has no extruder on the
+        # current machine, so it can be left disconnected entirely.
+        self.conn_left = tk.BooleanVar(value=False)
+        self.conn_right = tk.BooleanVar(value=True)
+        self.conn_turntable = tk.BooleanVar(value=True)
+        self.conn_extruder = tk.BooleanVar(value=True)
+        self.conn_status_var = tk.StringVar(value="Not connected")
+
         self.axes = ['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw']
 
         # ---------- Cylinder parameters ----------
@@ -149,11 +157,23 @@ class ControlPanel:
         ttk.Label(job_frame, text="Remaining:").grid(row=1, column=0, sticky='w')
         ttk.Label(job_frame, textvariable=self.remaining_time_var).grid(row=1, column=1, sticky='w')
 
+        # Connection selection: choose which devices to connect / drive.
+        conn_frame = ttk.LabelFrame(left_frame, text="Connections", padding=5)
+        conn_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
+        sel_row = ttk.Frame(conn_frame)
+        sel_row.pack(fill=tk.X)
+        ttk.Checkbutton(sel_row, text="Left arm", variable=self.conn_left).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(sel_row, text="Right arm", variable=self.conn_right).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(sel_row, text="Turntable", variable=self.conn_turntable).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(sel_row, text="Extruder", variable=self.conn_extruder).pack(side=tk.LEFT, padx=4)
+        ttk.Button(sel_row, text="Connect Selected", command=self.connect_hw).pack(side=tk.LEFT, padx=8)
+        ttk.Button(sel_row, text="Disconnect", command=self.disconnect_hw).pack(side=tk.LEFT, padx=2)
+        ttk.Label(conn_frame, textvariable=self.conn_status_var).pack(anchor="w", pady=(3, 0))
+
         # Buttons
         btn_frame = ttk.Frame(left_frame)
         btn_frame.pack(fill=tk.X, padx=5, pady=5)
-        ttk.Button(btn_frame, text="Connect All", command=self.connect_hw).pack(side=tk.LEFT, padx=2)
-        ttk.Button(btn_frame, text="Home All", command=self.home_all).pack(side=tk.LEFT, padx=2)
+        ttk.Button(btn_frame, text="Home", command=self.home_all).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="Prepare to Print", command=self.prepare_to_print).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="Start Cylinder", command=self.start_cylinder).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="STOP", command=self.stop_print, style="Red.TButton").pack(side=tk.LEFT, padx=2)
@@ -828,27 +848,80 @@ class ControlPanel:
 
     # ======================================================================
     def connect_hw(self):
+        """Connect only the devices ticked in the Connections panel."""
+        connected = []
         try:
-            self.left  = ArmController(self.cfg['arms']['left']['ip'], "left")
-            self.right = ArmController(self.cfg['arms']['right']['ip'], "right")
-            self.turntable = TurntableController(host=self.cfg['turntable']['controller_ip'],
-                                                 axis=self.cfg['turntable']['axis'])
-            self.extruder = ExtruderController(self.cfg['moonraker']['host'],
-                                               self.cfg['moonraker']['port'])
-            self.left.connect()
-            self.right.connect()
-            self.turntable.connect()
-            self.hw_connected = True
-            logger.info("All hardware connected")
+            # Fresh start: drop any existing handles for devices we won't use.
+            if self.conn_left.get():
+                self.left = ArmController(self.cfg['arms']['left']['ip'], "left")
+                self.left.connect()
+                connected.append("left arm")
+            else:
+                self.left = None
+
+            if self.conn_right.get():
+                self.right = ArmController(self.cfg['arms']['right']['ip'], "right")
+                self.right.connect()
+                connected.append("right arm")
+            else:
+                self.right = None
+
+            if self.conn_turntable.get():
+                self.turntable = TurntableController(host=self.cfg['turntable']['controller_ip'],
+                                                     axis=self.cfg['turntable']['axis'])
+                self.turntable.connect()
+                connected.append("turntable")
+            else:
+                self.turntable = None
+
+            if self.conn_extruder.get():
+                self.extruder = ExtruderController(self.cfg['moonraker']['host'],
+                                                   self.cfg['moonraker']['port'])
+                connected.append("extruder")
+            else:
+                self.extruder = None
+
+            self.hw_connected = bool(connected)
+            status = "Connected: " + ", ".join(connected) if connected else "Nothing selected to connect"
+            self.conn_status_var.set(status)
+            logger.info(status)
         except Exception as e:
+            self.conn_status_var.set(f"Connection failed: {e}")
             messagebox.showerror("Connection Failed", str(e))
+
+    def disconnect_hw(self):
+        """Disconnect all currently-connected devices."""
+        for dev in (self.left, self.right, self.turntable):
+            try:
+                if dev is not None:
+                    dev.disconnect()
+            except Exception:
+                pass
+        self.left = self.right = self.turntable = self.extruder = None
+        self.hw_connected = False
+        self.conn_status_var.set("Not connected")
+        logger.info("Disconnected all hardware")
+
+    def _require(self, *devices):
+        """Return True if all named devices are connected, else warn and False."""
+        names = {'left': self.left, 'right': self.right,
+                 'turntable': self.turntable, 'extruder': self.extruder}
+        missing = [d for d in devices if names.get(d) is None]
+        if missing:
+            messagebox.showwarning("Not connected",
+                                   "This action needs: " + ", ".join(missing) +
+                                   ".\nTick them in Connections and press Connect Selected.")
+            return False
+        return True
 
     def home_all(self):
         if not self.hw_connected: return
-        self.extruder.send_gcode("SET_KINEMATIC_POSITION X=0 Y=0 Z=0")
-        self.left.home(wait=False)
-        self.right.home(wait=True)
-        logger.info("All axes homed")
+        if self.extruder is not None:
+            self.extruder.send_gcode("SET_KINEMATIC_POSITION X=0 Y=0 Z=0")
+        arms = [a for a in (self.left, self.right) if a is not None]
+        for i, arm in enumerate(arms):
+            arm.home(wait=(i == len(arms) - 1))  # wait on the last one
+        logger.info(f"Homed {len(arms)} arm(s)")
 
     def prepare_to_print(self):
         if not self.hw_connected:
@@ -859,14 +932,20 @@ class ControlPanel:
     def _prepare_thread(self):
         try:
             temp = self.cfg['defaults']['temperature']['tool0']
-            self.extruder.set_temperature(0, temp, wait=False)
-            self.extruder.set_temperature(1, temp, wait=False)
-            self.left.arm.set_position(442.5, 225, 160, 180, 45, 0, speed=100, wait=False)
-            self.right.arm.set_position(442.5, 230, 172, 180, 45, 0, speed=100, wait=False)
-            self.extruder.heat_and_wait(0, temp)
-            self.extruder.heat_and_wait(1, temp)
-            self.left.arm.set_position(400, 174.4, 155, 180, 45, 20, speed=100, wait=False)
-            self.right.arm.set_position(400, 174.4, 155, 180, 45, 20, speed=100, wait=False)
+            if self.extruder is not None:
+                self.extruder.set_temperature(0, temp, wait=False)
+                self.extruder.set_temperature(1, temp, wait=False)
+            if self.left is not None:
+                self.left.arm.set_position(442.5, 225, 160, 180, 45, 0, speed=100, wait=False)
+            if self.right is not None:
+                self.right.arm.set_position(442.5, 230, 172, 180, 45, 0, speed=100, wait=False)
+            if self.extruder is not None:
+                self.extruder.heat_and_wait(0, temp)
+                self.extruder.heat_and_wait(1, temp)
+            if self.left is not None:
+                self.left.arm.set_position(400, 174.4, 155, 180, 45, 20, speed=100, wait=False)
+            if self.right is not None:
+                self.right.arm.set_position(400, 174.4, 155, 180, 45, 20, speed=100, wait=False)
             time.sleep(5)
             self.root.after(0, lambda: messagebox.showinfo("Info", "Ready to print."))
         except Exception as e:
@@ -893,7 +972,7 @@ class ControlPanel:
             messagebox.showerror("Calculation Error", str(e))
 
     def prime_extruder(self, side):
-        if not self.hw_connected: return
+        if not self._require('extruder'): return
         length = self.prime_len.get()
         if side == 'left':
             speed = self.param_vars['feed_rate_left'].get()
@@ -906,7 +985,9 @@ class ControlPanel:
 
     # ======================================================================
     def start_cylinder(self):
-        if not self.hw_connected: return
+        # The cylinder routine is the original dual-arm coordinated print and
+        # expects both arms, the turntable and the extruder.
+        if not self._require('left', 'right', 'turntable', 'extruder'): return
         if self.printing: return
         if self.calc_left_len.get() == 0 or self.calc_right_len.get() == 0:
             self.calculate_extrusion_lengths()
@@ -1155,7 +1236,7 @@ class ControlPanel:
             self.right.arm.set_position(*cmd, speed=50, wait=False)
 
     def extruders_off(self):
-        if not self.hw_connected: return
+        if self.extruder is None: return
         self.extruder.send_gcode("CANCEL_PRINT")
 
     def emergency_stop(self):
@@ -1171,20 +1252,29 @@ class ControlPanel:
     def update_status(self):
         if self.hw_connected:
             try:
-                left_pose = self.left.get_pose()
-                right_pose = self.right.get_pose()
-                if left_pose:
-                    self.lbl_left_pos.config(text=f"Left arm: x={left_pose[0]:.1f} y={left_pose[1]:.1f} z={left_pose[2]:.1f}")
-                if right_pose:
-                    self.lbl_right_pos.config(text=f"Right arm: x={right_pose[0]:.1f} y={right_pose[1]:.1f} z={right_pose[2]:.1f}")
-                status = self.extruder.get_printer_status()
-                t0 = status.get('extruder', {}).get('temperature', 0.0)
-                t1 = status.get('heater_bed', {}).get('temperature', 0.0)
-                self.lbl_t0.config(text=f"T0: {t0:.1f}°C")
-                self.lbl_t1.config(text=f"T1 (X axis): {t1:.1f}°C")
-                if self.turntable:
+                if self.left is not None:
+                    lp = self.left.get_pose()
+                    if lp:
+                        self.lbl_left_pos.config(text=f"Left arm: x={lp[0]:.1f} y={lp[1]:.1f} z={lp[2]:.1f}")
+                else:
+                    self.lbl_left_pos.config(text="Left arm: (not connected)")
+                if self.right is not None:
+                    rp = self.right.get_pose()
+                    if rp:
+                        self.lbl_right_pos.config(text=f"Right arm: x={rp[0]:.1f} y={rp[1]:.1f} z={rp[2]:.1f}")
+                else:
+                    self.lbl_right_pos.config(text="Right arm: (not connected)")
+                if self.extruder is not None:
+                    status = self.extruder.get_printer_status()
+                    t0 = status.get('extruder', {}).get('temperature', 0.0)
+                    t1 = status.get('heater_bed', {}).get('temperature', 0.0)
+                    self.lbl_t0.config(text=f"T0: {t0:.1f}°C")
+                    self.lbl_t1.config(text=f"T1 (X axis): {t1:.1f}°C")
+                if self.turntable is not None:
                     angle = self.turntable.get_angle()
                     self.lbl_turntable.config(text=f"Turntable: {angle:.1f}°")
+                else:
+                    self.lbl_turntable.config(text="Turntable: (not connected)")
             except Exception:
                 pass
         self.root.after(1000, self.update_status)
@@ -1194,12 +1284,11 @@ class ControlPanel:
             self.stop_requested = True
             time.sleep(0.5)
         self.stop_simulation()
-        if self.hw_connected:
+        for dev in (self.left, self.right, self.turntable):
             try:
-                self.left.disconnect()
-                self.right.disconnect()
-                self.turntable.disconnect()
-            except:
+                if dev is not None:
+                    dev.disconnect()
+            except Exception:
                 pass
         self.root.destroy()
 

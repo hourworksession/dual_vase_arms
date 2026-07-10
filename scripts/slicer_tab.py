@@ -93,6 +93,21 @@ class SlicerTab:
         left = ttk.Frame(root, width=430)
         left.pack(side=tk.LEFT, fill=tk.Y, padx=6, pady=6)
 
+        # Connections: the SAME variables as the Live Control tab, so toggling
+        # here updates there and vice-versa (one shared set of connections).
+        if hasattr(self.app, "conn_left"):
+            conn = ttk.LabelFrame(left, text="Connections (shared with Live Control)", padding=6)
+            conn.pack(fill=tk.X, pady=(0, 6))
+            crow = ttk.Frame(conn); crow.pack(fill=tk.X)
+            ttk.Checkbutton(crow, text="Left arm", variable=self.app.conn_left).pack(side=tk.LEFT, padx=2)
+            ttk.Checkbutton(crow, text="Right arm", variable=self.app.conn_right).pack(side=tk.LEFT, padx=2)
+            ttk.Checkbutton(crow, text="Turntable", variable=self.app.conn_turntable).pack(side=tk.LEFT, padx=2)
+            ttk.Checkbutton(crow, text="Extruder", variable=self.app.conn_extruder).pack(side=tk.LEFT, padx=2)
+            brow = ttk.Frame(conn); brow.pack(fill=tk.X, pady=(3, 0))
+            ttk.Button(brow, text="Connect Selected", command=self.app.connect_hw).pack(side=tk.LEFT, padx=2)
+            ttk.Button(brow, text="Disconnect", command=self.app.disconnect_hw).pack(side=tk.LEFT, padx=2)
+            ttk.Label(conn, textvariable=self.app.conn_status_var).pack(anchor="w", pady=(3, 0))
+
         # Import
         imp = ttk.LabelFrame(left, text="Model", padding=6)
         imp.pack(fill=tk.X, pady=(0, 6))
@@ -327,7 +342,7 @@ class SlicerTab:
             messagebox.showwarning("Print", "Plan the motion first.")
             return
         if not getattr(self.app, "hw_connected", False):
-            messagebox.showwarning("Print", "Hardware not connected (Live Control > Connect All).")
+            messagebox.showwarning("Print", "Hardware not connected (Live Control > Connect Selected).")
             return
         if not messagebox.askyesno("Confirm print",
                                    "Stream the planned motion to the machines now?"):
@@ -339,11 +354,19 @@ class SlicerTab:
     def stop_print(self):
         self.stop_requested = True
 
-    def _arm_for(self, i):
-        """Map arm index -> (arm controller, extruder tool number)."""
-        if i == 0:
-            return self.app.left, 0
-        return self.app.right, 1
+    def _connected_arms(self):
+        """[(arm, tool), ...] for arms actually connected in the panel.
+
+        The right arm carries the extruder (tool 0); the left arm (if present)
+        is tool 1. Only connected arms are returned, so a single-arm print drives
+        the connected arm rather than assuming the left one.
+        """
+        arms = []
+        if getattr(self.app, "right", None) is not None:
+            arms.append((self.app.right, 0))
+        if getattr(self.app, "left", None) is not None:
+            arms.append((self.app.left, 1))
+        return arms
 
     def _print_thread(self):
         import time
@@ -351,10 +374,11 @@ class SlicerTab:
         app = self.app
         try:
             # heat + prime is assumed done via Live Control > Prepare to Print.
-            for i in range(cfg.num_arms):
-                arm, _tool = self._arm_for(i)
-                if arm is None:
-                    raise RuntimeError(f"Arm {i+1} not connected.")
+            active_arms = self._connected_arms()
+            if len(active_arms) < cfg.num_arms:
+                raise RuntimeError(
+                    f"Plan uses {cfg.num_arms} arm(s) but only {len(active_arms)} "
+                    "connected. Tick the arms you want in Live Control > Connections.")
 
             for si, step in enumerate(self.program.steps):
                 if self.stop_requested:
@@ -370,14 +394,13 @@ class SlicerTab:
                     vel = max(-vmax, min(vmax, vel))
                     app.turntable.rotate_velocity(vel)
 
-                # arms + extrusion
+                # arms + extrusion (only drive connected arms)
                 for i, at in enumerate(step.arms):
-                    if at is None:
+                    if at is None or i >= len(active_arms):
                         continue
-                    arm, tool = self._arm_for(i)
-                    disp_speed = cfg.max_arm_speed
+                    arm, tool = active_arms[i]
                     arm.move_to(at.x, at.y, at.z, roll=at.roll, pitch=at.pitch, yaw=at.yaw,
-                                speed=min(cfg.max_arm_speed, max(1.0, disp_speed)), wait=False)
+                                speed=cfg.max_arm_speed, wait=False)
                     if at.extrude and at.e > 0 and app.extruder is not None:
                         feed = max(0.5, at.e / dt)
                         app.extruder.extrude(tool, at.e, feed, wait=False)
