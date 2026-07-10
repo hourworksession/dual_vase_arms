@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 """
-Slicer / 3MF tab for the Gleadall multi-cell panel.
+"Print a model" tab for the Gleadall multi-cell panel.
 
-Imports a model, slices it (walls / bottom / infill / top), previews any layer,
-plans coordinated single-arm + turntable motion, and streams it to the machine.
+Clean, slicer-style workflow: Import -> Slice -> Print, with the dense settings
+tucked behind dialogs (Print settings, Machine + motion, Calibration). Imports
+a model, slices it (walls / bottom / infill / top), previews any layer, plans
+coordinated single-arm + turntable motion, and streams it to the machine.
 
 Motion notes
 ------------
-* Extrusion is CONTINUOUS PER PATH: for each wall loop / infill line the executor
-  fires one `extruder.extrude(tool0, total_e, feed, wait=False)` (relative-mode
-  async G1 E..) that runs in the background while the arm traces the path -
-  matching how the cylinder print already drives extrusion. No per-micro-step
-  extrude spam. No retraction (per current setup).
-* Arm moves use a BLEND RADIUS via `arm.arm.set_position(..., radius=..)` so
-  short segments don't decelerate to a stop at every point (the main cause of
-  choppy motion). Set radius = 0 to disable blending.
-* Debugging: 'Log Motion (dry run)' walks the whole program WITHOUT touching
-  hardware, writes every point to motion_debug.csv, and reports dt statistics
-  so you can see exactly when/where each point is issued.
+* Extrusion is CONTINUOUS PER PATH: one extruder.extrude(0, total_e, feed,
+  wait=False) per wall loop / infill line (relative-mode async G1 E).
+* Arm moves use a BLEND RADIUS via arm.arm.set_position(..., radius=..) so short
+  segments don't stop at every point (smooth motion).
+* 'Log Motion (dry run)' walks the whole program WITHOUT hardware and writes
+  every point to motion_debug.csv plus dt statistics.
 
 Heavy deps (trimesh/shapely via slicer.py, planner.py) are imported lazily.
 """
@@ -67,18 +64,18 @@ class SlicerTab:
         self.v_print_speed = tk.DoubleVar(value=30.0)
         self.v_travel_speed = tk.DoubleVar(value=150.0)
         self.v_max_arm_speed = tk.DoubleVar(value=100.0)
-        self.v_max_tt_speed = tk.DoubleVar(value=1.5)     # rad/s
+        self.v_max_tt_speed = tk.DoubleVar(value=1.5)
         self.v_part_off_x = tk.DoubleVar(value=0.0)
         self.v_part_off_y = tk.DoubleVar(value=0.0)
-        self.v_az_left = tk.DoubleVar(value=-45.0)        # deg (right zone centre)
+        self.v_az_left = tk.DoubleVar(value=-45.0)
         self.v_az_right = tk.DoubleVar(value=135.0)
         self.v_filament = tk.DoubleVar(value=1.75)
-        self.v_min_seg = tk.DoubleVar(value=0.0)          # coalesce points (mm)
-        self.v_max_seg = tk.DoubleVar(value=1.0)          # subdivide polar walls (mm)
-        self.v_blend_radius = tk.DoubleVar(value=1.0)     # arm corner blend (mm)
+        self.v_min_seg = tk.DoubleVar(value=0.0)
+        self.v_max_seg = tk.DoubleVar(value=1.0)
+        self.v_blend_radius = tk.DoubleVar(value=1.0)
 
         # flow
-        self.v_flow = tk.DoubleVar(value=100.0)           # %
+        self.v_flow = tk.DoubleVar(value=100.0)
         self.v_first_layer_flow = tk.DoubleVar(value=120.0)
 
         # calibration (right arm defaults from calibration.yaml)
@@ -114,88 +111,39 @@ class SlicerTab:
         root = ttk.Frame(self.parent)
         root.pack(fill=tk.BOTH, expand=True)
 
-        left = ttk.Frame(root, width=440)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=6, pady=6)
+        left = ttk.Frame(root, width=250)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
 
-        # Connections (shared variables with the Live Control tab)
-        if hasattr(self.app, "conn_left"):
-            conn = ttk.LabelFrame(left, text="Connections (shared with Live Control)", padding=6)
-            conn.pack(fill=tk.X, pady=(0, 6))
-            crow = ttk.Frame(conn); crow.pack(fill=tk.X)
-            ttk.Checkbutton(crow, text="Left arm", variable=self.app.conn_left).pack(side=tk.LEFT, padx=2)
-            ttk.Checkbutton(crow, text="Right arm", variable=self.app.conn_right).pack(side=tk.LEFT, padx=2)
-            ttk.Checkbutton(crow, text="Turntable", variable=self.app.conn_turntable).pack(side=tk.LEFT, padx=2)
-            ttk.Checkbutton(crow, text="Extruder", variable=self.app.conn_extruder).pack(side=tk.LEFT, padx=2)
-            brow = ttk.Frame(conn); brow.pack(fill=tk.X, pady=(3, 0))
-            ttk.Button(brow, text="Connect Selected", command=self.app.connect_hw).pack(side=tk.LEFT, padx=2)
-            ttk.Button(brow, text="Disconnect", command=self.app.disconnect_hw).pack(side=tk.LEFT, padx=2)
-            ttk.Label(conn, textvariable=self.app.conn_status_var).pack(anchor="w", pady=(3, 0))
+        # ---- Workflow ----
+        wf = ttk.LabelFrame(left, text="Workflow", padding=8)
+        wf.pack(fill=tk.X)
+        ttk.Label(wf, text="Step 1", foreground="#888").pack(anchor="w")
+        ttk.Button(wf, text="Import model...", command=self.import_model).pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(wf, text="Step 2", foreground="#888").pack(anchor="w")
+        ttk.Button(wf, text="Slice + preview", command=self.do_slice).pack(fill=tk.X, pady=(0, 6))
+        ttk.Label(wf, text="Step 3", foreground="#888").pack(anchor="w")
+        ttk.Button(wf, text="▶  Print", command=self.start_print,
+                   style="Primary.TButton").pack(fill=tk.X, pady=(0, 4))
+        row = ttk.Frame(wf); row.pack(fill=tk.X)
+        ttk.Button(row, text="Dry run", command=self.start_dry_run).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 3))
+        ttk.Button(row, text="Stop", command=self.stop_print).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(3, 0))
+        ttk.Label(wf, textvariable=self.v_status, wraplength=210,
+                  foreground="#555").pack(anchor="w", pady=(8, 0))
 
-        imp = ttk.LabelFrame(left, text="Model", padding=6)
-        imp.pack(fill=tk.X, pady=(0, 6))
-        ttk.Button(imp, text="Import 3MF / STL...", command=self.import_model).pack(side=tk.LEFT)
-        ttk.Label(imp, textvariable=self.v_status, wraplength=250).pack(side=tk.LEFT, padx=8)
+        # ---- Settings (dialogs) ----
+        st = ttk.LabelFrame(left, text="Settings", padding=8)
+        st.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(st, text="Print settings...", command=self._dlg_print_settings).pack(fill=tk.X, pady=2)
+        ttk.Button(st, text="Machine + motion...", command=self._dlg_machine_motion).pack(fill=tk.X, pady=2)
+        ttk.Button(st, text="Calibration...", command=self._dlg_calibration).pack(fill=tk.X, pady=2)
+        ttk.Button(st, text="Connections...", command=self._open_connections).pack(fill=tk.X, pady=2)
+        ttk.Checkbutton(st, text="Debug log while printing", variable=self.v_debug).pack(anchor="w", pady=(6, 0))
 
-        ss = ttk.LabelFrame(left, text="Slice Settings", padding=6)
-        ss.pack(fill=tk.X, pady=(0, 6))
-        self._row(ss, 0, "Layer height (mm)", self.v_layer_height)
-        self._row(ss, 1, "Line width (mm)", self.v_line_width)
-        self._row(ss, 2, "Wall/perimeter count", self.v_wall_count)
-        self._row(ss, 3, "Infill density (%)", self.v_infill_density)
-        ttk.Label(ss, text="Infill pattern").grid(row=4, column=0, sticky="w", padx=2, pady=1)
-        ttk.Combobox(ss, textvariable=self.v_infill_pattern, values=["grid", "lines"],
-                     width=8, state="readonly").grid(row=4, column=1, sticky="w")
-        self._row(ss, 5, "Bottom layers", self.v_bottom_layers)
-        self._row(ss, 6, "Top layers", self.v_top_layers)
-
-        fl = ttk.LabelFrame(left, text="Flow", padding=6)
-        fl.pack(fill=tk.X, pady=(0, 6))
-        self._row(fl, 0, "Flow multiplier (%)", self.v_flow)
-        self._row(fl, 1, "First-layer flow (%)", self.v_first_layer_flow)
-
-        mc = ttk.LabelFrame(left, text="Machine / Motion", padding=6)
-        mc.pack(fill=tk.X, pady=(0, 6))
-        arm_row = ttk.Frame(mc); arm_row.grid(row=0, column=0, columnspan=2, sticky="w")
-        ttk.Label(arm_row, text="Arms:").pack(side=tk.LEFT)
-        ttk.Radiobutton(arm_row, text="1", variable=self.v_num_arms, value=1).pack(side=tk.LEFT)
-        ttk.Radiobutton(arm_row, text="2", variable=self.v_num_arms, value=2).pack(side=tk.LEFT)
-        ttk.Checkbutton(mc, text="Use turntable (off = Cartesian plate)",
-                        variable=self.v_use_turntable).grid(row=1, column=0, columnspan=2, sticky="w")
-        ttk.Checkbutton(mc, text="Turntable coordinates infill too (usually off)",
-                        variable=self.v_tt_for_infill).grid(row=2, column=0, columnspan=2, sticky="w")
-        self._row(mc, 3, "Print speed (mm/s)", self.v_print_speed)
-        self._row(mc, 4, "Travel speed (mm/s)", self.v_travel_speed)
-        self._row(mc, 5, "Max arm speed (mm/s)", self.v_max_arm_speed)
-        self._row(mc, 6, "Max turntable speed (rad/s)", self.v_max_tt_speed)
-        self._row(mc, 7, "Corner blend radius (mm)", self.v_blend_radius)
-        self._row(mc, 8, "Wall arc resolution (mm)", self.v_max_seg)
-        self._row(mc, 13, "Min segment length (mm)", self.v_min_seg)
-        self._row(mc, 9, "Part offset X (mm)", self.v_part_off_x)
-        self._row(mc, 10, "Part offset Y (mm)", self.v_part_off_y)
-        self._row(mc, 11, "Arm 1 azimuth (deg)", self.v_az_left)
-        self._row(mc, 12, "Arm 2 azimuth (deg)", self.v_az_right)
-
-        cal = ttk.LabelFrame(left, text="Turntable Axis (arm frame)", padding=6)
-        cal.pack(fill=tk.X, pady=(0, 6))
-        self._row(cal, 0, "Center X", self.v_center_x)
-        self._row(cal, 1, "Center Y", self.v_center_y)
-        self._row(cal, 2, "Center Z", self.v_center_z)
-        self._row(cal, 3, "Z base (model z=0 world)", self.v_z_base)
-
-        act = ttk.Frame(left); act.pack(fill=tk.X, pady=(2, 0))
-        ttk.Button(act, text="Slice + Preview", command=self.do_slice).pack(side=tk.LEFT, padx=2)
-        ttk.Button(act, text="Plan Motion", command=self.do_plan).pack(side=tk.LEFT, padx=2)
-        ttk.Button(act, text="Log Motion (dry run)", command=self.start_dry_run).pack(side=tk.LEFT, padx=2)
-        act2 = ttk.Frame(left); act2.pack(fill=tk.X, pady=(3, 0))
-        ttk.Button(act2, text="Print", command=self.start_print, style="Red.TButton").pack(side=tk.LEFT, padx=2)
-        ttk.Button(act2, text="Stop", command=self.stop_print).pack(side=tk.LEFT, padx=2)
-        ttk.Checkbutton(act2, text="Debug log while printing", variable=self.v_debug).pack(side=tk.LEFT, padx=8)
-
-        # ============ RIGHT: preview + report ============
+        # ---- Right: preview + report ----
         right = ttk.Frame(root)
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6, pady=6)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-        prev = ttk.LabelFrame(right, text="Layer Preview", padding=4)
+        prev = ttk.LabelFrame(right, text="Layer preview", padding=4)
         prev.pack(fill=tk.BOTH, expand=True)
         self.canvas = tk.Canvas(prev, bg="white", height=320)
         self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -208,19 +156,92 @@ class SlicerTab:
         for kind, col in _KIND_COLOR.items():
             ttk.Label(legend, text="  " + kind.replace("_", " ").title(), foreground=col).pack(side=tk.LEFT, padx=4)
 
-        stats = ttk.LabelFrame(right, text="Report / Motion Debug", padding=4)
+        stats = ttk.LabelFrame(right, text="Report / motion debug", padding=4)
         stats.pack(fill=tk.BOTH, pady=(6, 0))
-        self.stats_text = tk.Text(stats, height=14, wrap="none")
+        self.stats_text = tk.Text(stats, height=12, wrap="none")
         yscroll = ttk.Scrollbar(stats, orient="vertical", command=self.stats_text.yview)
         self.stats_text.configure(yscrollcommand=yscroll.set)
         yscroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.stats_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.stats_text.configure(state="disabled")
 
-    def _row(self, parent, r, label, var):
-        ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", padx=2, pady=1)
-        ttk.Entry(parent, textvariable=var, width=10).grid(row=r, column=1, padx=2, pady=1)
+    # ------------------------------------------------------------------
+    # Settings dialogs
+    # ------------------------------------------------------------------
+    def _drow(self, parent, r, label, var, width=10):
+        ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", padx=4, pady=2)
+        ttk.Entry(parent, textvariable=var, width=width).grid(row=r, column=1, padx=4, pady=2)
 
+    def _dialog(self, title):
+        win = tk.Toplevel(self.parent)
+        win.title(title)
+        win.resizable(False, False)
+        try:
+            win.transient(self.parent.winfo_toplevel())
+        except Exception:
+            pass
+        f = ttk.Frame(win, padding=12)
+        f.pack(fill=tk.BOTH, expand=True)
+        return win, f
+
+    def _dlg_print_settings(self):
+        win, f = self._dialog("Print settings")
+        ttk.Label(f, text="Layers", font=("Arial", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        self._drow(f, 1, "Layer height (mm)", self.v_layer_height)
+        self._drow(f, 2, "Line width (mm)", self.v_line_width)
+        ttk.Label(f, text="Walls + infill", font=("Arial", 10, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self._drow(f, 4, "Wall count", self.v_wall_count)
+        self._drow(f, 5, "Infill density (%)", self.v_infill_density)
+        ttk.Label(f, text="Infill pattern").grid(row=6, column=0, sticky="w", padx=4, pady=2)
+        ttk.Combobox(f, textvariable=self.v_infill_pattern, values=["grid", "lines"],
+                     width=8, state="readonly").grid(row=6, column=1, padx=4)
+        self._drow(f, 7, "Bottom layers", self.v_bottom_layers)
+        self._drow(f, 8, "Top layers", self.v_top_layers)
+        ttk.Label(f, text="Flow", font=("Arial", 10, "bold")).grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self._drow(f, 10, "Flow (%)", self.v_flow)
+        self._drow(f, 11, "First-layer flow (%)", self.v_first_layer_flow)
+        ttk.Button(f, text="Close", command=win.destroy).grid(row=12, column=0, columnspan=2, pady=(12, 0))
+
+    def _dlg_machine_motion(self):
+        win, f = self._dialog("Machine + motion")
+        ttk.Label(f, text="Arms:").grid(row=0, column=0, sticky="w", padx=4)
+        arow = ttk.Frame(f); arow.grid(row=0, column=1, sticky="w")
+        ttk.Radiobutton(arow, text="1", variable=self.v_num_arms, value=1).pack(side=tk.LEFT)
+        ttk.Radiobutton(arow, text="2", variable=self.v_num_arms, value=2).pack(side=tk.LEFT)
+        ttk.Checkbutton(f, text="Use turntable (off = Cartesian plate)",
+                        variable=self.v_use_turntable).grid(row=1, column=0, columnspan=2, sticky="w", padx=4)
+        ttk.Checkbutton(f, text="Turntable coordinates infill too",
+                        variable=self.v_tt_for_infill).grid(row=2, column=0, columnspan=2, sticky="w", padx=4)
+        self._drow(f, 3, "Print speed (mm/s)", self.v_print_speed)
+        self._drow(f, 4, "Travel speed (mm/s)", self.v_travel_speed)
+        self._drow(f, 5, "Max arm speed (mm/s)", self.v_max_arm_speed)
+        self._drow(f, 6, "Max turntable speed (rad/s)", self.v_max_tt_speed)
+        self._drow(f, 7, "Corner blend radius (mm)", self.v_blend_radius)
+        self._drow(f, 8, "Wall arc resolution (mm)", self.v_max_seg)
+        self._drow(f, 9, "Min segment length (mm)", self.v_min_seg)
+        self._drow(f, 10, "Part offset X (mm)", self.v_part_off_x)
+        self._drow(f, 11, "Part offset Y (mm)", self.v_part_off_y)
+        self._drow(f, 12, "Arm 1 azimuth (deg)", self.v_az_left)
+        self._drow(f, 13, "Arm 2 azimuth (deg)", self.v_az_right)
+        ttk.Button(f, text="Close", command=win.destroy).grid(row=14, column=0, columnspan=2, pady=(12, 0))
+
+    def _dlg_calibration(self):
+        win, f = self._dialog("Calibration - turntable axis (arm frame)")
+        self._drow(f, 0, "Center X", self.v_center_x)
+        self._drow(f, 1, "Center Y", self.v_center_y)
+        self._drow(f, 2, "Center Z", self.v_center_z)
+        self._drow(f, 3, "Z base (model z=0 world)", self.v_z_base)
+        self._drow(f, 4, "Filament diameter (mm)", self.v_filament)
+        ttk.Button(f, text="Close", command=win.destroy).grid(row=5, column=0, columnspan=2, pady=(12, 0))
+
+    def _open_connections(self):
+        opener = getattr(self.app, "open_connections_dialog", None)
+        if callable(opener):
+            opener()
+        else:
+            messagebox.showinfo("Connections", "Use the Machine tab to connect hardware.")
+
+    # ------------------------------------------------------------------
     def _log(self, text, append=False):
         self.stats_text.configure(state="normal")
         if not append:
@@ -229,7 +250,6 @@ class SlicerTab:
         self.stats_text.configure(state="disabled")
         self.stats_text.see(tk.END)
 
-    # ------------------------------------------------------------------
     def _settings(self):
         from slicer import SliceSettings
         return SliceSettings(
@@ -279,7 +299,7 @@ class SlicerTab:
         self.slice_result = None
         self.program = None
         self.v_status.set(f"Loaded: {os.path.basename(path)}")
-        self._log(f"Imported {os.path.basename(path)}\nClick 'Slice + Preview'.")
+        self._log(f"Imported {os.path.basename(path)}\nClick 'Slice + preview'.")
 
     def do_slice(self):
         if not self.model_path:
@@ -301,6 +321,7 @@ class SlicerTab:
         self.v_layer_index.set(n // 2)
         self._log("Sliced: " + self.slice_result.summary())
         self.draw_layer()
+        self.do_plan()
 
     def do_plan(self):
         if not self.slice_result:
@@ -315,18 +336,14 @@ class SlicerTab:
         self.program = plan(self.slice_result, cfg)
         st = analyze(self.program)
         dts = dt_stats(self.program)
-        mode = "POLAR (turntable coordinated)" if cfg.use_turntable else "CARTESIAN (fixed plate)"
+        mode = "polar (turntable coordinated)" if cfg.use_turntable else "cartesian (fixed plate)"
         lines = [f"Motion plan: {mode}",
-                 f"  turntable-for-infill: {cfg.turntable_for_infill}",
                  f"  points: {len(self.program.steps)}   est. time: {st.total_time/60:.1f} min",
                  f"  extrusion paths: {len(extrusion_runs(self.program))}",
-                 f"  arm avg {st.arm_avg_speed[0]:.1f} / peak {st.arm_peak_speed[0]:.1f} mm/s, "
-                 f"travel {st.arm_path_len[0]/1000:.2f} m"]
+                 f"  arm avg {st.arm_avg_speed[0]:.1f} / peak {st.arm_peak_speed[0]:.1f} mm/s"]
         if cfg.use_turntable:
             lines.append(f"  turntable: {st.tt_travel/(2*math.pi):.1f} turns, {st.tt_reversals} reversals")
-        lines.append(f"  dt(ms): min {dts['dt_ms_min']} / avg {dts['dt_ms_avg']} / max {dts['dt_ms_max']} "
-                     f"(<5ms: {dts['steps_under_5ms']})")
-        lines.append("  -> use 'Log Motion (dry run)' to dump every point to motion_debug.csv")
+        lines.append(f"  dt(ms): min {dts['dt_ms_min']} / avg {dts['dt_ms_avg']} / max {dts['dt_ms_max']}")
         self._log("\n".join(lines))
 
     # ------------------------------------------------------------------
@@ -371,10 +388,10 @@ class SlicerTab:
         if self.printing:
             return
         if not self.program:
-            messagebox.showwarning("Print", "Plan the motion first.")
+            messagebox.showwarning("Print", "Slice a model first (Step 1 + Step 2).")
             return
         if not getattr(self.app, "hw_connected", False):
-            messagebox.showwarning("Print", "Hardware not connected (Connections > Connect Selected).")
+            messagebox.showwarning("Print", "Hardware not connected (Machine tab > Connect).")
             return
         if not messagebox.askyesno("Confirm print", "Stream the planned motion to the machines now?"):
             return
@@ -386,7 +403,7 @@ class SlicerTab:
         if self.printing:
             return
         if not self.program:
-            messagebox.showwarning("Dry run", "Plan the motion first.")
+            messagebox.showwarning("Dry run", "Slice a model first (Step 1 + Step 2).")
             return
         self.printing = True
         self.stop_requested = False
@@ -444,7 +461,6 @@ class SlicerTab:
                 at = step.arms[pidx] if pidx < len(step.arms) else None
                 feed_dbg = ""
 
-                # extrusion: fire once at the start of each continuous run
                 run = runs.get(si)
                 if run:
                     total_e, feed = run
@@ -452,7 +468,6 @@ class SlicerTab:
                     if not dry and app.extruder is not None and total_e > 0 and feed > 0:
                         app.extruder.extrude(tool, total_e, feed, wait=False)
 
-                # turntable: velocity toward the absolute target within dt
                 if not dry and cfg.use_turntable and app.turntable is not None:
                     cur = app.turntable.get_angle()
                     err = ((step.tt_angle_deg - cur + 180.0) % 360.0) - 180.0
@@ -460,12 +475,10 @@ class SlicerTab:
                     vel = max(-vmax, min(vmax, err / dt))
                     app.turntable.rotate_velocity(vel)
 
-                # arm move with corner blending (radius)
                 if at is not None and not dry and active:
                     arm, _tool = active[pidx]
                     self._move_arm(arm, at, cfg.max_arm_speed, blend)
 
-                # debug row
                 if debug:
                     row = [si, round(t, 4), round(dt * 1000, 2), step.layer, step.kind,
                            ("EXTRUDE" if (at and at.extrude) else "travel"),
@@ -482,8 +495,8 @@ class SlicerTab:
                 t += dt
                 if si % 50 == 0:
                     frac = (si + 1) / max(1, len(prog.steps))
-                    app.root.after(0, lambda f=frac, d=dry:
-                                   self.v_status.set(("Dry run " if d else "Printing ") + f"{f*100:.0f}%"))
+                    app.root.after(0, lambda fr=frac, d=dry:
+                                   self.v_status.set(("Dry run " if d else "Printing ") + f"{fr*100:.0f}%"))
 
             if not dry:
                 if app.turntable is not None:
@@ -511,7 +524,6 @@ class SlicerTab:
             self.printing = False
 
     def _move_arm(self, arm, at, speed, blend):
-        """Issue a blended Cartesian move; fall back if radius isn't supported."""
         try:
             if blend and blend > 0:
                 arm.arm.set_position(x=at.x, y=at.y, z=at.z, roll=at.roll, pitch=at.pitch,
@@ -524,7 +536,7 @@ class SlicerTab:
                         speed=speed, wait=False)
 
     def _summary(self, dry, stats, runs):
-        return (f"{'DRY RUN' if dry else 'PRINT'} — {stats['steps']} points, "
+        return (f"{'DRY RUN' if dry else 'PRINT'} - {stats['steps']} points, "
                 f"{stats['total_time_s']/60:.1f} min\n"
                 f"dt(ms): min {stats['dt_ms_min']} / avg {stats['dt_ms_avg']} / max {stats['dt_ms_max']}  "
                 f"(steps <5ms: {stats['steps_under_5ms']})\n"

@@ -116,7 +116,12 @@ class ControlPanel:
         self.sim_dot_right = None
         self.sim_band_rev = -1        # which colour band the current segment belongs to
 
-        self._build_gui()
+        try:
+            from panel_ui import build_gui
+            build_gui(self)                       # reorganised 3-tab layout
+        except Exception as e:
+            logger.error("New UI failed to build (%s); using legacy layout", e)
+            self._build_gui()                     # fallback: original single-page layout
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.update_status()
 
