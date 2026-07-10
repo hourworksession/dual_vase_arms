@@ -613,63 +613,34 @@ class ControlPanel:
             self.start_simulation()
 
     def start_simulation(self):
-        """Begin animating the nozzles drawing their wave path as height climbs."""
-        # Read parameters up-front and cache the geometry so the run is stable.
+        """Animate the real machine: the plate (turntable) rotates while two
+        nozzles fixed on either side deposit the wave pattern. The toolpath is
+        drawn in the part frame, so it is carried around with the plate."""
         try:
             radius = self.param_vars['radius'].get()
             total_revs = self.param_vars['total_revs'].get()
-            wave_count = self.pattern_wave_count.get()
             amp = self.pattern_amplitude.get()
         except (ValueError, tk.TclError):
             messagebox.showwarning("Simulation", "Check that the numeric parameters are valid.")
             return
-
         if total_revs <= 0:
             messagebox.showwarning("Simulation", "Total Revs must be greater than 0 to simulate.")
             return
 
-        # Draw a fresh static backdrop (grid) then set up geometry.
-        self.canvas.delete("all")
         w = self.canvas.winfo_width()
         h = self.canvas.winfo_height()
         if w < 10 or h < 10:
             w, h = 400, 300
         cx, cy = w / 2, h / 2
-        graph_max_radius = min(w, h) / 2 - 40
-        # Leave headroom so the wave crests don't clip the edge.
-        denom = radius + abs(amp) if (radius + abs(amp)) > 0 else 1.0
-        scale_factor = graph_max_radius / denom
+        graph_max_radius = min(w, h) / 2 - 30
+        denom = radius + abs(amp) + 8 if (radius + abs(amp)) > 0 else 1.0
+        scale = graph_max_radius / denom
+        self.sim_geom = dict(cx=cx, cy=cy, scale=scale)
 
-        # Grid
-        grid_rings = 4
-        for i in range(1, grid_rings + 1):
-            r = (graph_max_radius / grid_rings) * i
-            self.canvas.create_oval(cx - r, cy - r, cx + r, cy + r, outline='lightgray', width=1)
-        for i in range(12):
-            angle = i * (2 * math.pi / 12)
-            x1 = cx + graph_max_radius * math.cos(angle)
-            y1 = cy - graph_max_radius * math.sin(angle)
-            self.canvas.create_line(cx, cy, x1, y1, fill='lightgray', width=1)
-
-        self.sim_geom = dict(cx=cx, cy=cy, scale=scale_factor)
-
-        # Angular resolution: enough points per wave cycle for a smooth curve,
-        # but complete the whole simulation in a reasonable wall-clock time.
-        eff_wave = max(1.0, abs(wave_count))
-        total_frames = int(max(400, min(4000, total_revs * eff_wave * 8)))
+        self.sim_phi = 0.0                       # turntable angle (radians)
         self.sim_total_angle = total_revs * 2 * math.pi
-        self.sim_angle = 0.0
-        self.sim_angle_step = self.sim_total_angle / total_frames
-
-        # Reset accumulators / canvas items
-        self.sim_pts_left = []
-        self.sim_pts_right = []
-        self.sim_seg_left = []
-        self.sim_seg_right = []
-        self.sim_band_rev = -1
-        self.sim_dot_left = self.canvas.create_oval(0, 0, 0, 0, fill='blue', outline='black')
-        self.sim_dot_right = self.canvas.create_oval(0, 0, 0, 0, fill='red', outline='black')
-        self.sim_info = self.canvas.create_text(cx, cy, text="", fill='black', font=('Arial', 9))
+        self.sim_trail_l = []                    # list of (part_angle, r_mm)
+        self.sim_trail_r = []
 
         self.sim_running = True
         self.sim_btn.config(text="■ Stop")
@@ -690,11 +661,11 @@ class ControlPanel:
             pass
 
     def _sim_step(self):
-        """Advance the simulation by one frame (called via root.after)."""
+        """One animation frame: rotate the plate, bob the two fixed nozzles on
+        the wave, and trail the deposited toolpath (drawn in the rotating part
+        frame). Called repeatedly via root.after."""
         if not self.sim_running:
             return
-
-        # Read live pattern parameters each frame so tweaks are reflected.
         try:
             radius = self.param_vars['radius'].get()
             radial_left = self.param_vars['radial_offset_left'].get()
@@ -705,70 +676,73 @@ class ControlPanel:
             waveform = self.pattern_waveform.get()
             pat_enabled = self.pattern_enabled.get()
             total_revs = self.param_vars['total_revs'].get()
+            speed = self.turntable_speed_var.get()
         except (ValueError, tk.TclError):
-            # Bad transient value in an entry box; try again next frame.
             self.sim_after_id = self.root.after(self.sim_frame_ms, self._sim_step)
             return
 
         cx = self.sim_geom['cx']; cy = self.sim_geom['cy']; scale = self.sim_geom['scale']
+        dt = self.sim_frame_ms / 1000.0
+        if speed <= 0:
+            speed = 0.6                        # keep the preview turning even at 0
+        dphi = speed * dt
+        self.sim_phi += dphi
+        phi = self.sim_phi
 
-        theta = self.sim_angle                      # accumulated angle (radians)
-        rev = self.sim_angle / (2 * math.pi)        # revolution number (= height progress)
-        frac = rev / total_revs if total_revs > 0 else 0.0
+        def wave(pa):
+            if not pat_enabled:
+                return 0.0
+            return self._wave_value(pa * wave_count + phase_offset, amp, waveform)
 
-        # Pattern displacement — matches the print thread: phase advances with the
-        # accumulated rotation, giving `wave_count` cycles per revolution.
-        pat_l = pat_r = 0.0
-        if pat_enabled:
-            phase = theta * wave_count + phase_offset
-            wv = self._wave_value(phase, amp, waveform)
-            if self.pattern_arm_left.get():
-                pat_l = wv
-            if self.pattern_arm_right.get():
-                pat_r = wv
+        # nozzles fixed on either side of the plate (left = west, right = east)
+        noz = [(math.pi, radial_left, self.pattern_arm_left.get(), self.sim_trail_l),
+               (0.0, radial_right, self.pattern_arm_right.get(), self.sim_trail_r)]
 
-        disp_theta = theta % (2 * math.pi)
-        r_l = (radius + radial_left + pat_l) * scale
-        r_r = (radius + radial_right + pat_r) * scale
-        x_l = cx + r_l * math.cos(disp_theta); y_l = cy - r_l * math.sin(disp_theta)
-        x_r = cx + r_r * math.cos(disp_theta); y_r = cy - r_r * math.sin(disp_theta)
+        # append the current contact point (in the PART frame) to each trail
+        cap = int((2 * math.pi / dphi) * 1.05) + 2 if dphi > 0 else 4000
+        for world, off, arm_on, trail in noz:
+            pa = world - phi
+            wv = wave(pa) if arm_on else 0.0
+            trail.append((pa, radius + off + wv))
+            if len(trail) > cap:
+                del trail[0:len(trail) - cap]
 
-        # Colour by height: dark at the base, light near the top.
-        band = int(rev)
-        if band != self.sim_band_rev:
-            # Start a new colour band => new line item, seeded with the last point
-            # of the previous band so the path stays visually continuous.
-            self.sim_band_rev = band
-            seed_l = self.sim_pts_left[-2:] if len(self.sim_pts_left) >= 2 else [x_l, y_l]
-            seed_r = self.sim_pts_right[-2:] if len(self.sim_pts_right) >= 2 else [x_r, y_r]
-            self.sim_pts_left = list(seed_l)
-            self.sim_pts_right = list(seed_r)
-            col_l = self._lerp_color((0, 0, 130), (120, 190, 255), frac)   # dark->light blue
-            col_r = self._lerp_color((130, 0, 0), (255, 170, 170), frac)   # dark->light red
-            self.sim_seg_left.append(self.canvas.create_line(*seed_l, seed_l[0], seed_l[1], fill=col_l, width=2))
-            self.sim_seg_right.append(self.canvas.create_line(*seed_r, seed_r[0], seed_r[1], fill=col_r, width=2))
+        # ---- redraw the whole scene ----
+        c = self.canvas
+        c.delete("all")
+        edge = radius * scale + max(8.0, abs(amp) * scale + 6.0)
+        c.create_oval(cx - edge, cy - edge, cx + edge, cy + edge,
+                      fill='#f2f2f2', outline='#b0b0b0', width=1)
+        for k in range(8):                     # spokes rotate with the plate
+            a = phi + k * math.pi / 4
+            c.create_line(cx, cy, cx + edge * math.cos(a), cy - edge * math.sin(a),
+                          fill='#dcdcdc', width=1)
+        c.create_oval(cx - 5, cy - 5, cx + 5, cy + 5, fill='#9a9a9a', outline='')
 
-        self.sim_pts_left.extend([x_l, y_l])
-        self.sim_pts_right.extend([x_r, y_r])
-        if len(self.sim_pts_left) >= 4:
-            self.canvas.coords(self.sim_seg_left[-1], *self.sim_pts_left)
-        if len(self.sim_pts_right) >= 4:
-            self.canvas.coords(self.sim_seg_right[-1], *self.sim_pts_right)
+        for trail, col in ((self.sim_trail_l, 'blue'), (self.sim_trail_r, 'red')):
+            if len(trail) >= 2:
+                pts = []
+                for pa, r_mm in trail:
+                    wa = pa + phi
+                    pts.append(cx + r_mm * scale * math.cos(wa))
+                    pts.append(cy - r_mm * scale * math.sin(wa))
+                c.create_line(*pts, fill=col, width=2, smooth=True)
 
-        # Move the nozzle dots
-        self.canvas.coords(self.sim_dot_left, x_l-4, y_l-4, x_l+4, y_l+4)
-        self.canvas.coords(self.sim_dot_right, x_r-4, y_r-4, x_r+4, y_r+4)
-        self.canvas.tag_raise(self.sim_dot_left)
-        self.canvas.tag_raise(self.sim_dot_right)
+        for world, off, arm_on, trail in noz:
+            pa = world - phi
+            wv = wave(pa) if arm_on else 0.0
+            r_mm = radius + off + wv
+            x = cx + r_mm * scale * math.cos(world)
+            y = cy - r_mm * scale * math.sin(world)
+            col = 'blue' if world > math.pi / 2 else 'red'
+            c.create_oval(x - 9, y - 9, x + 9, y + 9, fill=col, outline='white', width=2)
+            c.create_oval(x - 3, y - 3, x + 3, y + 3, fill='white', outline='')
 
-        # Info text
-        self.canvas.itemconfig(self.sim_info,
-            text=f"rev {rev:0.1f}/{total_revs:0.0f}\nLeft (blue) / Right (red)")
+        rev = phi / (2 * math.pi)
+        c.create_text(cx, cy - 2, text=f"{rev:0.1f} / {total_revs:0.0f} rev",
+                      fill='#555555', font=('Arial', 9))
 
-        # Advance / finish
-        self.sim_angle += self.sim_angle_step
-        if self.sim_angle >= self.sim_total_angle:
-            self.canvas.coords(self.sim_dot_left, x_l-4, y_l-4, x_l+4, y_l+4)
+        if phi >= self.sim_total_angle:
             self.stop_simulation()
             return
         self.sim_after_id = self.root.after(self.sim_frame_ms, self._sim_step)

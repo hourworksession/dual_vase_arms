@@ -74,6 +74,7 @@ class SlicerTab:
         self.v_az_right = tk.DoubleVar(value=135.0)
         self.v_filament = tk.DoubleVar(value=1.75)
         self.v_min_seg = tk.DoubleVar(value=0.0)          # coalesce points (mm)
+        self.v_max_seg = tk.DoubleVar(value=1.0)          # subdivide polar walls (mm)
         self.v_blend_radius = tk.DoubleVar(value=1.0)     # arm corner blend (mm)
 
         # flow
@@ -167,7 +168,8 @@ class SlicerTab:
         self._row(mc, 5, "Max arm speed (mm/s)", self.v_max_arm_speed)
         self._row(mc, 6, "Max turntable speed (rad/s)", self.v_max_tt_speed)
         self._row(mc, 7, "Corner blend radius (mm)", self.v_blend_radius)
-        self._row(mc, 8, "Min segment length (mm)", self.v_min_seg)
+        self._row(mc, 8, "Wall arc resolution (mm)", self.v_max_seg)
+        self._row(mc, 13, "Min segment length (mm)", self.v_min_seg)
         self._row(mc, 9, "Part offset X (mm)", self.v_part_off_x)
         self._row(mc, 10, "Part offset Y (mm)", self.v_part_off_y)
         self._row(mc, 11, "Arm 1 azimuth (deg)", self.v_az_left)
@@ -263,6 +265,7 @@ class SlicerTab:
             flow_multiplier=float(self.v_flow.get()) / 100.0,
             first_layer_flow=float(self.v_first_layer_flow.get()) / 100.0,
             min_segment_length=float(self.v_min_seg.get()),
+            max_segment_length=float(self.v_max_seg.get()),
             extruder_tool=0,
         )
 

@@ -12,28 +12,34 @@ Frames
                    axis. A model point (mx, my) maps to plate (mx+ox, my+oy)
                    where (ox, oy) = part_offset.
   * arm/world    - the frame an arm moves in. The turntable axis is at
-                   (cx, cy, cz) in this frame (from calibration.yaml: the right
-                   arm reads the disc centre at (575.6, 3.5), z=152.0).
-                   Rotating the turntable by phi rotates plate points about the
-                   axis:  world = center + Rz(phi) . plate
+                   (cx, cy, cz) in this frame (calibration.yaml right arm =
+                   (575.6, 3.5), z=152.0). Rotating the turntable by phi rotates
+                   plate points about the axis:  world = center + Rz(phi) . plate
 
 Turntable strategy (per path kind)
 ----------------------------------
-For WALLS the turntable does the angular work so the arm only covers the radial
-residual: for a plate point at angle theta about the axis we rotate to
-phi = alpha - theta (alpha = arm's preferred azimuth), shortest direction (so an
-offset/L feature spins the turntable the other way). For INFILL / SKIN the
-turntable HOLDS (unless turntable_for_infill=True) and the arm traces the fill
-directly - otherwise every infill point demands a large turntable swing, which
-makes the motion lurch (seconds per point). With the turntable disabled entirely
-it is held at a fixed home angle and the arm traces everything (Cartesian bed).
+For WALLS the turntable does the angular work; for INFILL / SKIN it HOLDS and
+the arm traces the fill (unless turntable_for_infill=True).
+
+WHY WE SUBDIVIDE (important)
+----------------------------
+The slicer only emits polygon *vertices*. For a square, all four corners are at
+the SAME radius, so parking the arm there and spinning the turntable draws a
+CIRCLE, not a square. To draw a straight side in polar, the arm radius must dip
+to the half-side distance at the side midpoint and swell to the half-diagonal at
+the corners. That only happens if the side is broken into short sub-segments.
+So turntable-coordinated paths are DENSIFIED to max_segment_length before
+planning: each sub-point gets its own (radius, angle), the arm moves radially in
+and out, and the deposited line is straight. Paths the turntable does not
+coordinate (infill when held, or everything in Cartesian mode) are left alone -
+straight world moves are already straight there.
 
 Extrusion
 ---------
 Filament per move is volumetric: e = seg * line_width * layer_height / area,
 scaled by flow_multiplier (and first_layer_flow on the first layer(s)). The
-executor groups consecutive extruding moves of a path into ONE continuous
-extrude at feed = total_e / path_time (see extrusion_runs).
+executor groups consecutive extruding moves into ONE continuous extrude at
+feed = total_e / path_time (see extrusion_runs).
 """
 
 from dataclasses import dataclass, field
@@ -50,18 +56,18 @@ _WALLS = (WALL_OUTER, WALL_INNER)
 class PlannerConfig:
     num_arms: int = 1
     use_turntable: bool = True
-    turntable_for_infill: bool = False   # False = hold turntable during infill/skin
+    turntable_for_infill: bool = False
 
-    center: Tuple[float, float, float] = (575.6, 3.5, 152.0)  # right-arm calibration
+    center: Tuple[float, float, float] = (575.6, 3.5, 152.0)
     z_base: float = 152.0
     part_offset: Tuple[float, float] = (0.0, 0.0)
 
-    arm_azimuths: Tuple[float, ...] = (math.radians(-45.0),)  # right zone centre
+    arm_azimuths: Tuple[float, ...] = (math.radians(-45.0),)
     orientation: Tuple[float, float, float] = (180.0, 45.0, 20.0)
 
     max_arm_speed: float = 100.0
     max_tt_speed: float = 1.5           # rad/s
-    print_speed: float = 30.0           # mm/s along the part surface
+    print_speed: float = 30.0
     travel_speed: float = 150.0
 
     line_width: float = 0.4
@@ -70,9 +76,11 @@ class PlannerConfig:
     flow_multiplier: float = 1.0
     first_layer_flow: float = 1.2
     first_layer_count: int = 1
-    extruder_tool: int = 0              # 0 = E axis (right arm's extruder)
+    extruder_tool: int = 0
 
-    min_segment_length: float = 0.0     # merge points closer than this (0 = off)
+    # path conditioning
+    min_segment_length: float = 0.0     # coalesce points closer than this (0=off)
+    max_segment_length: float = 1.0     # subdivide coordinated paths to <= this (0=off)
     start_phi: float = 0.0
 
     def filament_area(self) -> float:
@@ -134,7 +142,23 @@ def _simplify(points: List[Tuple[float, float]], min_seg: float) -> List[Tuple[f
     return out
 
 
-def _path_points(path: Path, min_seg: float) -> List[Tuple[float, float]]:
+def _densify(points: List[Tuple[float, float]], max_seg: float) -> List[Tuple[float, float]]:
+    """Insert points so no segment is longer than max_seg (straight-line interp)."""
+    if max_seg <= 0 or len(points) < 2:
+        return points
+    out = [points[0]]
+    for a, b in zip(points[:-1], points[1:]):
+        d = math.hypot(b[0] - a[0], b[1] - a[1])
+        if d > max_seg:
+            nsub = int(math.ceil(d / max_seg))
+            for k in range(1, nsub):
+                t = k / nsub
+                out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+        out.append(b)
+    return out
+
+
+def _prep_points(path: Path, min_seg: float) -> List[Tuple[float, float]]:
     pts = list(path.points)
     if path.closed and len(pts) >= 2 and pts[0] != pts[-1]:
         pts.append(pts[0])
@@ -158,13 +182,22 @@ def _assign_paths(ordered: List[Tuple[int, Path]], num_arms: int) -> List[List[T
     return lanes
 
 
+def _is_coordinated(cfg: PlannerConfig, kind: str) -> bool:
+    """True if the turntable rotates while printing this path kind."""
+    return cfg.use_turntable and (kind in _WALLS or cfg.turntable_for_infill)
+
+
 def _lane_vertices(cfg: PlannerConfig, lane: List[Tuple[int, Path]], slc: SliceResult):
     """Yield (plate_xy, z_layer, extrude, seg_len, layer_idx, kind) for a lane."""
     ox, oy = cfg.part_offset
     z_by_index = {ly.index: ly.z for ly in slc.layers}
     for (layer_idx, path) in lane:
         z = z_by_index[layer_idx]
-        pts = _path_points(path, cfg.min_segment_length)
+        pts = _prep_points(path, cfg.min_segment_length)
+        # Subdivide only paths the turntable coordinates, so straight sides stay
+        # straight in polar. Others (held infill, or Cartesian) need no extra pts.
+        if _is_coordinated(cfg, path.kind) and cfg.max_segment_length > 0:
+            pts = _densify(pts, cfg.max_segment_length)
         prev = None
         for j, (mx, my) in enumerate(pts):
             plate = (mx + ox, my + oy)
@@ -192,15 +225,12 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
     for k in range(max_len):
         recs = [streams[i][k] if k < len(streams[i]) else None for i in range(n)]
 
-        # ---- decide the turntable target for this step ----
         if cfg.use_turntable:
             desired = []
             for i, rec in enumerate(recs):
                 if rec is None:
                     continue
                 kind = rec[5]
-                # Only coordinate the turntable for walls (unless asked to also
-                # coordinate infill). Infill/skin -> hold the turntable steady.
                 if not cfg.turntable_for_infill and kind not in _WALLS:
                     continue
                 plate = rec[0]
@@ -212,7 +242,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                 cxx = sum(math.cos(a) for a in desired)
                 phi_target = phi + _wrap_to_pi(math.atan2(sx, cxx) - phi)
             else:
-                phi_target = phi            # hold current angle
+                phi_target = phi
         else:
             phi_target = cfg.start_phi
 
@@ -268,10 +298,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
 
 
 # ----------------------------------------------------------------------------
-# Extrusion grouping + debugging helpers
-# ----------------------------------------------------------------------------
 def extrusion_runs(program: MotionProgram, arm_index: int = 0) -> Dict[int, Tuple[float, float]]:
-    """Group consecutive extruding steps into runs -> {start_index:(total_e, feed)}."""
     runs: Dict[int, Tuple[float, float]] = {}
     steps = program.steps
     i, nsteps = 0, len(steps)
@@ -297,14 +324,16 @@ def extrusion_runs(program: MotionProgram, arm_index: int = 0) -> Dict[int, Tupl
 def debug_rows(program: MotionProgram, arm_index: int = 0) -> List[dict]:
     rows = []
     t = 0.0
+    cx, cy = program.config.center[0], program.config.center[1]
     for i, step in enumerate(program.steps):
         at = step.arms[arm_index] if arm_index < len(step.arms) else None
+        radius = round(math.hypot(at.x - cx, at.y - cy), 3) if at else None
         rows.append(dict(
             i=i, t=round(t, 4), dt_ms=round(step.dt * 1000, 2),
             layer=step.layer, kind=step.kind,
             move=("EXTRUDE" if (at and at.extrude) else "travel"),
             x=(at.x if at else None), y=(at.y if at else None), z=(at.z if at else None),
-            yaw=(at.yaw if at else None), tt_deg=round(step.tt_angle_deg, 3),
+            r=radius, yaw=(at.yaw if at else None), tt_deg=round(step.tt_angle_deg, 3),
             e=(at.e if at else 0.0),
         ))
         t += step.dt
@@ -398,17 +427,23 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore")
     from slicer import slice_model, SliceSettings
 
-    s = SliceSettings(layer_height=0.2, line_width=0.4, wall_count=3,
-                      infill_density=0.20, infill_pattern="grid",
-                      top_layers=3, bottom_layers=3)
+    s = SliceSettings(layer_height=0.2, line_width=0.4, wall_count=1,
+                      infill_density=0.0, infill_pattern="grid",
+                      top_layers=0, bottom_layers=0)
     slc = slice_model(sys.argv[1] if len(sys.argv) > 1 else "cube40.3mf", s)
-    print("slice:", slc.summary())
-    for label, tfi in [("walls-only turntable (default)", False), ("turntable for infill too", True)]:
-        cfg = PlannerConfig(num_arms=1, use_turntable=True, turntable_for_infill=tfi)
-        prog = plan(slc, cfg)
-        st = analyze(prog)
-        print(f"\n== {label} ==")
-        print("  dt_stats:", dt_stats(prog))
-        print(f"  arm avg={st.arm_avg_speed[0]:.1f} peak={st.arm_peak_speed[0]:.1f} mm/s  "
-              f"len={st.arm_path_len[0]/1000:.2f}m  tt_turns={st.tt_travel/(2*math.pi):.1f} rev={st.tt_reversals}")
-        print(f"  extrusion runs: {len(extrusion_runs(prog))}")
+
+    # One outer-wall loop, polar, densified -> radius should vary corner<->mid.
+    from slicer import WALL_OUTER
+    one = [p for p in slc.layers[10].paths if p.kind == WALL_OUTER][:1]
+    from slicer import SliceResult, Layer
+    sub = SliceResult(layers=[Layer(index=10, z=slc.layers[10].z, solid=False, paths=one)],
+                      settings=slc.settings, bounds=slc.bounds)
+
+    for mseg in (0.0, 1.0):
+        cfg = PlannerConfig(num_arms=1, use_turntable=True, max_segment_length=mseg)
+        prog = plan(sub, cfg)
+        rows = debug_rows(prog)
+        radii = [r["r"] for r in rows if r["r"] is not None]
+        print(f"\nmax_segment_length={mseg}: {len(rows)} points, "
+              f"radius min={min(radii):.2f} max={max(radii):.2f} spread={max(radii)-min(radii):.2f} mm")
+        print("  (spread ~0 => circle;  spread ~8 => square corners vs midpoints)")
