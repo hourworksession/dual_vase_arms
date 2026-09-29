@@ -33,11 +33,27 @@ DEFAULTS = {
     "sequence": "simultaneous",   # "simultaneous", "right_first", "left_first"
 }
 
+LOAD_ERROR = None        # set when home_positions.json exists but could not be read
+
+# xArm 850 joint limits (config/arms/xarm850.yaml), used to check a home before it is saved
+JOINT_LIMITS = [(-360, 360), (-118, 120), (-225, 11), (-360, 360), (-97, 180), (-360, 360)]
+try:
+    import yaml as _yaml
+    with open(os.path.join(REPO_ROOT, "config", "arms", "xarm850.yaml")) as _f:
+        _lim = _yaml.safe_load(_f).get("joint_limits_deg", {})
+    JOINT_LIMITS = [tuple(_lim[f"q{i + 1}"]) for i in range(6)]
+except Exception:
+    pass
+
 SEQUENCES = [("simultaneous", "Both together"), ("right_first", "Right, then left"),
              ("left_first", "Left, then right")]
 
 
 def load():
+    """Saved homes, or the defaults. A file that exists but cannot be read sets LOAD_ERROR
+    and disables custom home for both arms, so Home never drives to a pose nobody chose."""
+    global LOAD_ERROR
+    LOAD_ERROR = None
     data = copy.deepcopy(DEFAULTS)
     try:
         with open(HOME_FILE, "r") as f:
@@ -45,11 +61,42 @@ def load():
         for side in ("left", "right"):
             data[side].update(saved.get(side, {}))
         data["sequence"] = saved.get("sequence", data["sequence"])
+        problems = validate(data)
+        if problems:
+            raise ValueError("; ".join(problems))
     except FileNotFoundError:
         pass
     except Exception as e:
-        logger.warning("Could not read %s (%s); using defaults", HOME_FILE, e)
+        LOAD_ERROR = f"{HOME_FILE} could not be used ({e})."
+        logger.warning(LOAD_ERROR)
+        data = copy.deepcopy(DEFAULTS)
+        data["left"]["enabled"] = data["right"]["enabled"] = False
     return data
+
+
+def validate(data, sides=("left", "right")):
+    """Return a list of problems (empty when the homes are safe to use)."""
+    out = []
+    for side in sides:
+        a = data.get(side, {})
+        if not a.get("enabled", True):
+            continue
+        if a.get("mode") == "joint":
+            j = a.get("joints", [])
+            if len(j) != 6:
+                out.append(f"{side} arm: need 6 joint angles")
+                continue
+            for i, (v, (lo, hi)) in enumerate(zip(j, JOINT_LIMITS)):
+                if not lo <= float(v) <= hi:
+                    out.append(f"{side} arm: J{i + 1} = {v:g}° is outside the xArm 850 range {lo}° to {hi}°")
+            if not 0 < float(a.get("joint_speed", 0)) <= 180:
+                out.append(f"{side} arm: joint speed must be between 0 and 180 °/s")
+        else:
+            if len(a.get("pose", [])) != 6:
+                out.append(f"{side} arm: need x y z roll pitch yaw")
+            if not 0 < float(a.get("pose_speed", 0)) <= 500:
+                out.append(f"{side} arm: pose speed must be between 0 and 500 mm/s")
+    return out
 
 
 def save(data):
@@ -68,6 +115,9 @@ def _check(code, what):
 
 def go_home(arm, cfg, wait=True):
     """Move one ArmController to its configured home."""
+    problems = validate({"arm": cfg}, sides=("arm",))
+    if problems:
+        raise ValueError("; ".join(p.replace("arm arm", arm.name + " arm") for p in problems))
     if not cfg.get("enabled", True):
         arm.home(wait=wait)
         return

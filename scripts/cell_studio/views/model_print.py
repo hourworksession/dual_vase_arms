@@ -86,7 +86,9 @@ class ModelPrintPage(QWidget):
         self.program = None
         self.model_path = None
         self.printing = False
+        self.dry = False
         self.stop_requested = False
+        self._planned_settings = None
 
         # slice settings
         self.v_layer_height = DoubleVar(0.2)
@@ -211,7 +213,9 @@ class ModelPrintPage(QWidget):
         bv.addWidget(ps); bv.addWidget(divider())
 
         mm = Section("Machine + motion", expanded=False)
-        mm.row("Arms", Segmented(self.v_num_arms, [(1, "1"), (2, "2")]))
+        mm.row("Arms", Segmented(self.v_num_arms, [(1, "1"), (2, "2 (plan only)")]),
+               "The planner can split a model across two arms, but printing drives one arm so far. "
+               "Use 2 for planning and dry runs.")
         mm.full(Check("Use turntable (off = Cartesian plate)", self.v_use_turntable))
         mm.full(Check("Turntable coordinates infill too", self.v_tt_for_infill))
         mm.row("Print speed", NumberField(self.v_print_speed, "mm/s", 1, 1))
@@ -318,6 +322,16 @@ class ModelPrintPage(QWidget):
             extruder_tool=0,
         )
 
+    def _settings_snapshot(self):
+        return {k: v.get() for k, v in vars(self).items() if k.startswith("v_") and
+                k not in ("v_status", "v_model", "v_debug")}
+
+    def _changed_since_plan(self):
+        if self._planned_settings is None:
+            return []
+        now = self._settings_snapshot()
+        return [k[2:].replace("_", " ") for k in now if now[k] != self._planned_settings.get(k)]
+
     def import_model(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import model", "",
                                               "3D models (*.3mf *.stl *.obj *.ply);;All files (*)")
@@ -377,18 +391,43 @@ class ModelPrintPage(QWidget):
             lines.append(f"  turntable: {st.tt_travel / (2 * math.pi):.1f} turns, {st.tt_reversals} reversals")
         lines.append(f"  dt(ms): min {dts['dt_ms_min']} / avg {dts['dt_ms_avg']} / max {dts['dt_ms_max']}")
         self._log("\n".join(lines), append=True)
+        self._planned_settings = self._settings_snapshot()
         self.v_status.set(f"Planned: {len(self.program.steps)} points, about {st.total_time / 60:.1f} min. Ready to print.")
 
     def start_print(self):
-        if self.printing or self.app.printing or self.app.busy:
+        app = self.app
+        if self.printing or app.printing or app.busy:
+            what = "A model print" if self.printing else ("The cylinder" if app.printing else app.job_state.get().title())
+            QMessageBox.warning(self, "Print", f"{what} is still running. Wait for it to finish or press Stop.")
             return
         if not self.program:
             QMessageBox.warning(self, "Print", "Slice a model first (steps 1 and 2).")
             return
-        if not getattr(self.app, "hw_connected", False):
+        if not getattr(app, "hw_connected", False):
             QMessageBox.warning(self, "Print", "Hardware not connected (Machine ▸ Connections).")
             return
-        if not self.app.ui.confirm("Confirm print", "Stream the planned motion to the machines now?"):
+        cfg = self.program.config
+        missing = []
+        if app.extruder is None:
+            missing.append("the extruder (it would print air)")
+        if cfg.use_turntable and app.turntable is None:
+            missing.append("the turntable (this plan rotates the part)")
+        if missing:
+            QMessageBox.warning(self, "Print", "Connect " + " and ".join(missing) + " first.")
+            return
+        if cfg.num_arms > 1:
+            QMessageBox.warning(self, "Print",
+                                "This plan is for 2 arms, but the model print streamer only drives one arm so far. "
+                                "Set Arms to 1 in Machine + motion and slice again.")
+            return
+        changed = self._changed_since_plan()
+        if changed:
+            if QMessageBox.question(self, "Settings changed",
+                                    "These settings changed since you sliced: " + ", ".join(changed) +
+                                    ".\n\nSlice again now? (No cancels the print.)") == QMessageBox.Yes:
+                self.do_slice()
+            return
+        if not app.ui.confirm("Confirm print", "Stream the planned motion to the machines now?"):
             return
         self._launch(dry=False)
 
@@ -401,6 +440,7 @@ class ModelPrintPage(QWidget):
         self._launch(dry=True)
 
     def _launch(self, dry):
+        self.dry = dry
         self.printing = True
         self.stop_requested = False
         if not dry:

@@ -7,8 +7,23 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, Q
                                QWidget, QStackedWidget, QMessageBox, QDialogButtonBox)
 
 from .. import theme, home_config
-from ..state import DoubleVar, BoolVar, StrVar
+from ..state import DoubleVar, BoolVar, StrVar, Var
 from ..widgets import (NumberField, Check, Segmented, Combo, FormGrid, button, label, hrow, divider, Dot)
+
+
+class _LimitedVar(Var):
+    """Joint angle that cannot be set outside the xArm 850 limit."""
+
+    def __init__(self, v, lo, hi):
+        super().__init__(float(v), float)
+        self.lo, self.hi = lo, hi
+
+    def set(self, v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return
+        super().set(max(self.lo, min(self.hi, v)))
 
 
 class _ArmEditor(QWidget):
@@ -17,7 +32,7 @@ class _ArmEditor(QWidget):
         self.c, self.side = ctl, side
         self.enabled = BoolVar(cfg.get("enabled", True))
         self.mode = StrVar(cfg.get("mode", "joint"))
-        self.joints = [DoubleVar(v) for v in cfg["joints"]]
+        self.joints = [_LimitedVar(v, *home_config.JOINT_LIMITS[i]) for i, v in enumerate(cfg["joints"])]
         self.pose = [DoubleVar(v) for v in cfg["pose"]]
         self.joint_speed = DoubleVar(cfg.get("joint_speed", 20.0))
         self.pose_speed = DoubleVar(cfg.get("pose_speed", 50.0))
@@ -46,7 +61,8 @@ class _ArmEditor(QWidget):
         jg.setVerticalSpacing(8)
         for i, var in enumerate(self.joints):
             jg.addWidget(label(f"J{i + 1}", "FieldLabel"), i % 3, (i // 3) * 2)
-            jg.addWidget(NumberField(var, "°", 2, 1.0, minimum=-360, maximum=360, width=130), i % 3, (i // 3) * 2 + 1)
+            lo, hi = home_config.JOINT_LIMITS[i]
+            jg.addWidget(NumberField(var, "°", 2, 1.0, minimum=lo, maximum=hi, width=130), i % 3, (i // 3) * 2 + 1)
         jg.addWidget(label("Speed", "FieldLabel"), 3, 0)
         jg.addWidget(NumberField(self.joint_speed, "°/s", 1, 1.0, minimum=1, maximum=180, width=130), 3, 1)
         jg.addWidget(label("Moves every joint straight to these angles. Best for the new mounts: "
@@ -127,7 +143,8 @@ class HomeDialog(QDialog):
         v.setContentsMargins(22, 20, 22, 18)
         v.setSpacing(12)
         v.addWidget(label("Home positions", "CardTitle"))
-        v.addWidget(label("Where the arms go when you press Home. Saved to config/home_positions.json.",
+        v.addWidget(label("Where the arms go when you press Home. Saved to config/home_positions.json. "
+                          "The main window, including the EMERGENCY STOP, stays usable while this is open.",
                           "CardHint", wrap=True))
         tabs = QTabWidget()
         self.eds = {}
@@ -147,6 +164,13 @@ class HomeDialog(QDialog):
         save = button("Save", "primary", self.accept, min_w=110)
         cancel = button("Cancel", "ghost", self.reject, min_w=90)
         v.addWidget(hrow(None, cancel, save))
+
+    def accept(self):
+        problems = home_config.validate(self.result_data())
+        if problems:
+            QMessageBox.warning(self, "Home positions", "Not saved:\n\n" + "\n".join(problems))
+            return
+        super().accept()
 
     def result_data(self):
         out = {side: ed.data() for side, ed in self.eds.items()}

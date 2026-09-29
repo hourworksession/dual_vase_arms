@@ -4,7 +4,7 @@ import logging
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QAction, QKeySequence, QFont
-from PySide6.QtWidgets import (QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout, QStackedWidget,
+from PySide6.QtWidgets import (QLabel, QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout, QStackedWidget,
                                QPushButton, QToolButton, QMenu, QMessageBox, QSlider, QPlainTextEdit,
                                QButtonGroup, QSizePolicy)
 
@@ -40,7 +40,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Cell Studio · dual arm print control")
         self.resize(1480, 920)
-        self.setMinimumSize(1100, 700)
+        self.setMinimumSize(1024, 640)
         self.ui = UiBridge()
         self.ui.parent_widget = self
         self.c = CellController(self.ui)
@@ -81,7 +81,12 @@ class MainWindow(QMainWindow):
             root_log.setLevel(logging.INFO)
         logging.getLogger("cell_studio").info("Cell Studio started")
         self.act_console.toggled.connect(self.console_btn.setChecked)
+        self.c.model_job_active = lambda: self.model.printing and not self.model.dry
         self.go(0)
+        if self.c.home_load_error:
+            self.ui.warn("Home positions not loaded",
+                         self.c.home_load_error + "\n\nCustom home is off for both arms (Home uses the xArm "
+                         "factory home) until you set and save them again in Settings ▸ Home positions.")
 
     # ------------------------------------------------------------------ header
     def _header(self):
@@ -104,6 +109,12 @@ class MainWindow(QMainWindow):
             chip = Chip(text)
             self.chips[key] = chip
             lay.addWidget(chip)
+        self.sim_badge = QLabel("SIMULATED HARDWARE")
+        self.sim_badge.setStyleSheet(f"background:{theme.WARN}; color:#1b1300; font-weight:800; "
+                                     "letter-spacing:1px; padding:6px 10px; border-radius:8px; font-size:12px;")
+        self.sim_badge.setToolTip("Nothing on the cell moves. Untick Simulated hardware and reconnect to use the real cell.")
+        self.sim_badge.setVisible(False)
+        lay.addWidget(self.sim_badge)
         c.connected_var.changed.connect(self._update_chips)
         self._update_chips({})
 
@@ -143,6 +154,7 @@ class MainWindow(QMainWindow):
 
     def _update_chips(self, state):
         state = state or {}
+        self.sim_badge.setVisible(any(v == "sim" for v in state.values()))
         for key, chip in self.chips.items():
             kind = state.get(key)
             if kind == "real":
@@ -177,7 +189,7 @@ class MainWindow(QMainWindow):
     def _nav(self):
         nav = QFrame()
         nav.setObjectName("Nav")
-        nav.setFixedWidth(190)
+        nav.setFixedWidth(168)
         v = QVBoxLayout(nav)
         v.setContentsMargins(12, 16, 12, 16)
         v.setSpacing(4)
@@ -211,7 +223,7 @@ class MainWindow(QMainWindow):
         c = self.c
         f = QFrame()
         f.setObjectName("LivePanel")
-        f.setFixedWidth(300)
+        f.setFixedWidth(268)
         v = QVBoxLayout(f)
         v.setContentsMargins(16, 16, 16, 16)
         v.setSpacing(10)
@@ -252,7 +264,12 @@ class MainWindow(QMainWindow):
         v.addWidget(divider())
         v.addSpacing(4)
         v.addWidget(label("TURNTABLE SPEED", "SectionLabel"))
-        v.addWidget(label("Safe to change during a print.", "CardHint"))
+        cap = label("", "CardHint", wrap=True)
+        upd_cap = lambda m: cap.setText("Extrusion follows this speed." if m == "streamed" else
+                                        "Changes rotation only: one move extrusion keeps its starting rate.")
+        c.extrusion_mode.changed.connect(upd_cap)
+        upd_cap(c.extrusion_mode.get())
+        v.addWidget(cap)
         sl = QSlider(Qt.Horizontal)
         sl.setRange(0, int(c.tt_speed_max * 1000))
         sl.setSingleStep(5)
@@ -291,13 +308,24 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ dialogs
     def open_home_dialog(self):
+        """Non-modal, so the EMERGENCY STOP stays reachable while testing a home move."""
+        if getattr(self, "_home_dlg", None) is not None and self._home_dlg.isVisible():
+            self._home_dlg.raise_()
+            return
         dlg = HomeDialog(self.c, self)
-        if dlg.exec():
+        dlg.setModal(False)
+        dlg.setWindowModality(Qt.NonModal)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+
+        def saved():
             try:
                 self.c.save_home(dlg.result_data())
                 self.machine.refresh_home_hint()
             except Exception as e:
                 QMessageBox.critical(self, "Home positions", f"Could not save:\n{e}")
+        dlg.accepted.connect(saved)
+        self._home_dlg = dlg
+        dlg.show()
 
     def _show_paths(self):
         from . import home_config
@@ -307,6 +335,13 @@ class MainWindow(QMainWindow):
                                 "Cylinder presets:  Cylinder ▸ Save config / Load config")
 
     def closeEvent(self, e):
+        c = self.c
+        if c.printing or c.busy or self.model.printing:
+            if not c.ui.confirm("Quit", "A job is running. Quit anyway?\n\n"
+                                        "The job is stopped and the turntable halted before the panel closes."):
+                e.ignore()
+                return
+            self.model.stop_requested = True
         self.cylinder.view.stop_simulation()
         logging.getLogger().removeHandler(self._log_handler)
         self.c.shutdown()

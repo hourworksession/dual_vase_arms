@@ -22,8 +22,10 @@ class PolarView(QWidget):
     def __init__(self, ctl):
         super().__init__()
         self.c = ctl
-        self.setMinimumSize(360, 320)
+        self.setMinimumSize(300, 220)
         self.setCursor(Qt.CrossCursor)
+        self.setToolTip("The nodes only set where this preview is sampled. The printed path comes from the "
+                        "radius, radial offsets and wave pattern, whatever the nodes.")
         self.sim_running = False
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._sim_step)
@@ -46,6 +48,10 @@ class PolarView(QWidget):
             revs=g(c.param_vars['total_revs']), speed=g(c.turntable_speed_var),
             arm_l=bool(c.pattern_arm_left.get()), arm_r=bool(c.pattern_arm_right.get()))
 
+    @staticmethod
+    def hint_text():
+        return "Preview only · the print follows radius, offsets and wave · click to add or remove nodes"
+
     def _param_changed(self, *_):
         if not self.sim_running:
             self.trail_l, self.trail_r = [], []   # editing returns to the node editor
@@ -60,7 +66,7 @@ class PolarView(QWidget):
             return
         w, h = self.width(), self.height()
         dx = e.position().x() - w / 2
-        dy = e.position().y() - h / 2
+        dy = e.position().y() - (h - 30) / 2
         if math.hypot(dx, dy) < 20:
             return
         theta = math.atan2(-dy, dx)
@@ -144,13 +150,14 @@ class PolarView(QWidget):
             y += 18
         if extra:
             pnt.setPen(QColor(theme.MUTED))
-            pnt.drawText(QPointF(14, self.height() - 12), extra)
+            pnt.drawText(QRectF(14, self.height() - 44, self.width() - 28, 36),
+                         Qt.AlignLeft | Qt.AlignBottom | Qt.TextWordWrap, extra)
 
     def _paint_preview(self, pnt):
         p = self._p()
-        w, h = self.width(), self.height()
+        w, h = self.width(), self.height() - 30      # keep the hint line clear of the plot
         cx, cy = w / 2, h / 2
-        gmax = min(w, h) / 2 - 40
+        gmax = min(w, h) / 2 - 34
         radius = p['radius']
         scale = gmax / radius if radius > 0 else 1.0
 
@@ -203,7 +210,7 @@ class PolarView(QWidget):
         pnt.setPen(QColor(theme.MUTED))
         pnt.setFont(QFont(pnt.font().family(), 10))
         pnt.drawText(QRectF(cx - 80, cy - 12, 160, 24), Qt.AlignCenter, f"{len(nodes)} nodes")
-        self._legend(pnt, "Click to add a node · click a node to remove it")
+        self._legend(pnt, self.hint_text())
 
     def _paint_sim(self, pnt):
         p = self._p()

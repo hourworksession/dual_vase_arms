@@ -281,7 +281,7 @@ class Section(QWidget):
         self.grid.setHorizontalSpacing(14)
         self.grid.setVerticalSpacing(10)
         self.grid.setColumnStretch(1, 1)
-        self.grid.setColumnMinimumWidth(0, 150)
+        self.grid.setColumnMinimumWidth(0, 124)
         v.addWidget(self.body)
         self.body.setVisible(expanded)
         self._row = 0

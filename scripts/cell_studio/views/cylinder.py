@@ -22,26 +22,34 @@ class CylinderPage(QWidget):
         split.addWidget(self._right())
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([470, 900])
+        split.setSizes([450, 900])
         v = QVBoxLayout(self)
-        v.setContentsMargins(18, 18, 18, 18)
+        v.setContentsMargins(12, 14, 12, 14)
         v.addWidget(split)
 
     # ------------------------------------------------------------------
-    def _pfield(self, sec, key, nudges=(), width=140):
-        lab, unit, dec, step, _s, tip = PARAM_META[key]
-        sec.row(lab, NumberField(self.c.param_vars[key], unit, dec, step, nudges=nudges, width=width), tip)
+    def _pfield(self, sec, key, nudges=(), width=130):
+        lab, unit, dec, step, _s, tip, live, minimum = PARAM_META[key]
+        f = NumberField(self.c.param_vars[key], unit, dec, step, nudges=nudges, width=width,
+                        minimum=-1e6 if minimum is None else minimum)
+        if live:
+            lab += "  ⟳"
+        else:
+            self.locked.append(f)          # read once at start: locked while a job runs
+        sec.row(lab, f, tip)
+        return f
 
     def _settings(self):
         c = self.c
+        self.locked = []
         inner = QWidget()
         v = QVBoxLayout(inner)
         v.setContentsMargins(4, 0, 12, 12)
         v.setSpacing(2)
         title = label("Cylinder parameters", "CardTitle")
         v.addWidget(title)
-        v.addWidget(label("Radial offsets, centre Z, turntable speed, base arm speed and the wave pattern "
-                          "are read live, so they can be adjusted while the cylinder prints.", "CardHint", wrap=True))
+        v.addWidget(label("⟳ marks values read live, which you can adjust while the cylinder prints. "
+                          "The rest are read at start and locked during a job.", "CardHint", wrap=True))
         v.addSpacing(6)
 
         geo = Section("Geometry")
@@ -53,22 +61,34 @@ class CylinderPage(QWidget):
         for k in ('filament_diameter', 'feed_rate_left', 'feed_rate_right',
                   'extrusion_factor_left', 'extrusion_factor_right'):
             self._pfield(ext, k)
+        from ..widgets import Segmented
+        mode = Segmented(c.extrusion_mode, [("single", "One move"), ("streamed", "Follow turntable")])
+        ext.row("Extrusion", mode,
+                "One move (original): the whole wall's filament is sent as one G1 at start, at the feed "
+                "rates above. Pause, Stop and speed changes cannot reach it.\n\n"
+                "Follow turntable: filament is sent 10° at a time at the rate the turntable is actually "
+                "turning, so Pause, Stop and speed changes stop or follow the flow. Not yet proven on the cell.")
+        self.locked.append(mode)
+        ext.row("Match to turntable", button("Set feed rates", "ghost", self._match,
+                                             tip="Feed rates so the extrusion lasts exactly as long as the rotation"))
         v.addWidget(ext); v.addWidget(divider())
 
         pl = Section("Placement")
         self._pfield(pl, 'start_angle_deg')
         self._pfield(pl, 'angular_offset_deg')
-        self._pfield(pl, 'radial_offset_left', nudges=(-1, -0.1, 0.1, 1), width=110)
-        self._pfield(pl, 'radial_offset_right', nudges=(-1, -0.1, 0.1, 1), width=110)
+        self._pfield(pl, 'radial_offset_left', nudges=(-1, -0.1, 0.1, 1), width=92)
+        self._pfield(pl, 'radial_offset_right', nudges=(-1, -0.1, 0.1, 1), width=92)
         v.addWidget(pl); v.addWidget(divider())
 
         mo = Section("Motion")
-        mo.row("Base arm speed", NumberField(c.base_arm_speed_var, "mm/s", 1, 1.0,
-                                             nudges=(-10, -1, 1, 10), width=100))
-        mo.row("Turntable speed", NumberField(c.turntable_speed_var, "rad/s", 3, 0.01,
-                                              nudges=(-0.1, -0.01, 0.01, 0.1), width=100,
-                                              clamp=(0.0, c.tt_speed_max)),
-               "Live: the print follows this value. Also on the slider in the Live panel.")
+        mo.row("Base arm speed  ⟳", NumberField(c.base_arm_speed_var, "mm/s", 1, 1.0, minimum=1,
+                                                nudges=(-10, -1, 1, 10), width=92))
+        mo.row("Turntable speed  ⟳", NumberField(c.turntable_speed_var, "rad/s", 3, 0.01,
+                                                 nudges=(-0.1, -0.01, 0.01, 0.1), width=96,
+                                                 minimum=0.0, maximum=c.tt_speed_max,
+                                                 clamp=(0.0, c.tt_speed_max)),
+               "Live: the turntable follows this value (also the slider in the Live panel). "
+               "In One move extrusion mode the flow does not.")
         mo.row("From surface speed", hrow(NumberField(c.calc_mms_var, "mm/s", 1, 1.0, width=100),
                                           button("→ rad/s", "ghost", c.calc_rads_from_mms,
                                                  tip="Sets turntable speed = surface speed / radius"),
@@ -78,9 +98,9 @@ class CylinderPage(QWidget):
         wv = Section("Wave pattern")
         wv.full(Check("Enable wrapped wave", c.pattern_enabled))
         wv.row("Waveform", Combo(c.pattern_waveform, ['sine', 'triangle', 'square'], width=130))
-        wv.row("Amplitude", NumberField(c.pattern_amplitude, "mm", 2, 0.1, nudges=(-1, -0.1, 0.1, 1), width=100))
-        wv.row("Wave count", NumberField(c.pattern_wave_count, "/rev", 2, 0.1, nudges=(-1, -0.1, 0.1, 1), width=100))
-        wv.row("Phase offset", NumberField(c.pattern_phase_offset, "°", 1, 1.0, nudges=(-45, -5, 5, 45), width=100))
+        wv.row("Amplitude  ⟳", NumberField(c.pattern_amplitude, "mm", 2, 0.1, nudges=(-1, -0.1, 0.1, 1), width=92))
+        wv.row("Wave count  ⟳", NumberField(c.pattern_wave_count, "/rev", 2, 0.1, nudges=(-1, -0.1, 0.1, 1), width=92))
+        wv.row("Phase offset  ⟳", NumberField(c.pattern_phase_offset, "°", 1, 1.0, nudges=(-45, -5, 5, 45), width=92))
         wv.row("Apply to", hrow(Check("Left", c.pattern_arm_left), Check("Right", c.pattern_arm_right), None))
         v.addWidget(wv); v.addWidget(divider())
 
@@ -91,8 +111,12 @@ class CylinderPage(QWidget):
         v.addStretch(1)
 
         sa = scroll(inner)
-        sa.setMinimumWidth(470)
+        sa.setMinimumWidth(400)
         return sa
+
+    def _match(self):
+        self.c.calculate_extrusion_lengths()
+        self.c.match_feed_rates()
 
     # ------------------------------------------------------------------
     def _right(self):
@@ -132,6 +156,8 @@ class CylinderPage(QWidget):
 
     def _state(self, s):
         running = s in ("running", "paused")
+        for w in self.locked:
+            w.setEnabled(not running)
         self.start_btn.setEnabled(s == "idle")
         self.pause_btn.setEnabled(running)
         self.stop_btn.setEnabled(running)

@@ -24,16 +24,18 @@ class Var(QObject):
             return v
         if self._kind is bool:
             return bool(v)
-        try:
-            return self._kind(v)
-        except (TypeError, ValueError):
-            return v
+        return self._kind(v)          # raises for "abc" into a number
 
     def get(self):
         return self._v
 
     def set(self, v):
-        v = self._coerce(v)
+        try:
+            v = self._coerce(v)
+        except (TypeError, ValueError):
+            import logging
+            logging.getLogger("cell_studio").warning("Ignored invalid value %r", v)
+            return
         if v != self._v:
             self._v = v
             self.changed.emit(v)
@@ -81,15 +83,41 @@ class UiBridge(QObject):
         else:
             self._call.emit(fn)
 
-    # ---- dialogs (safe from any thread) ----
+    # ---- notices (safe from any thread) ----
+    # Non-modal on purpose: a pop-up must never stop someone reaching the E-stop.
+    def _notice(self, icon, title, msg):
+        def show():
+            box = QMessageBox(icon, title, str(msg), QMessageBox.Ok, self.parent_widget)
+            box.setModal(False)
+            box.setWindowModality(Qt.NonModal)
+            box.setAttribute(Qt.WA_DeleteOnClose)
+            box.show()
+        self.post(show)
+
     def info(self, title, msg):
-        self.post(lambda: QMessageBox.information(self.parent_widget, title, str(msg)))
+        self._notice(QMessageBox.Information, title, msg)
 
     def warn(self, title, msg):
-        self.post(lambda: QMessageBox.warning(self.parent_widget, title, str(msg)))
+        self._notice(QMessageBox.Warning, title, msg)
 
     def error(self, title, msg):
-        self.post(lambda: QMessageBox.critical(self.parent_widget, title, str(msg)))
+        self._notice(QMessageBox.Critical, title, msg)
+
+    def choose(self, title, msg, buttons):
+        """GUI thread. buttons: [(label, "accept"|"destructive"|"reject")]. Returns the label or None."""
+        roles = {"accept": QMessageBox.AcceptRole, "destructive": QMessageBox.DestructiveRole,
+                 "reject": QMessageBox.RejectRole}
+        box = QMessageBox(QMessageBox.Question, title, str(msg), QMessageBox.NoButton, self.parent_widget)
+        made = {}
+        for label, role in buttons:
+            made[label] = box.addButton(label, roles[role])
+        box.setDefaultButton(made[buttons[0][0]])
+        box.exec()
+        clicked = box.clickedButton()
+        for label, b in made.items():
+            if b is clicked:
+                return label
+        return None
 
     def confirm(self, title, msg):
         """GUI thread only. Returns True on Yes."""

@@ -101,7 +101,7 @@ QPushButton[kind="danger"]:hover {{ background: #2a1215; }}
 QPushButton[kind="ghost"] {{ background: transparent; border-color: {BORDER}; color: {MUTED}; }}
 QPushButton[kind="ghost"]:hover {{ color: {TEXT}; }}
 QPushButton[kind="nudge"] {{
-    padding: 3px 0px; min-width: 38px; border-radius: 6px; font-family: {FONT_MONO}; font-size: 12px;
+    padding: 3px 0px; min-width: 33px; border-radius: 6px; font-family: {FONT_MONO}; font-size: 12px;
     color: {MUTED}; background: {INPUT}; border-color: {BORDER};
 }}
 QPushButton[kind="nudge"]:hover {{ color: {TEXT}; border-color: {BORDER_STRONG}; }}
