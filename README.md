@@ -56,3 +56,25 @@ python -m dual_arm_printer run build/cylinder.plan.json --confirm
 This is an MVP scaffold. Modules marked `# STUB` need hardware-side validation.
 The slicing → splitting → simulation pipeline is runnable end-to-end on the included
 cylinder example.
+
+## Control panel (Cell Studio)
+
+The day to day control panel is a Qt app:
+
+```bash
+pip install PySide6 pyyaml          # plus trimesh shapely networkx scipy for Model print
+python scripts/gleadell_panel_qt.py
+```
+
+* **Machine**: connections (with a *Simulated hardware* option for rehearsal), Home,
+  Prepare to print, jog, live offsets, extruder priming.
+* **Cylinder**: the dual arm cylinder print, polar preview / turntable simulator, presets.
+* **Model print**: import → slice → print / dry run.
+* **Live panel** (always visible): arm poses, turntable angle, temperatures, job timer,
+  and the live turntable speed slider.
+* **Settings ▸ Home positions**: a custom home per arm (joint angles or Cartesian pose,
+  with "Use current position"). Home goes there instead of the xArm factory home.
+  Stored in `config/home_positions.json`.
+
+The machine logic is in `scripts/cell_studio/controller.py`, ported unchanged from the
+Tk panel. The old `scripts/gleadell_panel.py` still works.

@@ -9,3 +9,4 @@ rich>=13.7
 click>=8.1
 fullcontrol>=0.5.0
 xarm-python-sdk>=1.13.0
+PySide6>=6.6

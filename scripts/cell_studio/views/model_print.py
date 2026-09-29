@@ -1,0 +1,546 @@
+"""Model print page (the slicer workflow), ported from slicer_tab.py.
+
+Import -> Slice + preview -> Print / Dry run. The slicing, planning and
+streaming code is unchanged; settings that lived in pop up dialogs are now
+collapsible sections beside the preview.
+"""
+
+import csv as csvmod
+import logging
+import math
+import os
+import threading
+import time
+
+from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QSlider,
+                               QPlainTextEdit, QFileDialog, QMessageBox)
+
+from .. import theme
+from ..state import DoubleVar, IntVar, BoolVar, StrVar
+from ..widgets import (Card, NumberField, Check, Combo, Section, Segmented,
+                       button, label, hrow, scroll, divider, Dot)
+
+logger = logging.getLogger("slicer_tab")
+SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+class LayerView(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.result = None
+        self.idx = 0
+        self.setMinimumSize(360, 300)
+
+    def show_layer(self, result, idx):
+        self.result, self.idx = result, idx
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.fillRect(self.rect(), QColor("#0b0f14"))
+        w, h = self.width(), self.height()
+        if not self.result or not (0 <= self.idx < len(self.result.layers)):
+            p.setPen(QColor(theme.FAINT))
+            p.setFont(QFont(p.font().family(), 12))
+            p.drawText(self.rect(), Qt.AlignCenter, "Import a model and slice it to see layers here")
+            return
+        layer = self.result.layers[self.idx]
+        b = self.result.bounds
+        minx, miny = float(b[0][0]), float(b[0][1])
+        maxx, maxy = float(b[1][0]), float(b[1][1])
+        span = max(maxx - minx, maxy - miny, 1.0)
+        top = 62                                  # room for the layer caption
+        scale = (min(w, h - top) - 40) / span
+        ox = w / 2 - (minx + maxx) / 2 * scale
+        oy = top + (h - top) / 2 + (miny + maxy) / 2 * scale
+        # bounding box
+        p.setPen(QPen(QColor("#1f2731"), 1, Qt.DashLine))
+        p.drawRect(QRectF(ox + minx * scale, oy - maxy * scale, (maxx - minx) * scale, (maxy - miny) * scale))
+        for path in layer.paths:
+            col = theme.KIND_COLOR.get(path.kind, "#888888")
+            pts = path.points + ([path.points[0]] if (path.closed and len(path.points) > 1) else [])
+            if len(pts) < 2:
+                continue
+            qp = QPainterPath(QPointF(ox + pts[0][0] * scale, oy - pts[0][1] * scale))
+            for (x, y) in pts[1:]:
+                qp.lineTo(ox + x * scale, oy - y * scale)
+            p.setPen(QPen(QColor(col), 1.3))
+            p.drawPath(qp)
+        p.setPen(QColor(theme.TEXT))
+        p.setFont(QFont(p.font().family(), 11, QFont.DemiBold))
+        p.drawText(QPointF(16, 26), f"Layer {self.idx + 1} / {len(self.result.layers)}")
+        p.setPen(QColor(theme.MUTED))
+        p.setFont(QFont(p.font().family(), 10))
+        p.drawText(QPointF(16, 46), f"z = {layer.z:.2f} mm   ·   {'solid' if layer.solid else 'sparse'}")
+
+
+class ModelPrintPage(QWidget):
+    def __init__(self, ctl, win):
+        super().__init__()
+        self.app = ctl
+        self.win = win
+        self.slice_result = None
+        self.program = None
+        self.model_path = None
+        self.printing = False
+        self.stop_requested = False
+
+        # slice settings
+        self.v_layer_height = DoubleVar(0.2)
+        self.v_line_width = DoubleVar(0.4)
+        self.v_wall_count = IntVar(2)
+        self.v_infill_density = DoubleVar(20.0)
+        self.v_infill_pattern = StrVar("grid")
+        self.v_top_layers = IntVar(3)
+        self.v_bottom_layers = IntVar(3)
+        # machine / motion
+        self.v_num_arms = IntVar(1)
+        self.v_use_turntable = BoolVar(True)
+        self.v_tt_for_infill = BoolVar(False)
+        self.v_print_speed = DoubleVar(30.0)
+        self.v_travel_speed = DoubleVar(150.0)
+        self.v_max_arm_speed = DoubleVar(100.0)
+        self.v_max_tt_speed = DoubleVar(1.5)
+        self.v_part_off_x = DoubleVar(0.0)
+        self.v_part_off_y = DoubleVar(0.0)
+        self.v_az_left = DoubleVar(-45.0)
+        self.v_az_right = DoubleVar(135.0)
+        self.v_filament = DoubleVar(1.75)
+        self.v_min_seg = DoubleVar(0.0)
+        self.v_max_seg = DoubleVar(1.0)
+        self.v_blend_radius = DoubleVar(1.0)
+        # flow
+        self.v_flow = DoubleVar(100.0)
+        self.v_first_layer_flow = DoubleVar(120.0)
+        # calibration (right arm defaults)
+        self.v_center_x = DoubleVar(self._app_param('tt_cx_right', 575.6))
+        self.v_center_y = DoubleVar(self._app_param('tt_cy_right', 3.5))
+        self.v_center_z = DoubleVar(self._app_param('tt_cz_right', 152.0))
+        self.v_z_base = DoubleVar(self._app_param('z_start', 152.0))
+        # debug / preview
+        self.v_debug = BoolVar(False)
+        self.v_status = StrVar("No model loaded.")
+        self.v_model = StrVar("")
+
+        self._build()
+
+    def _app_param(self, name, default):
+        try:
+            return float(self.app.param_vars[name].get())
+        except Exception:
+            return default
+
+    def _debug_csv_path(self):
+        return os.path.join(SCRIPTS_DIR, "motion_debug.csv")
+
+    # ------------------------------------------------------------------ layout
+    def _build(self):
+        split = QSplitter(Qt.Horizontal)
+        split.setChildrenCollapsible(False)
+        split.setHandleWidth(10)
+        split.addWidget(self._left())
+        split.addWidget(self._right())
+        split.setStretchFactor(1, 1)
+        split.setSizes([420, 900])
+        v = QVBoxLayout(self)
+        v.setContentsMargins(18, 18, 18, 18)
+        v.addWidget(split)
+
+    def _step(self, n, text, btn):
+        num = label(str(n))
+        num.setAlignment(Qt.AlignCenter)
+        num.setFixedSize(26, 26)
+        num.setStyleSheet(f"background:{theme.RAISED}; border:1px solid {theme.BORDER_STRONG};"
+                          f"border-radius:13px; color:{theme.MUTED}; font-weight:600;")
+        col = QWidget()
+        cv = QVBoxLayout(col)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(6)
+        cv.addWidget(label(text, "FieldLabel"))
+        cv.addWidget(btn)
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(12)
+        h.addWidget(num, 0, Qt.AlignTop)
+        h.addWidget(col, 1)
+        return row
+
+    def _left(self):
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(4, 0, 12, 12)
+        v.setSpacing(14)
+
+        wf = Card("Workflow")
+        wf.add(self._step(1, "Import a model (3MF, STL, OBJ, PLY)",
+                          button("Import model…", None, self.import_model)))
+        model = label("", "Muted")
+        model.setStyleSheet(f"font-family:{theme.FONT_MONO}; font-size:12px; color:{theme.ACCENT};")
+        self.v_model.changed.connect(model.setText)
+        wf.add(model)
+        wf.add(self._step(2, "Slice and plan the motion", button("Slice + preview", None, self.do_slice)))
+        self.print_btn = button("▶  Print", "primary", self.start_print)
+        wf.add(self._step(3, "Stream to the machine", self.print_btn))
+        wf.add(hrow(button("Dry run", "ghost", self.start_dry_run,
+                           tip="Walks the whole program without hardware and writes motion_debug.csv"),
+                    button("Stop", "danger", self.stop_print), None))
+        st = label(self.v_status.get(), "CardHint", wrap=True)
+        self.v_status.changed.connect(st.setText)
+        wf.add(st)
+        v.addWidget(wf)
+
+        box = QWidget()
+        bv = QVBoxLayout(box)
+        bv.setContentsMargins(0, 0, 0, 0)
+        bv.setSpacing(2)
+
+        ps = Section("Print settings")
+        ps.row("Layer height", NumberField(self.v_layer_height, "mm", 2, 0.05, minimum=0.01))
+        ps.row("Line width", NumberField(self.v_line_width, "mm", 2, 0.05, minimum=0.05))
+        ps.row("Wall count", NumberField(self.v_wall_count, "", 0, 1, integer=True, minimum=0, maximum=20))
+        ps.row("Infill density", NumberField(self.v_infill_density, "%", 0, 5, minimum=0, maximum=100))
+        ps.row("Infill pattern", Combo(self.v_infill_pattern, ["grid", "lines"], width=130))
+        ps.row("Bottom layers", NumberField(self.v_bottom_layers, "", 0, 1, integer=True, minimum=0, maximum=50))
+        ps.row("Top layers", NumberField(self.v_top_layers, "", 0, 1, integer=True, minimum=0, maximum=50))
+        ps.row("Flow", NumberField(self.v_flow, "%", 0, 5, minimum=0))
+        ps.row("First layer flow", NumberField(self.v_first_layer_flow, "%", 0, 5, minimum=0))
+        bv.addWidget(ps); bv.addWidget(divider())
+
+        mm = Section("Machine + motion", expanded=False)
+        mm.row("Arms", Segmented(self.v_num_arms, [(1, "1"), (2, "2")]))
+        mm.full(Check("Use turntable (off = Cartesian plate)", self.v_use_turntable))
+        mm.full(Check("Turntable coordinates infill too", self.v_tt_for_infill))
+        mm.row("Print speed", NumberField(self.v_print_speed, "mm/s", 1, 1))
+        mm.row("Travel speed", NumberField(self.v_travel_speed, "mm/s", 1, 5))
+        mm.row("Max arm speed", NumberField(self.v_max_arm_speed, "mm/s", 1, 5))
+        mm.row("Max turntable speed", NumberField(self.v_max_tt_speed, "rad/s", 2, 0.1))
+        mm.row("Corner blend radius", NumberField(self.v_blend_radius, "mm", 2, 0.1, minimum=0))
+        mm.row("Wall arc resolution", NumberField(self.v_max_seg, "mm", 2, 0.1, minimum=0))
+        mm.row("Min segment length", NumberField(self.v_min_seg, "mm", 2, 0.1, minimum=0))
+        mm.row("Part offset X", NumberField(self.v_part_off_x, "mm", 1, 1))
+        mm.row("Part offset Y", NumberField(self.v_part_off_y, "mm", 1, 1))
+        mm.row("Arm 1 azimuth", NumberField(self.v_az_left, "°", 1, 5))
+        mm.row("Arm 2 azimuth", NumberField(self.v_az_right, "°", 1, 5))
+        bv.addWidget(mm); bv.addWidget(divider())
+
+        cal = Section("Calibration (turntable axis, arm frame)", expanded=False)
+        cal.row("Centre X", NumberField(self.v_center_x, "mm", 1, 0.1))
+        cal.row("Centre Y", NumberField(self.v_center_y, "mm", 1, 0.1))
+        cal.row("Centre Z", NumberField(self.v_center_z, "mm", 1, 0.1))
+        cal.row("Z base", NumberField(self.v_z_base, "mm", 1, 0.1), "World Z of model z = 0")
+        cal.row("Filament diameter", NumberField(self.v_filament, "mm", 2, 0.05))
+        bv.addWidget(cal); bv.addWidget(divider())
+        bv.addWidget(Check("Write debug log while printing", self.v_debug))
+        v.addWidget(box)
+        v.addStretch(1)
+        sa = scroll(inner)
+        sa.setMinimumWidth(380)
+        return sa
+
+    def _right(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(8, 0, 0, 0)
+        v.setSpacing(0)
+        vs = QSplitter(Qt.Vertical)
+        vs.setHandleWidth(12)
+
+        prev = Card("Layer preview")
+        for kind, col in theme.KIND_COLOR.items():
+            prev.add_header_widget(Dot(col, 8))
+            lb = label(kind.replace("_", " ").title(), "Muted")
+            lb.setStyleSheet("font-size:12px; margin-right:8px;")
+            prev.add_header_widget(lb)
+        self.canvas = LayerView()
+        prev.add(self.canvas, 1)
+        self.layer_slider = QSlider(Qt.Horizontal)
+        self.layer_slider.setRange(0, 0)
+        self.layer_slider.valueChanged.connect(lambda i: self.canvas.show_layer(self.slice_result, i))
+        self.layer_lbl = label("Layer", "Muted")
+        self.layer_slider.valueChanged.connect(lambda i: self.layer_lbl.setText(f"Layer {i + 1}"))
+        prev.add(hrow(self.layer_lbl, self.layer_slider))
+        vs.addWidget(prev)
+
+        rep = Card("Report and motion debug")
+        self.stats_text = QPlainTextEdit()
+        self.stats_text.setReadOnly(True)
+        self.stats_text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        rep.add(self.stats_text, 1)
+        vs.addWidget(rep)
+        vs.setSizes([600, 240])
+        v.addWidget(vs)
+        return w
+
+    # ------------------------------------------------------------------ logic
+    def _log(self, text, append=False):
+        if not append:
+            self.stats_text.clear()
+        self.stats_text.appendPlainText(text)
+
+    def _settings(self):
+        from slicer import SliceSettings
+        return SliceSettings(
+            layer_height=float(self.v_layer_height.get()),
+            line_width=float(self.v_line_width.get()),
+            wall_count=int(self.v_wall_count.get()),
+            infill_density=max(0.0, min(1.0, float(self.v_infill_density.get()) / 100.0)),
+            infill_pattern=self.v_infill_pattern.get(),
+            top_layers=int(self.v_top_layers.get()),
+            bottom_layers=int(self.v_bottom_layers.get()),
+        )
+
+    def _planner_config(self):
+        from planner import PlannerConfig
+        az = (math.radians(float(self.v_az_left.get())), math.radians(float(self.v_az_right.get())))
+        return PlannerConfig(
+            num_arms=int(self.v_num_arms.get()),
+            use_turntable=bool(self.v_use_turntable.get()),
+            turntable_for_infill=bool(self.v_tt_for_infill.get()),
+            center=(float(self.v_center_x.get()), float(self.v_center_y.get()), float(self.v_center_z.get())),
+            z_base=float(self.v_z_base.get()),
+            part_offset=(float(self.v_part_off_x.get()), float(self.v_part_off_y.get())),
+            arm_azimuths=az,
+            max_arm_speed=float(self.v_max_arm_speed.get()),
+            max_tt_speed=float(self.v_max_tt_speed.get()),
+            print_speed=float(self.v_print_speed.get()),
+            travel_speed=float(self.v_travel_speed.get()),
+            line_width=float(self.v_line_width.get()),
+            layer_height=float(self.v_layer_height.get()),
+            filament_diameter=float(self.v_filament.get()),
+            flow_multiplier=float(self.v_flow.get()) / 100.0,
+            first_layer_flow=float(self.v_first_layer_flow.get()) / 100.0,
+            min_segment_length=float(self.v_min_seg.get()),
+            max_segment_length=float(self.v_max_seg.get()),
+            extruder_tool=0,
+        )
+
+    def import_model(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import model", "",
+                                              "3D models (*.3mf *.stl *.obj *.ply);;All files (*)")
+        if not path:
+            return
+        self.load_model(path)
+
+    def load_model(self, path):
+        self.model_path = path
+        self.slice_result = None
+        self.program = None
+        self.v_model.set(os.path.basename(path))
+        self.v_status.set(f"Loaded {os.path.basename(path)}. Next: Slice + preview.")
+        self._log(f"Imported {os.path.basename(path)}")
+        self.canvas.show_layer(None, 0)
+
+    def do_slice(self):
+        if not self.model_path:
+            QMessageBox.warning(self, "Slicer", "Import a model first.")
+            return
+        try:
+            from slicer import slice_model
+        except Exception as e:
+            QMessageBox.critical(self, "Slicer", f"Slicing packages unavailable:\n{e}\n\n"
+                                 "pip install trimesh shapely numpy scipy networkx")
+            return
+        try:
+            self.slice_result = slice_model(self.model_path, self._settings())
+        except Exception as e:
+            QMessageBox.critical(self, "Slice failed", str(e))
+            return
+        n = len(self.slice_result.layers)
+        self.layer_slider.setRange(0, max(0, n - 1))
+        self.layer_slider.setValue(n // 2)
+        self.canvas.show_layer(self.slice_result, n // 2)
+        self._log("Sliced: " + self.slice_result.summary())
+        self.do_plan()
+
+    def do_plan(self):
+        if not self.slice_result:
+            return
+        try:
+            from planner import plan, analyze, dt_stats, extrusion_runs
+        except Exception as e:
+            QMessageBox.critical(self, "Planner", f"Planner unavailable:\n{e}")
+            return
+        cfg = self._planner_config()
+        self.program = plan(self.slice_result, cfg)
+        st = analyze(self.program)
+        dts = dt_stats(self.program)
+        mode = "polar (turntable coordinated)" if cfg.use_turntable else "cartesian (fixed plate)"
+        lines = [f"Motion plan: {mode}",
+                 f"  points: {len(self.program.steps)}   est. time: {st.total_time / 60:.1f} min",
+                 f"  extrusion paths: {len(extrusion_runs(self.program))}",
+                 f"  arm avg {st.arm_avg_speed[0]:.1f} / peak {st.arm_peak_speed[0]:.1f} mm/s"]
+        if cfg.use_turntable:
+            lines.append(f"  turntable: {st.tt_travel / (2 * math.pi):.1f} turns, {st.tt_reversals} reversals")
+        lines.append(f"  dt(ms): min {dts['dt_ms_min']} / avg {dts['dt_ms_avg']} / max {dts['dt_ms_max']}")
+        self._log("\n".join(lines), append=True)
+        self.v_status.set(f"Planned: {len(self.program.steps)} points, about {st.total_time / 60:.1f} min. Ready to print.")
+
+    def start_print(self):
+        if self.printing or self.app.printing or self.app.busy:
+            return
+        if not self.program:
+            QMessageBox.warning(self, "Print", "Slice a model first (steps 1 and 2).")
+            return
+        if not getattr(self.app, "hw_connected", False):
+            QMessageBox.warning(self, "Print", "Hardware not connected (Machine ▸ Connections).")
+            return
+        if not self.app.ui.confirm("Confirm print", "Stream the planned motion to the machines now?"):
+            return
+        self._launch(dry=False)
+
+    def start_dry_run(self):
+        if self.printing:
+            return
+        if not self.program:
+            QMessageBox.warning(self, "Dry run", "Slice a model first (steps 1 and 2).")
+            return
+        self._launch(dry=True)
+
+    def _launch(self, dry):
+        self.printing = True
+        self.stop_requested = False
+        if not dry:
+            self.app.job_name.set(self.v_model.get() or "Model")
+            self.app.job_state.set("running")
+        threading.Thread(target=self._run, kwargs=dict(dry=dry), daemon=True).start()
+
+    def stop_print(self):
+        self.stop_requested = True
+
+    def _connected_arms(self):
+        arms = []
+        if getattr(self.app, "right", None) is not None:
+            arms.append((self.app.right, 0))
+        if getattr(self.app, "left", None) is not None:
+            arms.append((self.app.left, 1))
+        return arms
+
+    def _run(self, dry=False):
+        from planner import extrusion_runs, dt_stats
+        prog = self.program
+        cfg = prog.config
+        app = self.app
+        pidx = 0
+        runs = extrusion_runs(prog, pidx)
+        debug = bool(self.v_debug.get()) or dry
+        stats = dt_stats(prog, pidx)
+        active = [] if dry else self._connected_arms()
+        blend = float(self.v_blend_radius.get())
+        tool = cfg.extruder_tool
+        try:
+            if not dry and len(active) < cfg.num_arms:
+                raise RuntimeError(f"Plan uses {cfg.num_arms} arm(s) but only {len(active)} connected. "
+                                   "Switch the arms on in Connections.")
+            f = writer = None
+            if debug:
+                try:
+                    f = open(self._debug_csv_path(), "w", newline="")
+                    writer = csvmod.writer(f)
+                    writer.writerow(["i", "t_s", "dt_ms", "layer", "kind", "move",
+                                     "x", "y", "z", "yaw", "tt_deg", "e_mm", "feed_mm_s"])
+                except Exception as e:
+                    logger.warning("Could not open debug CSV: %s", e)
+            panel_rows = []
+            sample = max(1, len(prog.steps) // 40)
+            t = 0.0
+            for si, step in enumerate(prog.steps):
+                if self.stop_requested:
+                    break
+                dt = max(step.dt, 1e-3)
+                at = step.arms[pidx] if pidx < len(step.arms) else None
+                feed_dbg = ""
+                run = runs.get(si)
+                if run:
+                    total_e, feed = run
+                    feed_dbg = feed
+                    if not dry and app.extruder is not None and total_e > 0 and feed > 0:
+                        app.extruder.extrude(tool, total_e, feed, wait=False)
+                if not dry and cfg.use_turntable and app.turntable is not None:
+                    cur = app.turntable.get_angle()
+                    err = ((step.tt_angle_deg - cur + 180.0) % 360.0) - 180.0
+                    vmax = math.degrees(cfg.max_tt_speed)
+                    vel = max(-vmax, min(vmax, err / dt))
+                    app.turntable.rotate_velocity(vel)
+                if at is not None and not dry and active:
+                    arm, _tool = active[pidx]
+                    self._move_arm(arm, at, cfg.max_arm_speed, blend)
+                if debug:
+                    row = [si, round(t, 4), round(dt * 1000, 2), step.layer, step.kind,
+                           ("EXTRUDE" if (at and at.extrude) else "travel"),
+                           (at.x if at else ""), (at.y if at else ""), (at.z if at else ""),
+                           (at.yaw if at else ""), round(step.tt_angle_deg, 3),
+                           (at.e if at else 0.0), feed_dbg]
+                    if writer:
+                        writer.writerow(row)
+                    if si < 40 or si % sample == 0:
+                        panel_rows.append(row)
+                if not dry:
+                    time.sleep(dt)
+                t += dt
+                if si % 50 == 0:
+                    frac = (si + 1) / max(1, len(prog.steps))
+                    app.ui.post(lambda fr=frac, d=dry:
+                                self.v_status.set(("Dry run " if d else "Printing ") + f"{fr * 100:.0f}%"))
+                    if not dry:
+                        app.ui.post(lambda tt=t: app.elapsed_time_var.set(f"{int(tt) // 60:02d}:{int(tt) % 60:02d}"))
+            if not dry:
+                if app.turntable is not None:
+                    app.turntable.stop_rotation()
+                if app.extruder is not None:
+                    try:
+                        app.extruder.send_gcode("M18 E")
+                    except Exception:
+                        pass
+            if f:
+                f.close()
+            summary = self._summary(dry, stats, runs)
+            app.ui.post(lambda s=summary, r=list(panel_rows): self._show_debug(s, r))
+            app.ui.post(lambda d=dry: self.v_status.set(
+                "Dry run complete." if d else ("Stopped." if self.stop_requested else "Print complete.")))
+        except Exception as e:
+            if not dry and app.turntable is not None:
+                try:
+                    app.turntable.stop_rotation()
+                except Exception:
+                    pass
+            app.ui.error("Motion error", str(e))
+        finally:
+            self.printing = False
+            if not dry:
+                app.ui.post(lambda: app.job_state.set("idle"))
+
+    def _move_arm(self, arm, at, speed, blend):
+        try:
+            if blend and blend > 0:
+                arm.arm.set_position(x=at.x, y=at.y, z=at.z, roll=at.roll, pitch=at.pitch,
+                                     yaw=at.yaw, speed=speed, radius=blend, wait=False)
+            else:
+                arm.arm.set_position(x=at.x, y=at.y, z=at.z, roll=at.roll, pitch=at.pitch,
+                                     yaw=at.yaw, speed=speed, wait=False)
+        except TypeError:
+            arm.move_to(at.x, at.y, at.z, roll=at.roll, pitch=at.pitch, yaw=at.yaw,
+                        speed=speed, wait=False)
+
+    def _summary(self, dry, stats, runs):
+        return (f"{'DRY RUN' if dry else 'PRINT'} - {stats['steps']} points, "
+                f"{stats['total_time_s'] / 60:.1f} min\n"
+                f"dt(ms): min {stats['dt_ms_min']} / avg {stats['dt_ms_avg']} / max {stats['dt_ms_max']}  "
+                f"(steps <5ms: {stats['steps_under_5ms']})\n"
+                f"segment(mm): avg {stats['seg_mm_avg']} / max {stats['seg_mm_max']}\n"
+                f"extrusion paths: {len(runs)}\n"
+                f"full per-point log: {self._debug_csv_path()}")
+
+    def _show_debug(self, summary, rows):
+        self._log(summary)
+        if rows:
+            hdr = f"{'#':>6} {'t(s)':>8} {'dt(ms)':>7} {'lyr':>4} {'kind':<10} {'move':<8} " \
+                  f"{'x':>8} {'y':>8} {'z':>7} {'ttdeg':>8} {'e':>6}"
+            self._log(hdr, append=True)
+            for r in rows:
+                self._log(f"{r[0]:>6} {r[1]:>8} {r[2]:>7} {r[3]:>4} {str(r[4]):<10} {str(r[5]):<8} "
+                          f"{str(r[6]):>8} {str(r[7]):>8} {str(r[8]):>7} {str(r[10]):>8} {str(r[11]):>6}",
+                          append=True)
