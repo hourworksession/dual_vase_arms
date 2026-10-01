@@ -119,33 +119,19 @@ _WORD = re.compile(r"([A-Za-z])\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)")
 def from_gcode(text, layer_height=0.2, filament_diameter=1.75, arc_seg=0.5):
     """Parse G0/G1 (and G2/G3 arcs) with absolute or relative XYZ (G90/G91) and
     E (M82/M83), G92 resets. Width per segment comes from the filament used:
-    w = dE * filament_area / (length * layer_height)."""
+    w = dE * filament_area / (length * h), where h is the file's own layer height
+    (from its Z steps) or `layer_height` for spiral G-code with no distinct layers."""
     area = math.pi * (filament_diameter / 2) ** 2
     x = y = z = 0.0
     e = 0.0
     rel_xyz = False
     rel_e = False
-    paths = []
-    cur, cur_ext = [], None
+    segs = []                                   # (start, end, de)
     seen_move = False
-
-    def push(pt, extruding):
-        nonlocal cur, cur_ext
-        if cur_ext is None or extruding != cur_ext:
-            if len(cur) >= 2:
-                paths.append(_path(cur, cur_ext))
-            last = cur[-1] if cur else None
-            cur, cur_ext = ([last] if last is not None else []), extruding
-        cur.append(pt)
 
     def seg_to(nx, ny, nz, de):
         nonlocal x, y, z
-        length = math.dist((x, y, z), (nx, ny, nz))
-        extruding = de > 1e-7 and length > 1e-6
-        w = (de * area / (length * layer_height)) if extruding else 0.4
-        if not cur:
-            push((x, y, z, w, layer_height), extruding)
-        push((nx, ny, nz, w, layer_height), extruding)
+        segs.append(((x, y, z), (nx, ny, nz), de))
         x, y, z = nx, ny, nz
 
     for raw in text.splitlines():
@@ -185,8 +171,6 @@ def from_gcode(text, layer_height=0.2, filament_diameter=1.75, arc_seg=0.5):
                 e = e + words["E"] if rel_e else words["E"]
             else:
                 de = 0.0
-            if cmd == "G0":
-                de = max(de, 0.0) if de > 0 else 0.0
             if cmd in ("G2", "G3") and ("I" in words or "J" in words):
                 cx, cy = x + words.get("I", 0.0), y + words.get("J", 0.0)
                 r = math.hypot(x - cx, y - cy)
@@ -208,13 +192,42 @@ def from_gcode(text, layer_height=0.2, filament_diameter=1.75, arc_seg=0.5):
                     continue          # stationary extrusion (priming): no path
                 seg_to(nx, ny, nz, de)
             seen_move = True
-    if len(cur) >= 2:
-        paths.append(_path(cur, cur_ext))
     if not seen_move:
         raise GeneratorError("No G0/G1 moves found in this G-code.")
-    return {"paths": paths, "source": "gcode",
-            "notes": [f"Line widths estimated from E using {filament_diameter} mm filament and "
-                      f"{layer_height} mm layer height."]}
+
+    # layer heights from the distinct Z levels of extruding moves
+    ext_z = [round(b[2], 4) for a, b, de in segs if de > 1e-7 and abs(a[2] - b[2]) < 1e-6]
+    levels = sorted(set(ext_z))
+    notes = []
+    h_of = {}
+    if levels and len(levels) <= 0.2 * max(1, len(ext_z)):
+        steps = [b - a for a, b in zip(levels[:-1], levels[1:])]
+        h_main = sorted(steps)[len(steps) // 2] if steps else (levels[0] if levels[0] > 0 else layer_height)
+        for i, zl in enumerate(levels):
+            h = (zl - levels[i - 1]) if i else zl
+            h_of[zl] = h if 0.03 <= h <= 2.0 else h_main
+        notes.append(f"Line widths estimated from E with the file's layer height ({h_main:.3f} mm) and "
+                     f"{filament_diameter} mm filament.")
+    else:
+        notes.append(f"No distinct layers (spiral G-code?): widths estimated from E with a {layer_height} mm "
+                     f"layer height (Defaults) and {filament_diameter} mm filament.")
+
+    paths = []
+    cur, cur_ext = [], None
+    for a, b, de in segs:
+        length = math.dist(a, b)
+        extruding = de > 1e-7 and length > 1e-6
+        h = h_of.get(round(b[2], 4), layer_height)
+        w = (de * area / (length * h)) if extruding else 0.4
+        if cur_ext is None or extruding != cur_ext:
+            if len(cur) >= 2:
+                paths.append(_path(cur, cur_ext))
+            cur = [cur[-1]] if cur else [(a[0], a[1], a[2], w, h)]
+            cur_ext = extruding
+        cur.append((b[0], b[1], b[2], w, h))
+    if len(cur) >= 2:
+        paths.append(_path(cur, cur_ext))
+    return {"paths": paths, "source": "gcode", "notes": notes}
 
 
 def looks_like_gcode(text):

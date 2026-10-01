@@ -38,6 +38,9 @@ from cell_studio import sim_hardware as sim
 HOME_TMP = os.path.join(ROOT, "tests", "_home_positions_test.json")
 home_config.HOME_FILE = HOME_TMP
 
+from cell_studio import macros as _macros, tool as _tool
+_macros.ALIGN_FILE = os.path.join(ROOT, "tests", "_alignment_test.json")
+_tool.TOOL_FILE = os.path.join(ROOT, "tests", "_tool_test.json")
 from cell_studio.main_window import MainWindow
 
 MODE = "streamed" if "--mode" in sys.argv and sys.argv[sys.argv.index("--mode") + 1] == "streamed" else "single"
@@ -110,8 +113,9 @@ class Ctx:
         sim.reset()
         MSGS.clear()
         ANSWERS.clear()
-        if os.path.exists(HOME_TMP):
-            os.remove(HOME_TMP)
+        for f in (HOME_TMP, _macros.ALIGN_FILE, _tool.TOOL_FILE):
+            if os.path.exists(f):
+                os.remove(f)
         self.w = MainWindow()
         self.w.resize(1480, 920)
         self.w.show()
@@ -983,6 +987,252 @@ def s66(x):
     x.expect(not bad, "Overlapping or clipped widgets: " + ", ".join(sorted(set(bad))[:5]))
 
 
+
+# ---------------------------------------------------------------- macros
+import math as _math
+
+
+def calibrate(x, timeout=150):
+    m = x.w.macros
+    x.w.go(4)
+    m.v_print_speed.set(1.2)
+    ANSWERS.extend([True])
+    m.run_calibration()
+    x.wait_for(lambda: x.c.printing, 3)
+    t = time.time()
+    while x.c.printing and time.time() - t < timeout:
+        pump(0.1)
+    pump(0.2)
+    return m
+
+
+def run_spirals(x, fn, timeout=120):
+    m = x.w.macros
+    ANSWERS.extend([True])
+    fn()
+    t = time.time()
+    while (m.proc is not None or x.c.printing) and time.time() - t < timeout:
+        pump(0.1)
+    pump(0.2)
+    return m
+
+
+def expected_merge(x, err, s_radius=40.0, angle=135.0, z=0.6):
+    from cell_studio.geometry import CellGeometry
+    g = CellGeometry(x.c)
+    a = _math.radians(angle)
+    p = g.to_arm("left", (s_radius * _math.cos(a), s_radius * _math.sin(a), z))
+    true = tuple(g.centre("left")[i] + err[i] for i in range(3))
+    w = g.to_world("left", p, centre=true)
+    return s_radius - _math.hypot(w[0], w[1]), -err[2]
+
+
+@scenario("Wil (owner)", "15:00", "Merge calibration finds a hidden left-arm error, applies it, re-checks")
+def s67(x):
+    err = (0.7, -0.4, -0.15)
+    sim.FAULTS["frame_error"] = {"left": err}
+    x.connect()
+    eo, ez = expected_merge(x, err)
+    m = calibrate(x)
+    r = m.result
+    x.expect(r is not None, f"Calibration failed: {m.res_lbl.text()}")
+    if r is None:
+        return
+    x.expect(abs(r.merge_offset_mm - eo) < 0.06, f"Merge offset {r.merge_offset_mm:+.3f} mm, expected {eo:+.3f}")
+    x.expect(abs(r.height_diff_mm - ez) < 0.03, f"Height difference {r.height_diff_mm:+.3f} mm, expected {ez:+.3f}")
+    ANSWERS.extend([True])
+    m.apply_result()
+    n = len(MSGS)
+    m = calibrate(x)
+    x.expect(m.result is None and "already sees material" in m.res_lbl.text(),
+             "Re-ran on top of the old rings without noticing the disc was not cleared")
+    sim.WORLD.reset()                         # operator clears the disc
+    m = calibrate(x)
+    r2 = m.result
+    x.expect(r2 is not None and abs(r2.merge_offset_mm) < 0.05 and abs(r2.height_diff_mm) < 0.03,
+             f"Second calibration after applying is not ~0: offset {r2.merge_offset_mm if r2 else None}, "
+             f"height {r2.height_diff_mm if r2 else None}")
+
+
+@scenario("Liam (technician)", "15:20", "Extruder wiring is the other way round from the panel's setting")
+def s68(x):
+    x.connect()
+    sim.WORLD.tool_for_arm = {"right": 1, "left": 0}
+    m = calibrate(x)
+    x.expect(m.result is None and "other way round" in m.res_lbl.text(),
+             f"No clear hint about the tool wiring: {m.res_lbl.text()[:120]}")
+
+
+@scenario("Omar (visiting engineer)", "15:40", "Camera mounted on the other side (image mirrored)")
+def s69(x):
+    sim.FAULTS["frame_error"] = {"left": (0.5, 0, 0)}
+    x.connect()
+    x.w.macros.v_outward_right.set(False)
+    eo, _ = expected_merge(x, (0.5, 0, 0))
+    m = calibrate(x)
+    r = m.result
+    x.expect(r is not None and abs(r.merge_offset_mm - eo) < 0.06,
+             f"Wrong result with the camera setting the wrong way round: {r.merge_offset_mm if r else m.res_lbl.text()[:80]} "
+             f"(expected {eo:+.3f})")
+    x.expect(r is not None and any("larger radius to the right" in n_ for n_ in r.notes),
+             "No note that the camera orientation setting is wrong")
+
+
+@scenario("Priya (MSc)", "16:00", "Runs calibration with the simulated camera but nothing connected")
+def s70(x):
+    m = x.w.macros
+    x.w.go(4)
+    n = len(MSGS)
+    m.run_calibration(); pump(0.2)
+    x.expect(not x.c.printing and x.said(n, "not connected"), "Calibration started without the arms")
+
+
+@scenario("Hassan (research fellow)", "16:20", "Prints the confirmation spirals after calibrating")
+def s71(x):
+    x.connect()
+    x.c.turntable_speed_var.set(2.0)
+    mk = x.mark()
+    run_spirals(x, x.w.macros.confirm_spirals)
+    ext = x.log_since(mk, cmd="extrude_sync")
+    both = [e for e in ext if e[3][0] > 0 and e[3][2] > 0]
+    x.expect(len(both) > 20, f"Both tools should extrude together ({len(both)} of {len(ext)} chunks)")
+    moves = {s_: len(x.log_since(mk, dev=s_, cmd="move")) for s_ in ("left", "right")}
+    x.expect(min(moves.values()) > 30, f"Both arms should follow their spirals: {moves}")
+    x.expect(x.c.turntable.velocity == 0 and x.c.job_state.get() == "idle", "Did not finish cleanly")
+    x.expect(x.said(0, "no merge calibration"), "No warning that no calibration was applied")
+
+
+@scenario("Kate (MSc)", "16:40", "Pauses the dual vase, then hits EMERGENCY STOP")
+def s72(x):
+    x.connect()
+    m = x.w.macros
+    x.c.turntable_speed_var.set(1.5)
+    m.v_dv["height"].set(6.0)
+    ANSWERS.extend([True])
+    m.start_dual()
+    x.wait_for(lambda: x.c.printing and x.c.turntable.velocity != 0, 30)
+    pump(0.8)
+    x.c.toggle_pause(); pump(0.6)
+    x.expect(x.c.turntable.velocity == 0, "Pause did not stop the disc")
+    x.expect(x.c.extruder.busy_until - time.time() < 0.5, "Filament still queued long after pausing")
+    x.c.toggle_pause(); pump(0.5)
+    mk = x.mark()
+    ANSWERS.append(True); x.w._estop(); x.wait_idle(5)
+    after = [e for e in x.log_since(mk) if e[2] in ("move", "extrude_sync")]
+    x.expect(not after, f"{len(after)} commands sent after the E-stop")
+
+
+@scenario("Noor (PhD)", "17:00", "Starts the dual vase from different angles than she calibrated at")
+def s73(x):
+    x.connect()
+    m = calibrate(x)
+    if m.result is None:
+        x.expect(False, "calibration failed")
+        return
+    ANSWERS.extend([True])
+    m.apply_result()
+    m.v_right_angle.set(0.0)
+    m.v_left_angle.set(180.0)
+    n = len(MSGS)
+    ANSWERS.extend([False])                 # read the warning, then cancel
+    m.start_dual()
+    t = time.time()
+    while m.proc is not None and time.time() - t < 30:
+        pump(0.1)
+    pump(0.2)
+    x.expect(x.said(n, "from where it was calibrated"), "No warning about printing away from the calibrated angles")
+    x.expect(not x.c.printing, "Started although she cancelled")
+
+
+@scenario("Erin (MSc)", "17:20", "Speeds the disc up mid dual vase: the flow must follow")
+def s74(x):
+    x.connect()
+    m = x.w.macros
+    x.c.turntable_speed_var.set(0.8)
+    m.v_dv["height"].set(12.0)
+    ANSWERS.extend([True])
+    mk = x.mark()
+    m.start_dual()
+    x.wait_for(lambda: len(x.log_since(mk, cmd="extrude_sync")) > 3, 40)
+    slow = [e[3][1] for e in x.log_since(mk, cmd="extrude_sync")][-1]
+    mk2 = x.mark()
+    x.c.turntable_speed_var.set(1.6)
+    x.wait_for(lambda: len(x.log_since(mk2, cmd="extrude_sync")) > 3, 20)
+    fast = [e[3][1] for e in x.log_since(mk2, cmd="extrude_sync")][-1]
+    x.expect(1.6 < fast / slow < 2.4, f"Feed went {slow:.3f} → {fast:.3f} mm/s when the disc doubled its speed")
+    x.c.stop_print(); x.wait_idle(10)
+
+
+@scenario("George (slicer author)", "17:40", "Slices a model with the stand-in slicer from the Macros page")
+def s75(x):
+    m = x.w.macros
+    x.w.go(4)
+    n = len(MSGS)
+    m.v_slice_model.set("")
+    m.slice_in_generators(); pump(0.1)
+    x.expect(x.said(n, "model"), "No prompt to choose a model")
+    m.v_slice_model.set(os.path.join(ROOT, "scripts", "cube40.3mf"))
+    m.slice_in_generators()
+    g = x.w.generators
+    t = time.time()
+    while (g.proc is not None or g.planning) and time.time() - t < 60:
+        pump(0.1)
+    x.expect(g.program is not None and g.program.config.num_arms == 1,
+             f"Stand-in slicer not planned for the right arm: {g.v_gen_status.get()} {report(x)[:150]}")
+
+
+@scenario("George (slicer author)", "17:50", "His plain FullControl slicer script reads MODEL_PATH")
+def s76(x):
+    path = gen_file("george_slicer.py", (
+        "import fullcontrol as fc\nimport trimesh\nMODEL_PATH = 'part.stl'\nLAYER = 0.6\n"
+        "mesh = trimesh.load(MODEL_PATH, force='mesh')\nzmax = float(mesh.bounds[1][2])\n"
+        "steps = []\nfor i in range(3):\n    steps += fc.circleXY(fc.Point(x=0, y=0, z=LAYER*(i+1)), zmax, 0, 48)\n"
+        "fc.transform(steps, 'plot')\n"))
+    g = x.w.generators
+    x.w.go(3)
+    g.load_meta(_lib.read_meta(path))
+    x.expect(g.model_row.isVisible(), "No model row for a script with a MODEL_PATH constant")
+    g.set_model(os.path.join(ROOT, "scripts", "cube40.3mf"))
+    g.generate()
+    t = time.time()
+    while (g.proc is not None or g.planning) and time.time() - t < 60:
+        pump(0.1)
+    x.expect(g.tp is not None and abs(g.tp_stats["size"][0] - 2 * 40.0) < 1.5,
+             f"MODEL_PATH not replaced by the chosen model: {g.v_gen_status.get()} {report(x)[:150]}")
+
+
+@scenario("Wil (owner)", "18:00", "Sets the new vertical nozzle in Tool and nozzle, runs a cylinder")
+def s77(x):
+    x.connect()
+    x.c.tool = dict(x.c.tool, pitch=0.0, roll=180.0, yaw=20.0)
+    x.quick_cylinder(0.3)
+    mk = x.mark(); ANSWERS.extend([True] * 3)
+    x.c.start_cylinder(); x.wait_idle(8)
+    moves = x.log_since(mk, dev="right", cmd="move")
+    pitches = {round(e[3][0][4], 1) for e in moves}
+    x.expect(pitches == {0.0}, f"Cylinder commanded pitch {sorted(pitches)} with a vertical nozzle set")
+
+
+@scenario("Yusuf (on a laptop)", "18:20", "Uses the Macros tab at 1280 px")
+def s78(x):
+    from PySide6.QtWidgets import QPushButton, QWidget
+    x.w.resize(1280, 720); x.w.go(4); pump(0.2)
+    bad = []
+    root = x.w.macros
+    for wdg in root.findChildren(QWidget):
+        if not wdg.isVisibleTo(root):
+            continue
+        sibs = [s_ for s_ in wdg.children() if isinstance(s_, QWidget) and s_.isVisibleTo(root) and not s_.isWindow()]
+        for i, a in enumerate(sibs):
+            for b in sibs[i + 1:]:
+                r = a.geometry().intersected(b.geometry())
+                if r.width() > 2 and r.height() > 2:
+                    bad.append(f"{type(a).__name__} x {type(b).__name__}")
+        if isinstance(wdg, QPushButton) and wdg.width() + 1 < wdg.sizeHint().width():
+            bad.append(f"squeezed '{wdg.text()}'")
+    x.expect(not bad, "Overlapping or clipped widgets: " + ", ".join(sorted(set(bad))[:5]))
+
+
 # ---------------------------------------------------------------- runner
 def run(selected=None):
     rows = []
@@ -1015,7 +1265,8 @@ if __name__ == "__main__":
     if "--json" in sys.argv:
         with open(sys.argv[sys.argv.index("--json") + 1], "w") as f:
             json.dump(rows, f, indent=1)
-    if os.path.exists(HOME_TMP):
-        os.remove(HOME_TMP)
+    for f in (HOME_TMP, _macros.ALIGN_FILE, _tool.TOOL_FILE):
+        if os.path.exists(f):
+            os.remove(f)
     bad = [r for r in rows if r["status"] in ("FLAW", "ERROR")]
     print(f"\n{len(rows) - len(bad)} passed, {len(bad)} with flaws or errors")

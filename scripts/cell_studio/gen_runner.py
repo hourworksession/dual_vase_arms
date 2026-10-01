@@ -47,6 +47,9 @@ def _rewrite_constants(src, path, values):
 def run(path, job):
     params = job.get("params", {}) or {}
     defaults = job.get("defaults", {}) or {}
+    model = job.get("model")
+    if model and not os.path.isfile(model):
+        raise tpmod.GeneratorError(f"Model file not found: {model}")
     if path.lower().endswith((".gcode", ".gco", ".g", ".nc")):
         with open(path, encoding="utf-8", errors="replace") as f:
             return tpmod.from_gcode(f.read(), defaults.get("layer_height", 0.2),
@@ -74,7 +77,9 @@ def run(path, job):
     sys.argv = [path]
     with open(path, encoding="utf-8") as f:
         src = f.read()
-    consts = job.get("constants") or {}
+    consts = dict(job.get("constants") or {})
+    if model and job.get("model_const"):
+        consts[job["model_const"]] = model          # a plain script's MODEL_PATH = "..." points at our model
     code = _rewrite_constants(src, path, consts) if consts else compile(src, path, "exec")
     module = type(sys)("cell_generator")
     module.__file__ = path
@@ -87,8 +92,30 @@ def run(path, job):
                                        "computer:\n  pip install git+https://github.com/FullControlXYZ/fullcontrol")
         raise
 
+    spec = module.__dict__.get("PARAMS")
+    if isinstance(spec, dict):              # fill anything the panel did not send from PARAMS defaults
+        for k, v in spec.items():
+            if k not in params:
+                if isinstance(v, dict):
+                    params[k] = v.get("default", v.get("value"))
+                elif isinstance(v, (tuple, list)) and v:
+                    params[k] = v[0]
+                else:
+                    params[k] = v
+    slicer = module.__dict__.get("slice")
+    if callable(slicer) and model:
+        sig = inspect.signature(slicer)
+        if any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+            kwargs = dict(params)
+        else:
+            kwargs = {k: v for k, v in params.items() if k in sig.parameters}
+        return tpmod.adapt(slicer(model, **kwargs), defaults, fc_transform)
+    if callable(slicer) and not callable(module.__dict__.get("generate")):
+        raise tpmod.GeneratorError("This is a slicer: choose a model file first.")
     gen = module.__dict__.get("generate")
     if callable(gen):
+        if model:
+            params = dict(params, model_path=model)
         sig = inspect.signature(gen)
         if any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
             kwargs = dict(params)
@@ -128,7 +155,7 @@ def _user_traceback(path):
 
 
 def main():
-    path, job_file, out_file = sys.argv[1:4]
+    path, job_file, out_file = [os.path.abspath(a) for a in sys.argv[1:4]]
     with open(job_file) as f:
         job = json.load(f)
     buf = io.StringIO()

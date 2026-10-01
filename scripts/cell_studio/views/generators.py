@@ -46,6 +46,7 @@ class GeneratorsPage(ModelPrintPage):
         self._planned_id = None
         self.planning = False
         self.v_centre = BoolVar(True)
+        self.v_model_file = StrVar("")
         self.v_timeout = DoubleVar(60.0)
         self.v_gen_status = StrVar("")
         super().__init__(ctl, win)
@@ -109,6 +110,13 @@ class GeneratorsPage(ModelPrintPage):
         self.where.setStyleSheet(f"font-family:{theme.FONT_MONO}; font-size:11px;")
         self.where.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.gen_card.add(self.where)
+        self.model_lbl = label("No model chosen", "Muted", wrap=True)
+        self.model_lbl.setStyleSheet(f"font-family:{theme.FONT_MONO}; font-size:11px;")
+        self.model_row = hrow(label("Model", "FieldLabel"), self.model_lbl,
+                              button("Choose…", "ghost", self.choose_model), spacing=10)
+        self.model_row.layout().setStretch(1, 1)
+        self.model_row.setVisible(False)
+        self.gen_card.add(self.model_row)
         self.form_host = QWidget()
         self.form_lay = QVBoxLayout(self.form_host)
         self.form_lay.setContentsMargins(0, 4, 0, 0)
@@ -278,14 +286,30 @@ class GeneratorsPage(ModelPrintPage):
         self.gen_card.title_lbl.setText(m["name"])
         who = f"by {m['author']} · " if m["author"] else ""
         style = {"generate": "generate()", "script": "FullControl script", "build_steps": "build_steps()",
-                 "gcode": "G-code"}.get(m["style"], "?")
+                 "gcode": "G-code", "slicer": "slicer: slice(model_path)"}.get(m["style"], "?")
         self.desc.setText(m["error"] or m["description"] or "No description.")
         self.desc.setStyleSheet(f"color:{theme.WARN};" if m["error"] else "")
         self.where.setText(f"{who}{style}\n{m['path']}")
         self._build_form(m)
+        self.model_row.setVisible(bool(m.get("needs_model")))
+        if m.get("needs_model") and not self.v_model_file.get() and m.get("model_default"):
+            default = os.path.join(os.path.dirname(m["path"]), m["model_default"])
+            if os.path.isfile(default):
+                self.set_model(default)
         self.v_model.set(m["name"])
         self.v_gen_status.set("")
         self._update_buttons()
+
+    def choose_model(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Model to slice", os.path.dirname(self.v_model_file.get() or ""),
+                                              "3D models (*.stl *.3mf *.obj *.ply *.step *.stp);;All files (*)")
+        if path:
+            self.set_model(path)
+
+    def set_model(self, path):
+        self.v_model_file.set(path)
+        self.model_lbl.setText(os.path.basename(path))
+        self.model_lbl.setToolTip(path)
 
     def _build_form(self, m):
         while self.form_lay.count():
@@ -296,7 +320,7 @@ class GeneratorsPage(ModelPrintPage):
                 w.deleteLater()
         self._param_vars = {}
         if not m["params"]:
-            if m["style"] in ("generate", "script", "build_steps"):
+            if m["style"] in ("generate", "script", "build_steps", "slicer"):
                 self.form_lay.addWidget(label("No parameters.", "Muted"))
             return
         saved = self._values.get(m["path"], {})
@@ -363,6 +387,9 @@ class GeneratorsPage(ModelPrintPage):
             return
         if self.proc is not None or self.printing:
             return
+        if m.get("needs_model") and not os.path.isfile(self.v_model_file.get()):
+            QMessageBox.information(self, "Generate", "This is a slicer: choose the model file to slice first.")
+            return
         self._store_values()
         vals = self._param_values()
         job = {"defaults": {"line_width": self.v_line_width.get(), "layer_height": self.v_layer_height.get(),
@@ -371,6 +398,9 @@ class GeneratorsPage(ModelPrintPage):
             job["constants"] = vals
         else:
             job["params"] = vals
+        if m.get("needs_model"):
+            job["model"] = self.v_model_file.get()
+            job["model_const"] = m.get("model_const")
         tmp = tempfile.mkdtemp(prefix="cellgen_")
         self._job = os.path.join(tmp, "job.json")
         self._out = os.path.join(tmp, "result.json")
@@ -563,6 +593,8 @@ class GeneratorsPage(ModelPrintPage):
         snap.pop("v_gen_status", None)
         snap["v_generator_parameters"] = json.dumps(self._param_values(), sort_keys=True, default=str)
         snap["v_generator_file"] = self.meta["path"] if self.meta else None
+        snap.pop("v_model_file", None)
+        snap["v_model_to_slice"] = self.v_model_file.get() if self.meta and self.meta.get("needs_model") else None
         return snap
 
     def _launch(self, dry):

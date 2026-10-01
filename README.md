@@ -75,6 +75,18 @@ python scripts/gleadell_panel_qt.py
   parameters, preview in 3D, then plan / dry run / print through the same planner as
   Model print. See `generators/README.md`. FullControl itself:
   `pip install git+https://github.com/FullControlXYZ/fullcontrol`
+* **Macros**:
+  1. *Merge calibration*: the right arm prints a reference ring and the left arm prints the same layer
+     while sweeping across it. A side camera scans the beads and works out where the left bead lands on
+     the right's (radial offset and height), and how many pixels per mm the camera sees. Then print
+     confirmation spirals.
+  2. *Dual-arm vase*: two FullControl spirals (`generators/macros/dual_vase_interweave.py`), one per arm,
+     sharing one wall (interwoven when the waves are in antiphase). Uses the calibration.
+  3. *George's code as the slicer*: any script with `slice(model_path, ...)`, or a `MODEL_PATH = "…stl"`
+     constant, slices a model in Generators; the right arm prints it.
+  Camera: `pip install opencv-python` (detection itself needs only numpy/scipy).
+* **Settings ▸ Tool and nozzle**: nozzle size, default line width / layer height, and the nozzle
+  orientation sent to both arms (now Revo High Flow 1.2 mm, straight down).
 * **Live panel** (always visible): arm poses, turntable angle, temperatures, job timer,
   and the live turntable speed slider.
 * **Settings ▸ Home positions**: a custom home per arm (joint angles or Cartesian pose,

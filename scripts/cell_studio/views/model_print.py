@@ -93,8 +93,8 @@ class ModelPrintPage(QWidget):
         self._planned_settings = None
 
         # slice settings
-        self.v_layer_height = DoubleVar(0.2)
-        self.v_line_width = DoubleVar(0.4)
+        self.v_layer_height = DoubleVar(ctl.tool["layer_height"])     # Settings ▸ Tool and nozzle
+        self.v_line_width = DoubleVar(ctl.tool["line_width"])
         self.v_wall_count = IntVar(2)
         self.v_infill_density = DoubleVar(20.0)
         self.v_infill_pattern = StrVar("grid")
@@ -328,6 +328,7 @@ class ModelPrintPage(QWidget):
             min_segment_length=float(self.v_min_seg.get()),
             max_segment_length=float(self.v_max_seg.get()),
             extruder_tool=0,
+            orientation=self.app.orientation(),
         )
 
     def redo(self):

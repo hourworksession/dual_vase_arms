@@ -16,6 +16,8 @@ from .views.machine import MachinePage
 from .views.cylinder import CylinderPage
 from .views.model_print import ModelPrintPage
 from .views.generators import GeneratorsPage
+from .views.macros_page import MacrosPage
+from .views.tool_dialog import ToolDialog
 from .views.home_dialog import HomeDialog
 
 JOB_COLOURS = {"idle": theme.FAINT, "running": theme.OK, "paused": theme.WARN,
@@ -62,8 +64,9 @@ class MainWindow(QMainWindow):
         self.cylinder = CylinderPage(self.c, self)
         self.model = ModelPrintPage(self.c, self)
         self.generators = GeneratorsPage(self.c, self)
+        self.macros = MacrosPage(self.c, self)
         self.print_pages = (self.model, self.generators)
-        for p in (self.machine, self.cylinder, self.model, self.generators):
+        for p in (self.machine, self.cylinder, self.model, self.generators, self.macros):
             self.stack.addWidget(p)
 
         centre = QVBoxLayout()
@@ -137,6 +140,7 @@ class MainWindow(QMainWindow):
         m = QMenu(menu_btn)
         a = m.addAction("Home positions…")
         a.triggered.connect(self.open_home_dialog)
+        m.addAction("Tool and nozzle…").triggered.connect(self.open_tool_dialog)
         m.addSeparator()
         self.act_console = m.addAction("Show log console")
         self.act_console.setCheckable(True)
@@ -200,7 +204,7 @@ class MainWindow(QMainWindow):
         v.addSpacing(4)
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
-        for i, text in enumerate(("◎   Machine", "◍   Cylinder", "▦   Model print", "⌬   Generators")):
+        for i, text in enumerate(("◎   Machine", "◍   Cylinder", "▦   Model print", "⌬   Generators", "⟲   Macros")):
             b = QPushButton(text)
             b.setObjectName("NavBtn")
             b.setCheckable(True)
@@ -330,6 +334,18 @@ class MainWindow(QMainWindow):
         self._home_dlg = dlg
         dlg.show()
 
+    def open_tool_dialog(self):
+        from . import tool as toolmod
+        if self.c.printing or self.c.busy:
+            QMessageBox.warning(self, "Tool and nozzle", "Wait for the current job to finish.")
+            return
+        dlg = ToolDialog(self.c, self)
+        if dlg.exec():
+            d = dlg.data()
+            toolmod.save(d)
+            self.c.tool = d
+            logging.getLogger("cell_studio").info("Tool settings saved: %s", d)
+
     def _show_paths(self):
         from . import home_config
         QMessageBox.information(self, "Configuration files",
@@ -338,8 +354,9 @@ class MainWindow(QMainWindow):
                                 "Cylinder presets:  Cylinder ▸ Save config / Load config")
 
     def closeEvent(self, e):
-        if getattr(self.generators, "proc", None) is not None:
-            self.generators.proc.kill()
+        for pg in (self.generators, self.macros):
+            if getattr(pg, "proc", None) is not None:
+                pg.proc.kill()
         c = self.c
         if c.printing or c.busy or any(pg.printing for pg in self.print_pages):
             if not c.ui.confirm("Quit", "A job is running. Quit anyway?\n\n"

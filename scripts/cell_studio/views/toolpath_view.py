@@ -54,8 +54,8 @@ class ToolpathView(QWidget):
                 a = np.asarray(p["p"], dtype=float)[:, :3]
                 a[:, 0] += dx
                 a[:, 1] += dy
-                self.paths.append((a, p["e"]))
-        self.total = sum(len(a) for a, _ in self.paths)
+                self.paths.append((a, p["e"], p.get("arm")))
+        self.total = sum(len(a) for a, _, _ in self.paths)
         self.message = "" if self.paths else self.message
         self.update()
 
@@ -107,7 +107,7 @@ class ToolpathView(QWidget):
             p.setFont(QFont(p.font().family(), 11))
             p.drawText(self.rect().adjusted(20, 20, -20, -20), Qt.AlignCenter | Qt.TextWordWrap, self.message)
             return
-        allpts = np.concatenate([a for a, _ in self.paths])
+        allpts = np.concatenate([a for a, _, _ in self.paths])
         zmin, zmax = float(allpts[:, 2].min()), float(allpts[:, 2].max())
         # frame the part (the disc is drawn for scale and may run off the edges)
         t = np.linspace(0, 2 * math.pi, 145)
@@ -140,7 +140,7 @@ class ToolpathView(QWidget):
         shown = 0
         zr = max(zmax - zmin, 1e-6)
         last_pt = None
-        for a, ext in self.paths:
+        for a, ext, arm in self.paths:
             if shown >= limit:
                 break
             n = min(len(a), limit - shown)
@@ -161,6 +161,14 @@ class ToolpathView(QWidget):
                 for i in range(1, len(X)):
                     path.lineTo(X[i], Y[i])
                 p.drawPath(path)
+                continue
+            if arm is not None:                      # arm-assigned paths: right orange, left blue
+                p.setPen(QPen(QColor(theme.RIGHT if arm == 0 else theme.LEFT), 1.4))
+                path = QPainterPath(QPointF(X[0], Y[0]))
+                for i in range(1, len(X)):
+                    path.lineTo(X[i], Y[i])
+                p.drawPath(path)
+                last_pt = (X[-1], Y[-1])
                 continue
             # colour by height, in chunks so long spirals still shade bottom to top
             chunk = 64
@@ -183,3 +191,10 @@ class ToolpathView(QWidget):
                    "Drag to orbit · scroll to zoom · double-click to reset")
         p.drawText(QRectF(12, 8, w - 24, 20), Qt.AlignRight,
                    f"z {zmin:.1f} to {zmax:.1f} mm")
+        if any(arm is not None for _, _, arm in self.paths):
+            for i, (col, txt) in enumerate(((theme.RIGHT, "Right arm (0)"), (theme.LEFT, "Left arm (1)"))):
+                p.setPen(Qt.NoPen)
+                p.setBrush(QColor(col))
+                p.drawEllipse(QPointF(18, 18 + i * 18), 4, 4)
+                p.setPen(QColor(theme.MUTED))
+                p.drawText(QPointF(28, 22 + i * 18), txt)

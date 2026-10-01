@@ -26,9 +26,43 @@ logger = logging.getLogger("cell_studio.sim")
 #   refuse_connect: set of device names ("left", "right", "turntable") that fail to connect
 #   drop_after_moves: {"left": n} -> that arm raises after n more moves
 #   arm_code: {"right": 9} -> set_position returns this code (xArm error) without raising
-FAULTS = {"refuse_connect": set(), "drop_after_moves": {}, "arm_code": {}}
+FAULTS = {"refuse_connect": set(), "drop_after_moves": {}, "arm_code": {},
+          "frame_error": {}}     # {"left": (dx, dy, dz)}: where that arm's frame REALLY is vs its calibration
 LOG = []          # (time, device, command, detail)
 _log_lock = threading.Lock()
+
+
+class SimWorld:
+    """Time history of the simulated cell (disc rotation, nozzle positions, extrusion), so a
+    simulated camera can show the beads that were actually laid down."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.tt = []                                   # (t, angle_deg, vel_dps)
+        self.poses = {"left": [], "right": []}         # (t, pose6) in the arm's own frame
+        self.chunks = []                               # (t0, t1, tool, length)
+        self.tool_for_arm = {"right": 0, "left": 1}    # how the cell is really wired
+
+    def angle_at(self, t):
+        a, last_t, vel = 0.0, None, 0.0
+        for (te, ang, v) in self.tt:
+            if te > t:
+                break
+            a, last_t, vel = ang, te, v
+        return a if last_t is None else a + vel * (t - last_t)
+
+    def extruding(self, tool, t0, t1):
+        """Fraction of [t0, t1] during which `tool` was pushing filament."""
+        tot = 0.0
+        for (c0, c1, tl, ln) in self.chunks:
+            if tl == tool and ln > 0 and c1 > t0 and c0 < t1:
+                tot += min(c1, t1) - max(c0, t0)
+        return tot / max(t1 - t0, 1e-9)
+
+
+WORLD = SimWorld()
 
 
 def record(dev, cmd, detail=None):
@@ -40,6 +74,8 @@ def reset():
     FAULTS["refuse_connect"] = set()
     FAULTS["drop_after_moves"] = {}
     FAULTS["arm_code"] = {}
+    FAULTS["frame_error"] = {}
+    WORLD.reset()
     with _log_lock:
         LOG.clear()
 
@@ -75,6 +111,7 @@ class _SimXArm:
             if v is not None:
                 cur[i] = float(v)
         self.o._pose = cur
+        WORLD.poses.setdefault(self.o.name, []).append((time.time(), tuple(cur)))
         record(self.o.name, "move", (tuple(round(c, 2) for c in cur), speed))
         if wait:
             time.sleep(0.01)
@@ -203,6 +240,7 @@ class SimTurntable:
             self._advance()
             if float(speed_dps) != self._vel:
                 record("turntable", "velocity", round(float(speed_dps), 3))
+                WORLD.tt.append((self._t, self._angle, float(speed_dps)))
             self._vel = float(speed_dps)
 
     def stop_rotation(self):
@@ -240,22 +278,24 @@ class SimExtruder:
         time.sleep(0.05)
         self._temp[tool] = float(temp)
 
-    def _queue(self, seconds):
+    def _queue(self, seconds, amounts=None):
         start = max(time.time(), self.busy_until)
         self.busy_until = start + seconds
+        for tool, ln in (amounts or {}).items():
+            WORLD.chunks.append((start, start + seconds, tool, ln))
 
     def extrude(self, tool, length_mm, feedrate_mm_s, wait=False):
         if tool not in (0, 1):
             raise ValueError(f"Invalid tool index: {tool}")
         record("extruder", "extrude", (tool, round(length_mm, 3), feedrate_mm_s))
         if feedrate_mm_s > 0:
-            self._queue(abs(length_mm) / feedrate_mm_s)
+            self._queue(abs(length_mm) / feedrate_mm_s, {tool: length_mm})
 
     def extrude_sync(self, l0, s0, l1, s1, wait=False):
         if s0 <= 0 or s1 <= 0:
             raise ValueError("Speeds must be positive.")
         record("extruder", "extrude_sync", (round(l0, 2), s0, round(l1, 2), s1))
-        self._queue(max(abs(l0) / s0, abs(l1) / s1))
+        self._queue(max(abs(l0) / s0, abs(l1) / s1), {0: l0, 1: l1})
 
     def extruding(self):
         return time.time() < self.busy_until

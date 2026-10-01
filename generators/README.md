@@ -34,6 +34,19 @@ add a folder that lives elsewhere (e.g. a cloned repo) with **Add folder…**.
 4. **A `.gcode` file** from any slicer or script. Line widths are worked out from
    the E values.
 
+## Slicers (George's code)
+
+A generator that takes a model is a *slicer*. Either define
+
+```python
+def slice(model_path, layer_height=0.6, ...):
+    return paths / FullControl steps / G-code
+```
+
+or keep a plain script with a constant such as `MODEL_PATH = "part.stl"`, which the panel
+points at the chosen model. A **Model** row then appears in Generators (and in Macros ▸ 3).
+`examples/contour_slicer_example.py` is a stand-in until George's code is added.
+
 ## Plain points (no FullControl needed)
 
 A path is a list of points `(x, y, z)` or `(x, y, z, width, height)` in mm.

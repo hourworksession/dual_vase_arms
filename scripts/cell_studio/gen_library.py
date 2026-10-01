@@ -25,6 +25,7 @@ SETTINGS_FILE = os.path.join(REPO_ROOT, "config", "cell_studio.json")
 GCODE_EXT = (".gcode", ".gco", ".g", ".nc")
 SKIP_DIRS = {"__pycache__", ".git", ".ipynb_checkpoints", "venv", ".venv", "node_modules"}
 RESERVED = {"NAME", "DESCRIPTION", "AUTHOR", "PARAMS", "TAGS"}
+MODEL_EXT = (".stl", ".3mf", ".obj", ".ply", ".step", ".stp", ".off", ".glb")
 
 
 def _settings():
@@ -107,7 +108,8 @@ def read_meta(path, root=None):
     stem = os.path.splitext(os.path.basename(path))[0]
     folder = os.path.relpath(os.path.dirname(path), root) if root else os.path.dirname(path)
     meta = {"path": path, "name": _pretty(stem), "description": "", "author": "",
-            "folder": "" if folder == "." else folder, "params": [], "style": None, "error": None}
+            "folder": "" if folder == "." else folder, "params": [], "style": None, "error": None,
+            "needs_model": False, "model_const": None, "model_default": None}
     if path.lower().endswith(GCODE_EXT):
         meta["style"] = "gcode"
         meta["description"] = "G-code file. Widths are estimated from the extrusion amounts."
@@ -142,8 +144,13 @@ def read_meta(path, root=None):
                 v = _simple_constant(node.value)
                 if v is not None:
                     consts[name] = v
-        elif isinstance(node, ast.FunctionDef) and node.name == "generate":
-            gen_fn = node
+                else:
+                    sv = _literal(node.value)
+                    if isinstance(sv, str) and sv.lower().endswith(MODEL_EXT) and meta["model_const"] is None:
+                        meta["model_const"], meta["model_default"] = name, sv
+        elif isinstance(node, ast.FunctionDef) and node.name in ("generate", "slice"):
+            if gen_fn is None or node.name == "slice":
+                gen_fn = node
         elif isinstance(node, ast.FunctionDef) and node.name == "build_steps":
             has_build = True
     for node in ast.walk(tree):
@@ -153,7 +160,10 @@ def read_meta(path, root=None):
                 calls_transform = True
                 break
     if gen_fn is not None:
-        meta["style"] = "generate"
+        meta["style"] = "slicer" if gen_fn.name == "slice" else "generate"
+        argnames = [a.arg for a in gen_fn.args.args]
+        if meta["style"] == "slicer" or "model_path" in argnames:
+            meta["needs_model"] = True
         if isinstance(params_spec, dict):
             meta["params"] = [p for p in (_norm_param(k, v) for k, v in params_spec.items()) if p]
         else:
@@ -174,6 +184,8 @@ def read_meta(path, root=None):
         meta["params"] = [p for p in (_norm_param(k, v) for k, v in list(consts.items())[:40]) if p]
         for p in meta["params"]:
             p["const"] = True
+        if meta["model_const"]:
+            meta["needs_model"] = True
     else:
         meta["error"] = ("No toolpath found: define generate(), or build FullControl `steps` and call "
                          "fc.transform(steps, ...). See generators/TEMPLATE.py.")
