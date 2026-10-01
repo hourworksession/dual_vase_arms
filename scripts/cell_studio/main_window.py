@@ -15,6 +15,7 @@ from .widgets import Chip, Tile, button, label, hrow, divider, NumberField
 from .views.machine import MachinePage
 from .views.cylinder import CylinderPage
 from .views.model_print import ModelPrintPage
+from .views.generators import GeneratorsPage
 from .views.home_dialog import HomeDialog
 
 JOB_COLOURS = {"idle": theme.FAINT, "running": theme.OK, "paused": theme.WARN,
@@ -40,7 +41,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Cell Studio · dual arm print control")
         self.resize(1480, 920)
-        self.setMinimumSize(1024, 640)
+        self.setMinimumSize(1180, 640)
         self.ui = UiBridge()
         self.ui.parent_widget = self
         self.c = CellController(self.ui)
@@ -60,7 +61,9 @@ class MainWindow(QMainWindow):
         self.machine = MachinePage(self.c, self)
         self.cylinder = CylinderPage(self.c, self)
         self.model = ModelPrintPage(self.c, self)
-        for p in (self.machine, self.cylinder, self.model):
+        self.generators = GeneratorsPage(self.c, self)
+        self.print_pages = (self.model, self.generators)
+        for p in (self.machine, self.cylinder, self.model, self.generators):
             self.stack.addWidget(p)
 
         centre = QVBoxLayout()
@@ -81,7 +84,7 @@ class MainWindow(QMainWindow):
             root_log.setLevel(logging.INFO)
         logging.getLogger("cell_studio").info("Cell Studio started")
         self.act_console.toggled.connect(self.console_btn.setChecked)
-        self.c.model_job_active = lambda: self.model.printing and not self.model.dry
+        self.c.model_job_active = lambda: any(pg.printing and not pg.dry for pg in self.print_pages)
         self.go(0)
         if self.c.home_load_error:
             self.ui.warn("Home positions not loaded",
@@ -197,7 +200,7 @@ class MainWindow(QMainWindow):
         v.addSpacing(4)
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
-        for i, text in enumerate(("◎   Machine", "◍   Cylinder", "▦   Model print")):
+        for i, text in enumerate(("◎   Machine", "◍   Cylinder", "▦   Model print", "⌬   Generators")):
             b = QPushButton(text)
             b.setObjectName("NavBtn")
             b.setCheckable(True)
@@ -335,13 +338,16 @@ class MainWindow(QMainWindow):
                                 "Cylinder presets:  Cylinder ▸ Save config / Load config")
 
     def closeEvent(self, e):
+        if getattr(self.generators, "proc", None) is not None:
+            self.generators.proc.kill()
         c = self.c
-        if c.printing or c.busy or self.model.printing:
+        if c.printing or c.busy or any(pg.printing for pg in self.print_pages):
             if not c.ui.confirm("Quit", "A job is running. Quit anyway?\n\n"
                                         "The job is stopped and the turntable halted before the panel closes."):
                 e.ignore()
                 return
-            self.model.stop_requested = True
+            for pg in self.print_pages:
+                pg.stop_requested = True
         self.cylinder.view.stop_simulation()
         logging.getLogger().removeHandler(self._log_handler)
         self.c.shutdown()

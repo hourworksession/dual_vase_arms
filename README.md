@@ -70,11 +70,19 @@ python scripts/gleadell_panel_qt.py
   Prepare to print, jog, live offsets, extruder priming.
 * **Cylinder**: the dual arm cylinder print, polar preview / turntable simulator, presets.
 * **Model print**: import → slice → print / dry run.
+* **Generators**: toolpaths from code. FullControl designs (generate() functions or
+  ordinary scripts that call `fc.transform`), colleagues' Python, or G-code files. Set
+  parameters, preview in 3D, then plan / dry run / print through the same planner as
+  Model print. See `generators/README.md`. FullControl itself:
+  `pip install git+https://github.com/FullControlXYZ/fullcontrol`
 * **Live panel** (always visible): arm poses, turntable angle, temperatures, job timer,
   and the live turntable speed slider.
 * **Settings ▸ Home positions**: a custom home per arm (joint angles or Cartesian pose,
   with "Use current position"). Home goes there instead of the xArm factory home.
   Stored in `config/home_positions.json`.
+
+User scenario tests (simulated hardware, no cell needed):
+`python tests/test_cell_studio_scenarios.py` (add `--mode streamed` for follow-turntable extrusion).
 
 The machine logic is in `scripts/cell_studio/controller.py`, ported unchanged from the
 Tk panel. The old `scripts/gleadell_panel.py` still works.

@@ -1,8 +1,8 @@
 """Cylinder page: parameters on the left, preview and run controls on the right."""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFileDialog, QMessageBox,
-                               QFrame, QSplitter)
+from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, QFileDialog, QMessageBox,
+                               QFrame, QSplitter, QSizePolicy)
 
 from .. import theme
 from ..controller import PARAM_META
@@ -111,7 +111,7 @@ class CylinderPage(QWidget):
         v.addStretch(1)
 
         sa = scroll(inner)
-        sa.setMinimumWidth(400)
+        sa.setMinimumWidth(360)
         return sa
 
     def _match(self):
@@ -139,15 +139,36 @@ class CylinderPage(QWidget):
         v.addWidget(prev, 1)
 
         run = Card("Run")
-        self.start_btn = button("▶  Start cylinder", "primary", c.start_cylinder, min_w=190,
+        # A grid whose cells stretch, so nothing overlaps however narrow the window gets
+        g = QGridLayout()
+        g.setHorizontalSpacing(8)
+        g.setVerticalSpacing(10)
+        for col in range(4):
+            g.setColumnStretch(col, 1)
+        self.start_btn = button("▶  Start cylinder", "primary", c.start_cylinder,
                                 tip="Needs both arms, the turntable and the extruder connected")
-        self.pause_btn = button("Pause", None, c.toggle_pause, min_w=110)
-        self.stop_btn = button("Stop", "danger", c.stop_print, min_w=90)
-        run.add(hrow(self.start_btn, self.pause_btn, self.stop_btn, None))
-        run.add(hrow(label("Filament  L", "Muted"), ReadoutField(c.calc_left_len, "{:.1f}", "mm", width=110),
-                     label("R", "Muted"), ReadoutField(c.calc_right_len, "{:.1f}", "mm", width=110),
-                     button("Recalculate", "ghost", c.calculate_extrusion_lengths), None))
-        run.add(hrow(None, button("Extruders off", "ghost", c.extruders_off)))
+        self.pause_btn = button("Pause", None, c.toggle_pause)
+        self.stop_btn = button("Stop", "danger", c.stop_print)
+        for b in (self.start_btn, self.pause_btn, self.stop_btn):
+            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        g.addWidget(self.start_btn, 0, 0, 1, 2)
+        g.addWidget(self.pause_btn, 0, 2)
+        g.addWidget(self.stop_btn, 0, 3)
+        fl = ReadoutField(c.calc_left_len, "{:.1f}", "mm")
+        fr = ReadoutField(c.calc_right_len, "{:.1f}", "mm")
+        for f in (fl, fr):
+            f.setMinimumWidth(80)
+            f.setMaximumWidth(16777215)
+            f.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        g.addWidget(hrow(label("Filament L", "Muted"), fl, spacing=8), 1, 0, 1, 2)
+        g.addWidget(hrow(label("R", "Muted"), fr, spacing=8), 1, 2, 1, 2)
+        recalc = button("Recalculate", "ghost", c.calculate_extrusion_lengths)
+        off = button("Extruders off", "ghost", c.extruders_off, tip="Sends CANCEL_PRINT to Klipper")
+        for b in (recalc, off):
+            b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        g.addWidget(recalc, 2, 0, 1, 2)
+        g.addWidget(off, 2, 2, 1, 2)
+        run.add_layout(g)
         v.addWidget(run)
 
         c.job_state.changed.connect(self._state)

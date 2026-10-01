@@ -88,6 +88,8 @@ class ModelPrintPage(QWidget):
         self.printing = False
         self.dry = False
         self.stop_requested = False
+        self.need_program_msg = "Slice a model first (steps 1 and 2)."
+        self.redo_verb = "Slice"
         self._planned_settings = None
 
         # slice settings
@@ -212,6 +214,16 @@ class ModelPrintPage(QWidget):
         ps.row("First layer flow", NumberField(self.v_first_layer_flow, "%", 0, 5, minimum=0))
         bv.addWidget(ps); bv.addWidget(divider())
 
+        bv.addWidget(self._machine_section()); bv.addWidget(divider())
+        bv.addWidget(self._calibration_section()); bv.addWidget(divider())
+        bv.addWidget(Check("Write debug log while printing", self.v_debug))
+        v.addWidget(box)
+        v.addStretch(1)
+        sa = scroll(inner)
+        sa.setMinimumWidth(340)
+        return sa
+
+    def _machine_section(self):
         mm = Section("Machine + motion", expanded=False)
         mm.row("Arms", Segmented(self.v_num_arms, [(1, "1"), (2, "2 (plan only)")]),
                "The planner can split a model across two arms, but printing drives one arm so far. "
@@ -229,21 +241,17 @@ class ModelPrintPage(QWidget):
         mm.row("Part offset Y", NumberField(self.v_part_off_y, "mm", 1, 1))
         mm.row("Arm 1 azimuth", NumberField(self.v_az_left, "°", 1, 5))
         mm.row("Arm 2 azimuth", NumberField(self.v_az_right, "°", 1, 5))
-        bv.addWidget(mm); bv.addWidget(divider())
 
+        return mm
+
+    def _calibration_section(self):
         cal = Section("Calibration (turntable axis, arm frame)", expanded=False)
         cal.row("Centre X", NumberField(self.v_center_x, "mm", 1, 0.1))
         cal.row("Centre Y", NumberField(self.v_center_y, "mm", 1, 0.1))
         cal.row("Centre Z", NumberField(self.v_center_z, "mm", 1, 0.1))
         cal.row("Z base", NumberField(self.v_z_base, "mm", 1, 0.1), "World Z of model z = 0")
         cal.row("Filament diameter", NumberField(self.v_filament, "mm", 2, 0.05))
-        bv.addWidget(cal); bv.addWidget(divider())
-        bv.addWidget(Check("Write debug log while printing", self.v_debug))
-        v.addWidget(box)
-        v.addStretch(1)
-        sa = scroll(inner)
-        sa.setMinimumWidth(380)
-        return sa
+        return cal
 
     def _right(self):
         w = QWidget()
@@ -322,6 +330,9 @@ class ModelPrintPage(QWidget):
             extruder_tool=0,
         )
 
+    def redo(self):
+        self.do_slice()
+
     def _settings_snapshot(self):
         return {k: v.get() for k, v in vars(self).items() if k.startswith("v_") and
                 k not in ("v_status", "v_model", "v_debug")}
@@ -396,12 +407,13 @@ class ModelPrintPage(QWidget):
 
     def start_print(self):
         app = self.app
-        if self.printing or app.printing or app.busy:
-            what = "A model print" if self.printing else ("The cylinder" if app.printing else app.job_state.get().title())
+        if self.printing or app.printing or app.busy or app.model_job_active():
+            what = ("This print" if self.printing else "The cylinder" if app.printing
+                    else "Another print" if app.model_job_active() else app.job_state.get().title())
             QMessageBox.warning(self, "Print", f"{what} is still running. Wait for it to finish or press Stop.")
             return
         if not self.program:
-            QMessageBox.warning(self, "Print", "Slice a model first (steps 1 and 2).")
+            QMessageBox.warning(self, "Print", self.need_program_msg)
             return
         if not getattr(app, "hw_connected", False):
             QMessageBox.warning(self, "Print", "Hardware not connected (Machine ▸ Connections).")
@@ -417,15 +429,16 @@ class ModelPrintPage(QWidget):
             return
         if cfg.num_arms > 1:
             QMessageBox.warning(self, "Print",
-                                "This plan is for 2 arms, but the model print streamer only drives one arm so far. "
-                                "Set Arms to 1 in Machine + motion and slice again.")
+                                "This plan is for 2 arms, but the print streamer only drives one arm so far. "
+                                f"Set Arms to 1 in Machine + motion and {self.redo_verb.lower()} again.")
             return
         changed = self._changed_since_plan()
         if changed:
             if QMessageBox.question(self, "Settings changed",
-                                    "These settings changed since you sliced: " + ", ".join(changed) +
-                                    ".\n\nSlice again now? (No cancels the print.)") == QMessageBox.Yes:
-                self.do_slice()
+                                    f"These settings changed since the last {self.redo_verb.lower()}: " +
+                                    ", ".join(changed) + f".\n\n{self.redo_verb} again now? (No cancels the print.)"
+                                    ) == QMessageBox.Yes:
+                self.redo()
             return
         if not app.ui.confirm("Confirm print", "Stream the planned motion to the machines now?"):
             return
@@ -435,7 +448,7 @@ class ModelPrintPage(QWidget):
         if self.printing:
             return
         if not self.program:
-            QMessageBox.warning(self, "Dry run", "Slice a model first (steps 1 and 2).")
+            QMessageBox.warning(self, "Dry run", self.need_program_msg)
             return
         self._launch(dry=True)
 

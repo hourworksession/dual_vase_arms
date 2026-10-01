@@ -762,6 +762,227 @@ def s50(x):
     x.expect(ok, "Layout does not fit a 1366 px wide laptop (controls clipped)")
 
 
+
+# ---------------------------------------------------------------- generators
+import tempfile as _tempfile
+from cell_studio import gen_library as _lib
+
+GEN_TMP = _tempfile.mkdtemp(prefix="cellgen_tests_")
+EXAMPLES = os.path.join(ROOT, "generators", "examples")
+
+
+def gen_file(name, src):
+    path = os.path.join(GEN_TMP, name)
+    with open(path, "w") as f:
+        f.write(src)
+    return path
+
+
+def gen(x, path, params=None, timeout=40):
+    g = x.w.generators
+    x.w.go(3)
+    g.load_meta(_lib.read_meta(path))
+    for k, v in (params or {}).items():
+        g._param_vars[k][0].set(v)
+    g.generate()
+    t = time.time()
+    while (g.proc is not None or g.planning) and time.time() - t < timeout:
+        pump(0.03)
+    pump(0.05)
+    return g
+
+
+def report(x):
+    return x.w.generators.stats_text.toPlainText().lower()
+
+
+@scenario("Zara (first FullControl user)", "09:00", "Generates the FullControl ripple vase and dry-runs it")
+def s51(x):
+    g = gen(x, os.path.join(EXAMPLES, "ripple_vase_fullcontrol.py"), {"height": 3.0})
+    x.expect(g.program is not None, f"No plan after Generate: {g.v_gen_status.get()} / {report(x)[:200]}")
+    if g.program is None:
+        return
+    g.start_dry_run()
+    x.expect(x.wait_for(lambda: not g.printing, 60), "Dry run never finished")
+    x.expect("dry run complete" in g.v_status.get().lower(), f"Dry run status: {g.v_status.get()}")
+
+
+@scenario("George (FullControl author)", "09:20", "Brings his own FC script that saves its G-code to a file")
+def s52(x):
+    path = gen_file("george_ring.py", (
+        "import fullcontrol as fc\nRADIUS = 20.0\nLAYERS = 3\n"
+        "steps = [fc.ExtrusionGeometry(width=0.5, height=0.2)]\n"
+        "for L in range(LAYERS):\n    steps += fc.circleXY(fc.Point(x=60, y=60, z=0.2*(L+1)), RADIUS, 0, 64)\n"
+        "gcode = fc.transform(steps, 'gcode')\nopen('george_ring.gcode', 'w').write(gcode)\n"))
+    g = gen(x, path, {"RADIUS": 30.0})
+    x.expect(g.tp is not None, f"Plain FC script not accepted: {g.v_gen_status.get()}")
+    if g.tp:
+        x.expect(abs(g.tp_stats["size"][0] - 60.5) < 2, f"RADIUS parameter not applied (size {g.tp_stats['size'][0]:.1f} mm)")
+    out = os.path.join(GEN_TMP, "george_ring.gcode")
+    x.expect(os.path.exists(out) and os.path.getsize(out) > 100,
+             "The script's own G-code file was emptied when run from the panel")
+
+
+@scenario("Ibrahim (MSc)", "09:40", "His generator crashes with ZeroDivisionError")
+def s53(x):
+    path = gen_file("crashy.py", "def helper(n):\n    return 10 / n\n\ndef generate(n=0):\n    return helper(n)\n")
+    g = gen(x, path)
+    r = report(x)
+    x.expect(g.tp is None and g.program is None, "A crashed generator left a toolpath to print")
+    x.expect("zerodivisionerror" in r and "line 2" in r, "Report does not show the error and the line in his file")
+    x.expect(not g.print_btn.isEnabled(), "Print enabled after a failed generation")
+
+
+@scenario("Ibrahim (MSc)", "09:45", "His loop never ends (forgot to increment)")
+def s54(x):
+    path = gen_file("forever.py", "def generate(n=3):\n    i = 0\n    while i < n:\n        pass\n")
+    g = x.w.generators
+    g.v_timeout.set(5)
+    t0 = time.time()
+    g = gen(x, path, timeout=15)
+    x.expect(g.proc is None, "Generator still running after its time limit")
+    x.expect(time.time() - t0 < 12, "Time limit not enforced")
+    x.expect("time limit" in (g.v_gen_status.get() + report(x)).lower(), "No message that it hit the time limit")
+
+
+@scenario("Ibrahim (MSc)", "09:50", "His script asks for input() from the keyboard")
+def s55(x):
+    path = gen_file("asks.py", "def generate():\n    r = float(input('radius? '))\n    return [(r, 0, 0.2), (0, r, 0.2)]\n")
+    t0 = time.time()
+    g = gen(x, path, timeout=20)
+    x.expect(time.time() - t0 < 10, "input() made the panel wait for keyboard input")
+    x.expect("eof" in report(x), "No clear error for input()")
+
+
+@scenario("Lena (designer)", "10:10", "Makes a 320 mm wide part (bigger than the 300 mm disc)")
+def s56(x):
+    g = gen(x, os.path.join(ROOT, "generators", "TEMPLATE.py"), {"radius": 160.0, "height": 1.0})
+    x.expect(g.program is None and g.tp_errors, "Part beyond the disc was planned")
+    x.expect(not g.print_btn.isEnabled() and not g.plan_btn.isEnabled(), "Plan/Print enabled for a part off the disc")
+    x.expect("disc radius" in report(x), "No explanation that it reaches past the disc")
+
+
+@scenario("Lena (designer)", "10:15", "Writes coordinates in metres (radius 0.03)")
+def s57(x):
+    path = gen_file("metres.py", "import math\ndef generate(r=0.03):\n    return [[(r*math.cos(a/50), r*math.sin(a/50), 0.0002+a*1e-6) for a in range(400)]]\n")
+    gen(x, path)
+    x.expect("metres" in report(x), "No hint that the units look like metres")
+
+
+@scenario("Lena (designer)", "10:20", "First layer at z = 0 (nozzle on the disc)")
+def s58(x):
+    path = gen_file("zzero.py", "import math\ndef generate(r=20.0):\n    return [[(r*math.cos(a/30), r*math.sin(a/30), 0.0) for a in range(200)]]\n")
+    gen(x, path)
+    x.expect("almost touch" in report(x), "No warning that z = 0 would put the nozzle on the disc")
+
+
+@scenario("Omar (visiting engineer)", "10:40", "A colleague's file has a syntax error")
+def s59(x):
+    path = gen_file("broken.py", "def generate(:\n    pass\n")
+    m = _lib.read_meta(path)
+    x.expect(m["error"] and "line 1" in m["error"].lower(), "Syntax error not reported with its line")
+    n = len(MSGS)
+    g = x.w.generators
+    g.load_meta(m)
+    g.generate(); pump(0.2)
+    x.expect(g.proc is None and x.said(n, "syntax"), "Generate ran a file with a syntax error")
+
+
+@scenario("Priya (MSc)", "11:00", "Loads G-code exported from another slicer (relative E, arcs)")
+def s60(x):
+    path = gen_file("ring.gcode", "M83\nG1 Z0.2 F600\nG1 X40 Y0 F3000\nG3 X40 Y0 I-40 J0 E8.4 F1200\n"
+                                  "G1 Z0.4\nG3 X40 Y0 I-40 J0 E8.4\n")
+    g = gen(x, path)
+    x.expect(g.program is not None, f"G-code not planned: {g.v_gen_status.get()}")
+    if g.tp:
+        w0, w1 = g.tp_stats["width"]
+        x.expect(0.3 < w0 and w1 < 0.8, f"Widths from E look wrong: {w0:.2f}-{w1:.2f} mm")
+
+
+@scenario("Wil (owner)", "11:30", "Plans the two-arm interweave, then presses Print")
+def s61(x):
+    x.connect()
+    g = x.w.generators
+    g.v_num_arms.set(2)
+    g = gen(x, os.path.join(EXAMPLES, "interweave_two_arms.py"), {"height": 2.0})
+    x.expect(g.program is not None and g.program.config.num_arms == 2, "Two-arm plan not made")
+    if g.program is not None:
+        both = sum(1 for s in g.program.steps if s.arms[0] is not None and s.arms[1] is not None)
+        x.expect(both > 100, "Arms not planned side by side")
+    n, m = len(MSGS), x.mark()
+    g.start_print(); pump(0.3)
+    x.expect(not x.log_since(m, cmd="move") and x.said(n, "one arm"), "Two-arm plan streamed to one arm")
+
+
+@scenario("Chloe (PhD student)", "12:00", "Changes a parameter after planning and presses Print")
+def s62(x):
+    x.connect()
+    g = gen(x, os.path.join(ROOT, "generators", "TEMPLATE.py"), {"height": 0.6})
+    g._param_vars["radius"][0].set(45.0)
+    n, m = len(MSGS), x.mark()
+    ANSWERS.extend([False])
+    g.start_print(); pump(0.3)
+    x.expect(not x.log_since(m, cmd="move"), "Printed the old toolpath after a parameter changed")
+    x.expect(x.said(n, "changed"), "No prompt that the parameters changed since generating")
+
+
+@scenario("Victor (PhD)", "12:20", "Starts a generator print while a model print runs")
+def s63(x):
+    x.connect()
+    m_page = sliced(x)
+    ANSWERS.extend([True])
+    m_page.start_print(); pump(0.3)
+    g = gen(x, os.path.join(ROOT, "generators", "TEMPLATE.py"), {"height": 0.4})
+    n, mk = len(MSGS), x.mark()
+    g.start_print(); pump(0.3)
+    x.expect(not g.printing and x.said(n, "running"), "Two prints streamed at once")
+    n2 = len(MSGS)
+    x.c.start_cylinder(); pump(0.2)
+    x.expect(not x.c.printing and x.said(n2, "running"), "Cylinder started during a model print")
+    m_page.stop_print(); x.wait_for(lambda: not m_page.printing, 5)
+
+
+@scenario("Sam (undergrad)", "13:00", "Returns 2D points (forgot z)")
+def s64(x):
+    path = gen_file("flat.py", "def generate():\n    return [[(0, 0), (10, 0), (10, 10)]]\n")
+    gen(x, path)
+    x.expect("x, y and z" in report(x), "No clear message that points need x, y and z")
+
+
+@scenario("Sam (undergrad)", "13:10", "Cancels a slow generator")
+def s65(x):
+    path = gen_file("slow.py", "import time\ndef generate():\n    time.sleep(30)\n    return [[(0,0,0.2),(10,0,0.2)]]\n")
+    g = x.w.generators
+    x.w.go(3)
+    g.load_meta(_lib.read_meta(path))
+    g.generate(); pump(0.5)
+    g.cancel()
+    x.expect(x.wait_for(lambda: g.proc is None, 5), "Cancel did not stop the generator")
+    x.expect("cancel" in g.v_gen_status.get().lower(), "No 'Cancelled' status")
+
+
+@scenario("Yusuf (on a laptop)", "13:30", "Uses the Generators tab at 1280 px")
+def s66(x):
+    from PySide6.QtWidgets import QPushButton, QWidget
+    x.w.resize(1280, 720); x.w.go(3)
+    gen(x, os.path.join(EXAMPLES, "twisted_polygon.py"), {"height": 1.0})
+    pump(0.2)
+    bad = []
+    root = x.w.generators
+    for wdg in root.findChildren(QWidget):
+        if not wdg.isVisibleTo(root):
+            continue
+        sibs = [s for s in wdg.children() if isinstance(s, QWidget) and s.isVisibleTo(root) and not s.isWindow()]
+        for i, a in enumerate(sibs):
+            for b in sibs[i + 1:]:
+                r = a.geometry().intersected(b.geometry())
+                if r.width() > 2 and r.height() > 2:
+                    bad.append(f"{type(a).__name__} x {type(b).__name__}")
+        if isinstance(wdg, QPushButton) and wdg.width() + 1 < wdg.sizeHint().width():
+            bad.append(f"squeezed '{wdg.text()}'")
+    x.expect(not bad, "Overlapping or clipped widgets: " + ", ".join(sorted(set(bad))[:5]))
+
+
 # ---------------------------------------------------------------- runner
 def run(selected=None):
     rows = []

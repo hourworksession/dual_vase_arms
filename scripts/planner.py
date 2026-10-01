@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict
 import math
 
-from slicer import SliceResult, Layer, Path, WALL_OUTER, WALL_INNER, SKIN, INFILL
+from slicer import SliceResult, Layer, Path, WALL_OUTER, WALL_INNER, SKIN, INFILL, TRAVEL
 
 _KIND_ORDER = {WALL_OUTER: 0, WALL_INNER: 1, SKIN: 2, INFILL: 3}
 _WALLS = (WALL_OUTER, WALL_INNER)
@@ -76,6 +76,9 @@ class PlannerConfig:
     flow_multiplier: float = 1.0
     first_layer_flow: float = 1.2
     first_layer_count: int = 1
+    # 3D toolpaths (generators): first-layer flow applies to points at or below this
+    # model z instead of by layer index. None keeps the layer-index rule.
+    first_layer_z: Optional[float] = None
     extruder_tool: int = 0
 
     # path conditioning
@@ -131,29 +134,40 @@ def order_toolpaths(slc: SliceResult) -> List[Tuple[int, Path]]:
     return ordered
 
 
-def _simplify(points: List[Tuple[float, float]], min_seg: float) -> List[Tuple[float, float]]:
+def _seg_len(a, b) -> float:
+    """XY length for 2D points (sliced layers); XYZ length for 3D points."""
+    if len(a) == 2:
+        return math.hypot(b[0] - a[0], b[1] - a[1])
+    return math.dist(a[:3], b[:3])
+
+
+def _simplify(points: List[tuple], min_seg: float) -> List[tuple]:
     if min_seg <= 0 or len(points) <= 2:
         return points
     out = [points[0]]
     for p in points[1:-1]:
-        if math.hypot(p[0] - out[-1][0], p[1] - out[-1][1]) >= min_seg:
+        if _seg_len(out[-1], p) >= min_seg:
             out.append(p)
     out.append(points[-1])
     return out
 
 
-def _densify(points: List[Tuple[float, float]], max_seg: float) -> List[Tuple[float, float]]:
-    """Insert points so no segment is longer than max_seg (straight-line interp)."""
+def _densify(points: List[tuple], max_seg: float) -> List[tuple]:
+    """Insert points so no segment is longer than max_seg (straight-line interp).
+    Extra coordinates (z, width, height) are interpolated too."""
     if max_seg <= 0 or len(points) < 2:
         return points
     out = [points[0]]
     for a, b in zip(points[:-1], points[1:]):
-        d = math.hypot(b[0] - a[0], b[1] - a[1])
+        d = _seg_len(a, b)
         if d > max_seg:
             nsub = int(math.ceil(d / max_seg))
             for k in range(1, nsub):
                 t = k / nsub
-                out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+                if len(a) == 2:
+                    out.append((a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t))
+                else:
+                    out.append(tuple(a[i] + (b[i] - a[i]) * t for i in range(len(a))))
         out.append(b)
     return out
 
@@ -176,37 +190,70 @@ def _world(cfg: PlannerConfig, plate_xy: Tuple[float, float], phi: float,
 
 
 def _assign_paths(ordered: List[Tuple[int, Path]], num_arms: int) -> List[List[Tuple[int, Path]]]:
+    """Round robin over arms. A path with an `arm` attribute goes to that arm; travel
+    paths go with the extruding path that follows them."""
     lanes: List[List[Tuple[int, Path]]] = [[] for _ in range(num_arms)]
-    for i, item in enumerate(ordered):
-        lanes[i % num_arms].append(item)
+    pending: List[Tuple[int, Path]] = []
+    rr = 0
+    last = 0
+    for item in ordered:
+        path = item[1]
+        if path.kind == TRAVEL:
+            pending.append(item)
+            continue
+        arm = getattr(path, "arm", None)
+        if arm is None:
+            lane = rr % num_arms
+            rr += 1
+        else:
+            lane = int(arm) % num_arms
+        lanes[lane].extend(pending)
+        pending = []
+        lanes[lane].append(item)
+        last = lane
+    lanes[last].extend(pending)
     return lanes
 
 
 def _is_coordinated(cfg: PlannerConfig, kind: str) -> bool:
     """True if the turntable rotates while printing this path kind."""
+    if kind == TRAVEL:
+        return False
     return cfg.use_turntable and (kind in _WALLS or cfg.turntable_for_infill)
 
 
 def _lane_vertices(cfg: PlannerConfig, lane: List[Tuple[int, Path]], slc: SliceResult):
-    """Yield (plate_xy, z_layer, extrude, seg_len, layer_idx, kind) for a lane."""
+    """Yield (plate_xy, z, extrude, seg_len, layer_idx, kind, width, height) for a lane.
+
+    2D points take z from their layer and width/height from the config (None).
+    3D points carry their own z, and 5-value points their own width and height."""
     ox, oy = cfg.part_offset
     z_by_index = {ly.index: ly.z for ly in slc.layers}
     for (layer_idx, path) in lane:
         z = z_by_index[layer_idx]
+        travel = path.kind == TRAVEL
         pts = _prep_points(path, cfg.min_segment_length)
         # Subdivide only paths the turntable coordinates, so straight sides stay
         # straight in polar. Others (held infill, or Cartesian) need no extra pts.
         if _is_coordinated(cfg, path.kind) and cfg.max_segment_length > 0:
             pts = _densify(pts, cfg.max_segment_length)
         prev = None
-        for j, (mx, my) in enumerate(pts):
-            plate = (mx + ox, my + oy)
-            if j == 0:
-                yield (plate, z, False, 0.0, layer_idx, path.kind)
+        for j, pt in enumerate(pts):
+            plate = (pt[0] + ox, pt[1] + oy)
+            if len(pt) == 2:
+                pz, w, h = z, None, None
             else:
-                seg = math.hypot(plate[0] - prev[0], plate[1] - prev[1])
-                yield (plate, z, True, seg, layer_idx, path.kind)
-            prev = plate
+                pz = pt[2]
+                w, h = (pt[3], pt[4]) if len(pt) >= 5 else (None, None)
+            if j == 0:
+                yield (plate, pz, False, 0.0, layer_idx, path.kind, w, h)
+            else:
+                if len(pt) == 2:
+                    seg = math.hypot(plate[0] - prev[0][0], plate[1] - prev[0][1])
+                else:
+                    seg = math.dist((plate[0], plate[1], pz), (prev[0][0], prev[0][1], prev[1]))
+                yield (plate, pz, not travel, seg, layer_idx, path.kind, w, h)
+            prev = (plate, pz)
 
 
 def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
@@ -231,7 +278,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                 if rec is None:
                     continue
                 kind = rec[5]
-                if not cfg.turntable_for_infill and kind not in _WALLS:
+                if kind == TRAVEL or (not cfg.turntable_for_infill and kind not in _WALLS):
                     continue
                 plate = rec[0]
                 theta = math.atan2(plate[1], plate[0])
@@ -255,11 +302,11 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
             if rec is None:
                 tmp.append(None)
                 continue
-            plate, z, extrude, seg, layer_idx, kind = rec
+            plate, z, extrude, seg, layer_idx, kind, w, h = rec
             speed = cfg.print_speed if extrude else cfg.travel_speed
             t_feed = max(t_feed, seg / speed if speed > 0 else 0.0)
             world = _world(cfg, plate, phi_target, z)
-            tmp.append((world, extrude, seg, layer_idx, kind))
+            tmp.append((world, extrude, seg, layer_idx, kind, z, w, h))
 
         t_arm = 0.0
         for i, at in enumerate(tmp):
@@ -277,15 +324,21 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
             if at is None:
                 arms.append(None)
                 continue
-            world, extrude, seg, layer_idx, kind = at
+            world, extrude, seg, layer_idx, kind, z, w, h = at
             if step_layer < 0:
                 step_layer, step_kind = layer_idx, kind
             e = 0.0
             if extrude and fil_area > 0:
                 flow = cfg.flow_multiplier
-                if layer_idx < cfg.first_layer_count:
+                if cfg.first_layer_z is not None:
+                    first = z <= cfg.first_layer_z
+                else:
+                    first = layer_idx < cfg.first_layer_count
+                if first:
                     flow *= cfg.first_layer_flow
-                e = seg * cfg.line_width * cfg.layer_height / fil_area * flow
+                lw = cfg.line_width if w is None else w
+                lh = cfg.layer_height if h is None else h
+                e = seg * lw * lh / fil_area * flow
             arms.append(ArmTarget(round(world[0], 3), round(world[1], 3), round(world[2], 3),
                                   roll, pitch, yaw, extrude, round(e, 4)))
             prev_world[i] = world

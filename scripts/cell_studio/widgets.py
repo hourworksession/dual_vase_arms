@@ -24,7 +24,8 @@ def button(text, kind=None, slot=None, tip=None, min_w=None):
         b.setMinimumWidth(min_w)
     b.setCursor(Qt.PointingHandCursor)
     b.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-    b.setMinimumWidth(max(min_w or 0, b.fontMetrics().horizontalAdvance(text) + 40))
+    if min_w:
+        b.setMinimumWidth(min_w)
     return b
 
 
@@ -52,6 +53,8 @@ def hrow(*widgets, spacing=8, stretch_last=False):
             lay.addStretch(1)
         else:
             lay.addWidget(x)
+            if isinstance(x, QPushButton) and x.sizePolicy().horizontalPolicy() != QSizePolicy.Expanding:
+                x.setSizePolicy(QSizePolicy.Minimum, x.sizePolicy().verticalPolicy())
     if stretch_last:
         lay.addStretch(1)
     return w

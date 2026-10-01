@@ -159,7 +159,8 @@ class MachinePage(QWidget):
         calc = FormGrid()
         calc.row("Left filament", ReadoutField(c.calc_left_len, "{:.1f}", "mm"))
         calc.row("Right filament", ReadoutField(c.calc_right_len, "{:.1f}", "mm"))
-        calc.addWidget(button("Calculate path lengths", None, c.calculate_extrusion_lengths),
+        calc.addWidget(button("Calculate", None, c.calculate_extrusion_lengths,
+                              tip="Filament needed for the cylinder as currently set"),
                        calc._row, 1)
         row.addLayout(calc, 1)
         card.add_layout(row)

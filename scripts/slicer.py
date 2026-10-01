@@ -24,22 +24,33 @@ from typing import List, Tuple, Optional
 import math
 
 import numpy as np
-import trimesh
-from shapely.geometry import Polygon, LineString, MultiLineString, GeometryCollection
-from shapely import affinity
+try:                      # only needed to slice meshes; generators and the planner work without them
+    import trimesh
+    from shapely.geometry import Polygon, LineString, MultiLineString, GeometryCollection
+    from shapely import affinity
+    _MESH_IMPORT_ERROR = None
+except ImportError as _e:  # pragma: no cover
+    trimesh = Polygon = LineString = MultiLineString = GeometryCollection = affinity = None
+    _MESH_IMPORT_ERROR = _e
 
 Point = Tuple[float, float]
 
 # Path type constants
 WALL_OUTER = "WALL_OUTER"
 WALL_INNER = "WALL_INNER"
+TRAVEL = "TRAVEL"          # non-extruding move kept as a path (generators: z-hops, ordered travels)
 SKIN = "SKIN"
 INFILL = "INFILL"
 
 
 @dataclass
 class Path:
-    """A single toolpath. If `closed` the last point connects back to the first."""
+    """A single toolpath. If `closed` the last point connects back to the first.
+
+    Points are (x, y) for sliced layers, or (x, y, z) / (x, y, z, width, height)
+    for 3D toolpaths from generators (per point z, line width and layer height).
+    An optional `arm` attribute pins the path to one arm when planning for two.
+    """
     kind: str
     points: List[Point]
     closed: bool = False
@@ -208,6 +219,9 @@ def _infill_for_region(region: Polygon, layer_index: int, solid: bool,
 
 # ----------------------------------------------------------------------------
 def slice_model(mesh_path: str, settings: SliceSettings) -> SliceResult:
+    if _MESH_IMPORT_ERROR is not None:
+        raise ImportError(f"Slicing needs trimesh and shapely ({_MESH_IMPORT_ERROR}). "
+                          "pip install trimesh shapely")
     mesh = _load_mesh(mesh_path)
     zmin, zmax = float(mesh.bounds[0][2]), float(mesh.bounds[1][2])
     height = zmax - zmin
