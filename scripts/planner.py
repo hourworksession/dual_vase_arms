@@ -89,6 +89,11 @@ class PlannerConfig:
     # the rules (round paths around the axis turn; squares, off-centre features and fill
     # are drawn on a held bed, turned first to face the arm). None = the old per-kind rule.
     rules: Optional[object] = None
+    # Per-arm frames: [(centre_x, centre_y, centre_z, base_yaw_deg), ...] for arm 0, 1, ...
+    # The planner works in arm 0's frame (center / z_base above). Targets for other arms are
+    # converted into THEIR frame: cell = Rz(yaw0)(p - C0); arm_i = C_i + Rz(-yaw_i) cell.
+    # None = every arm gets arm-0-frame numbers (only right for a single arm).
+    arm_frames: Optional[List[Tuple[float, float, float, float]]] = None
     face_limit: float = math.radians(60.0)   # held features further round than this are turned to the arm
 
     def filament_area(self) -> float:
@@ -187,12 +192,37 @@ def _prep_points(path: Path, min_seg: float) -> List[Tuple[float, float]]:
 
 def _world(cfg: PlannerConfig, plate_xy: Tuple[float, float], phi: float,
            z_layer: float) -> Tuple[float, float, float]:
+    """Plate point -> arm 0's frame (the planner frame)."""
     px, py = plate_xy
     c, s = math.cos(phi), math.sin(phi)
     wx = cfg.center[0] + (px * c - py * s)
     wy = cfg.center[1] + (px * s + py * c)
     wz = cfg.z_base + z_layer
     return (wx, wy, wz)
+
+
+def to_arm_frame(cfg: PlannerConfig, arm_index: int, p: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    """Planner-frame (arm 0) point -> arm `arm_index`'s own frame, using cfg.arm_frames."""
+    if arm_index == 0 or not cfg.arm_frames or arm_index >= len(cfg.arm_frames):
+        return p
+    c0x, c0y, c0z, yaw0 = cfg.arm_frames[0]
+    cix, ciy, ciz, yawi = cfg.arm_frames[arm_index]
+    dx, dy = p[0] - c0x, p[1] - c0y
+    a = math.radians(yaw0 - yawi)
+    c, s = math.cos(a), math.sin(a)
+    return (cix + c * dx - s * dy, ciy + s * dx + c * dy, ciz + (p[2] - c0z))
+
+
+def from_arm_frame(cfg: PlannerConfig, arm_index: int, p: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    """Inverse of to_arm_frame: arm i's own frame -> planner (arm 0) frame."""
+    if arm_index == 0 or not cfg.arm_frames or arm_index >= len(cfg.arm_frames):
+        return p
+    c0x, c0y, c0z, yaw0 = cfg.arm_frames[0]
+    cix, ciy, ciz, yawi = cfg.arm_frames[arm_index]
+    dx, dy = p[0] - cix, p[1] - ciy
+    a = math.radians(yawi - yaw0)
+    c, s = math.cos(a), math.sin(a)
+    return (c0x + c * dx - s * dy, c0y + s * dx + c * dy, c0z + (p[2] - ciz))
 
 
 def _assign_paths(ordered: List[Tuple[int, Path]], num_arms: int) -> List[List[Tuple[int, Path]]]:
@@ -509,7 +539,8 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                 lw = cfg.line_width if w is None else w
                 lh = cfg.layer_height if h is None else h
                 e = seg * lw * lh / fil_area * flow
-            arms.append(ArmTarget(round(world[0], 3), round(world[1], 3), round(world[2], 3),
+            own = to_arm_frame(cfg, i, world)
+            arms.append(ArmTarget(round(own[0], 3), round(own[1], 3), round(own[2], 3),
                                   roll, pitch, yaw, extrude, round(e, 4)))
             prev_world[i] = world
 
@@ -550,7 +581,9 @@ def debug_rows(program: MotionProgram, arm_index: int = 0) -> List[dict]:
     cx, cy = program.config.center[0], program.config.center[1]
     for i, step in enumerate(program.steps):
         at = step.arms[arm_index] if arm_index < len(step.arms) else None
-        radius = round(math.hypot(at.x - cx, at.y - cy), 3) if at else None
+        if at is not None:
+            px_, py_, _ = from_arm_frame(program.config, arm_index, (at.x, at.y, at.z))
+        radius = round(math.hypot(px_ - cx, py_ - cy), 3) if at else None
         rows.append(dict(
             i=i, t=round(t, 4), dt_ms=round(step.dt * 1000, 2),
             layer=step.layer, kind=step.kind,

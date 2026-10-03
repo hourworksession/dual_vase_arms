@@ -213,7 +213,9 @@ class Cell3DView(QWidget):
     def _draw_bead(self, p, cam, w, h, xy, z, ext, idx, colour):
         if len(xy) < 2:
             return
-        phi = math.radians(self.tt_deg)          # the part sits on the disc and turns with it
+        # the part sits on the disc and turns with it; plate coords come from the planner frame
+        # (right arm's), which is turned by that arm's base yaw relative to the cell frame
+        phi = math.radians(self.tt_deg) + math.radians(self.geom.yaw["right"])
         c, s = math.cos(phi), math.sin(phi)
         P = np.stack([xy[:, 0] * c - xy[:, 1] * s, xy[:, 0] * s + xy[:, 1] * c, z], 1)
         x, y, _ = self._project(P, cam, w, h)

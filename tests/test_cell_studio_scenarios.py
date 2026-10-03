@@ -1595,6 +1595,48 @@ def s91(x):
     x.expect(x.said(n, "mid-air"), "No warning that the bridge prints into air")
 
 
+@scenario("Wil (owner)", "23:30", "Two-arm print: the arms must be on opposite sides of the disc, not on the same spot")
+def s92(x):
+    import trimesh
+    from cell_studio.geometry import CellGeometry
+    ring = trimesh.creation.annulus(r_min=40, r_max=42.2, height=6, sections=96)
+    ring.apply_translation((0, 0, 3))
+    path = os.path.join(GEN_TMP, "ring3.stl")
+    ring.export(path)
+    x.connect()
+    m = x.w.model
+    x.w.go(2)
+    m.v_num_arms.set(2)
+    m.v_layer_height.set(0.6)
+    m.v_line_width.set(1.1)
+    m.v_strategy.set("planar")
+    m.load_model(path)
+    m.do_slice()
+    t = time.time()
+    while (getattr(m, "_slicing", False) or m.program is None) and time.time() - t < 120:
+        pump(0.05)
+    ANSWERS.extend([True] * 4)
+    mk = x.mark()
+    m.start_print()
+    x.wait_for(lambda: len(x.log_since(mk, dev="left", cmd="move")) > 30, 10)
+    g = CellGeometry(x.c)
+    pairs = 0
+    bad = 0
+    L = [e for e in x.log_since(mk, dev="left", cmd="move")][5:30]
+    R = [e for e in x.log_since(mk, dev="right", cmd="move")][5:30]
+    for el, er in zip(L, R):
+        wl = g.to_world("left", el[3][0][:3])
+        wr = g.to_world("right", er[3][0][:3])
+        al, ar = math.degrees(math.atan2(wl[1], wl[0])), math.degrees(math.atan2(wr[1], wr[0]))
+        diff = abs((al - ar + 180) % 360 - 180)
+        pairs += 1
+        if diff < 120 or math.hypot(wl[0] - wr[0], wl[1] - wr[1]) < 40:
+            bad += 1
+    x.expect(pairs and bad == 0, f"Arms on the same side of the disc in {bad} of {pairs} sampled moves")
+    m.stop_print()
+    x.wait_for(lambda: not m.printing, 5)
+
+
 # ---------------------------------------------------------------- runner
 def run(selected=None):
     rows = []

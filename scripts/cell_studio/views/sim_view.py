@@ -166,12 +166,15 @@ class SimulationView(QWidget):
         self.layer = np.array([s.layer for s in steps])
         self.lw = cfg.line_width
         self.wx, self.wy, self.z, self.px, self.py, self.ext, self.valid = [], [], [], [], [], [], []
+        from planner import from_arm_frame
         for a in range(self.arms):
             ats = [s.arms[a] if a < len(s.arms) else None for s in steps]
             ok = np.array([at is not None for at in ats])
-            wx = np.array([at.x - cx if at else np.nan for at in ats])
-            wy = np.array([at.y - cy if at else np.nan for at in ats])
-            z = np.array([at.z - cfg.z_base if at else np.nan for at in ats])
+            # every arm's targets back into the planner (arm 0) frame
+            pts = [from_arm_frame(cfg, a, (at.x, at.y, at.z)) if at else (np.nan, np.nan, np.nan) for at in ats]
+            wx = np.array([p[0] - cx for p in pts])
+            wy = np.array([p[1] - cy for p in pts])
+            z = np.array([p[2] - cfg.z_base for p in pts])
             ex = np.array([bool(at and at.extrude) for at in ats])
             c, s_ = np.cos(-self.phi), np.sin(-self.phi)
             self.px.append(wx * c - wy * s_)                      # plate = Rz(−phi) · (world − centre)

@@ -425,7 +425,19 @@ class ModelPrintPage(QWidget):
             max_segment_length=float(self.v_max_seg.get()),
             extruder_tool=0,
             orientation=self.app.orientation("right"),   # arm 0 = right (primary)
+            arm_frames=self._arm_frames(),
         )
+
+    def _arm_frames(self):
+        """Arm 0 = right (the frame the calibration fields describe), arm 1 = left, from the
+        Cylinder page's turntable centres and calibration.yaml base yaws."""
+        from ..geometry import CellGeometry
+        g = CellGeometry(self.app)
+        right = (float(self.v_center_x.get()), float(self.v_center_y.get()), float(self.v_center_z.get()),
+                 float(g.yaw["right"]))
+        lc = g.centre("left")
+        left = (float(lc[0]), float(lc[1]), float(lc[2]), float(g.yaw["left"]))
+        return [right, left]
 
     def redo(self):
         self.do_slice()
