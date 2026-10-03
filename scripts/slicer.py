@@ -28,9 +28,10 @@ try:                      # only needed to slice meshes; generators and the plan
     import trimesh
     from shapely.geometry import Polygon, LineString, MultiLineString, GeometryCollection
     from shapely import affinity
+    from shapely.ops import unary_union
     _MESH_IMPORT_ERROR = None
 except ImportError as _e:  # pragma: no cover
-    trimesh = Polygon = LineString = MultiLineString = GeometryCollection = affinity = None
+    trimesh = Polygon = LineString = MultiLineString = GeometryCollection = affinity = unary_union = None
     _MESH_IMPORT_ERROR = _e
 
 Point = Tuple[float, float]
@@ -120,15 +121,26 @@ def _load_mesh(mesh_path: str) -> trimesh.Trimesh:
     return mesh
 
 
-def _section_polygons(mesh: trimesh.Trimesh, z: float) -> List[Polygon]:
-    """Return the filled cross-section polygons (with holes) at height z, in model XY.
+def _bodies(mesh: trimesh.Trimesh) -> List[trimesh.Trimesh]:
+    """Separate solids in the file. Tinkercad and other CAD exports often contain shapes
+    that overlap without being merged; each must be filled on its own, then unioned."""
+    cached = getattr(mesh, "_cell_bodies", None)
+    if cached is None:
+        try:
+            cached = list(mesh.split(only_watertight=False)) or [mesh]
+        except Exception:
+            cached = [mesh]
+        mesh._cell_bodies = cached
+    return cached
 
-    Built with shapely from the section's closed loops (even-odd rule: XOR of all loops),
-    so a part with holes or several islands needs no extra packages (trimesh's own
-    polygons_full needs `rtree`), and the coordinates are the model's own XY."""
-    section = mesh.section(plane_origin=[0, 0, z], plane_normal=[0, 0, 1])
+
+def _body_region(body: trimesh.Trimesh, z: float):
+    """Filled cross-section of ONE solid: even-odd over its loops, so its own holes stay holes."""
+    if not (body.bounds[0][2] <= z <= body.bounds[1][2]):
+        return None
+    section = body.section(plane_origin=[0, 0, z], plane_normal=[0, 0, 1])
     if section is None:
-        return []
+        return None
     loops = []
     for d in section.discrete:
         pts = np.asarray(d)[:, :2]
@@ -140,12 +152,24 @@ def _section_polygons(mesh: trimesh.Trimesh, z: float) -> List[Polygon]:
         if not poly.is_empty and poly.area > 1e-6:
             loops.append(poly)
     if not loops:
-        return []
+        return None
     loops.sort(key=lambda g: -g.area)
     region = loops[0]
     for g in loops[1:]:
         region = region.symmetric_difference(g)
-    return list(_iter_polys(region))
+    return region
+
+
+def _section_polygons(mesh: trimesh.Trimesh, z: float) -> List[Polygon]:
+    """Return the filled cross-section polygons (with holes) at height z, in model XY.
+
+    Each separate solid is filled with the even-odd rule (its own holes stay holes), then
+    all solids are UNIONED, so overlapping, unmerged shapes print as one part instead of
+    the overlap being cut out. Uses shapely only (trimesh's polygons_full needs `rtree`)."""
+    regions = [r for r in (_body_region(b, z) for b in _bodies(mesh)) if r is not None and not r.is_empty]
+    if not regions:
+        return []
+    return list(_iter_polys(unary_union(regions)))
 
 
 def _ring_points(ring) -> List[Point]:

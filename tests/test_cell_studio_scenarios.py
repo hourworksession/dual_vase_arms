@@ -1261,6 +1261,33 @@ def s79(x):
     x.expect(any("Slicing…" in st for st in statuses), "No progress shown while slicing (panel looks frozen)")
 
 
+
+@scenario("Wil (owner)", "18:40", "Tinkercad part made of overlapping shapes that were never merged")
+def s80(x):
+    import trimesh
+    box = trimesh.creation.box((80, 60, 38))
+    cross = [trimesh.creation.box((80, 8, 38)), trimesh.creation.box((8, 60, 38))]
+    m_ = trimesh.util.concatenate([box] + cross)
+    m_.apply_translation((0, 0, 19))
+    path = os.path.join(GEN_TMP, "overlapping.obj")
+    m_.export(path)
+    m = x.w.model
+    x.w.go(2)
+    m.v_layer_height.set(0.6)
+    m.load_model(path)
+    m.do_slice()
+    t = time.time()
+    while getattr(m, "_slicing", False) and time.time() - t < 120:
+        pump(0.05)
+    res = m.slice_result
+    if res is None:
+        x.expect(False, f"Not sliced: {m.v_status.get()}")
+        return
+    outers = [len([p for p in L.paths if p.kind == "WALL_OUTER"]) for L in res.layers]
+    x.expect(max(outers) == 1, f"The overlap between the shapes was cut out: {max(outers)} separate outlines per layer "
+                               "instead of 1")
+
+
 # ---------------------------------------------------------------- runner
 def run(selected=None):
     rows = []
