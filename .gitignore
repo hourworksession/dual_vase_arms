@@ -14,3 +14,4 @@ dist/
 !tests/fixtures/*.gcode
 *.plan.json
 !tests/fixtures/*.plan.json
+scripts/motion_debug.csv
