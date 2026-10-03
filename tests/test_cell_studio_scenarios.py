@@ -1443,6 +1443,28 @@ def s86(x):
         pass
 
 
+@scenario("Priya (MSc)", "20:00", "Prints on simulated hardware and watches it in the Simulation tab")
+def s87(x):
+    x.connect()
+    m = sliced(x)
+    x.w.go(2)
+    if m.program is None:
+        x.expect(False, "No plan")
+        return
+    ANSWERS.extend([True] * 4)
+    m.start_print()
+    x.wait_for(lambda: m.sim.k > 0, 6)
+    x.expect(m.preview_tabs.currentWidget() is m.sim, "Simulation tab not shown when the print started")
+    x.expect(m.sim.k > 0 and getattr(m.sim, "live", False), "Simulation did not follow the print")
+    k1 = m.sim.k
+    x.wait_for(lambda: m.sim.k > k1, 3)
+    x.expect(m.sim.k > k1, "Simulation stopped following")
+    m.stop_print()
+    x.wait_for(lambda: not m.printing, 5)
+    pump(0.2)
+    x.expect(not getattr(m.sim, "live", False), "Still marked LIVE after the print stopped")
+
+
 # ---------------------------------------------------------------- runner
 def run(selected=None):
     rows = []

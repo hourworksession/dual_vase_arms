@@ -134,6 +134,7 @@ class SimulationView(QWidget):
         self.play_btn.setMinimumWidth(96)
         self.time_lbl = label("00:00 / 00:00", "Muted")
         self.time_lbl.setStyleSheet(f"font-family:{theme.FONT_MONO}; font-size:12px;")
+        self.time_lbl.setTextFormat(Qt.RichText)
         v.addWidget(hrow(self.play_btn, self.slider, self.time_lbl, spacing=10))
         v.addWidget(hrow(label("Speed", "Muted"),
                          Segmented(self.speed, [(1.0, "1×"), (10.0, "10×"), (50.0, "50×"), (200.0, "200×")]),
@@ -279,6 +280,7 @@ class SimulationView(QWidget):
     def toggle(self):
         if self.n == 0:
             return
+        self.live = False
         if self.playing:
             self.stop()
         else:
@@ -301,6 +303,7 @@ class SimulationView(QWidget):
             self.stop()
 
     def _scrub(self, v):
+        self.live = False
         self._seek_time(self.total * v / 1000)
 
     def _seek_time(self, t):
@@ -312,13 +315,28 @@ class SimulationView(QWidget):
         self._update_info()
         self.canvas.update()
 
+    def follow(self, k):
+        """Live mode: show step k of the plan now being sent to the cell (or the simulator)."""
+        if self.n == 0:
+            return
+        if self.playing:
+            self.stop()
+        k = max(0, min(self.n - 1, int(k)))
+        self.live = True
+        self._seek_time(float(self.t_end[k]) - 1e-9)
+
+    def end_follow(self):
+        self.live = False
+        self._update_info()
+
     def _update_info(self):
         if self.n == 0:
             self.time_lbl.setText("00:00 / 00:00")
             self.info.setText("")
             return
         k = self.k
-        self.time_lbl.setText(f"{_mmss(self.t)} / {_mmss(self.total)}")
+        live = "<span style='color:#f85149'>● LIVE</span>  " if getattr(self, "live", False) else ""
+        self.time_lbl.setText(f"{live}{_mmss(self.t)} / {_mmss(self.total)}")
         parts = [f"layer {self.layer[k] + 1}/{self.layers}",
                  f"disc {math.degrees(self.phi[k]) % 360:6.1f}°"]
         for a in range(self.arms):

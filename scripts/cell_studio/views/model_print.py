@@ -643,6 +643,9 @@ class ModelPrintPage(QWidget):
             panel_rows = []
             sample = max(1, len(prog.steps) // 40)
             t = 0.0
+            last_follow = 0.0
+            if not dry:
+                app.ui.post(lambda: self.preview_tabs.setCurrentWidget(self.sim))
             for si, step in enumerate(prog.steps):
                 if self.stop_requested:
                     break
@@ -676,6 +679,10 @@ class ModelPrintPage(QWidget):
                         panel_rows.append(row)
                 if not dry:
                     time.sleep(dt)
+                    now = time.monotonic()
+                    if now - last_follow > 0.1:          # Simulation tab follows the print live
+                        last_follow = now
+                        app.ui.post(lambda k=si: self.sim.follow(k))
                 t += dt
                 if si % 50 == 0:
                     frac = (si + 1) / max(1, len(prog.steps))
@@ -708,6 +715,7 @@ class ModelPrintPage(QWidget):
             self.printing = False
             if not dry:
                 app.ui.post(lambda: app.job_state.set("idle"))
+                app.ui.post(self.sim.end_follow)
 
     def _move_arm(self, arm, at, speed, blend):
         # Each arm has its own mount orientation; use the one for the arm actually moving
