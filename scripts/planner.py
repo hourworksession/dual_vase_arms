@@ -85,6 +85,11 @@ class PlannerConfig:
     min_segment_length: float = 0.0     # coalesce points closer than this (0=off)
     max_segment_length: float = 1.0     # subdivide coordinated paths to <= this (0=off)
     start_phi: float = 0.0
+    # Print rules (rules.RuleSet). When set, whether the bed turns is decided per PATH by
+    # the rules (round paths around the axis turn; squares, off-centre features and fill
+    # are drawn on a held bed, turned first to face the arm). None = the old per-kind rule.
+    rules: Optional[object] = None
+    face_limit: float = math.radians(60.0)   # held features further round than this are turned to the arm
 
     def filament_area(self) -> float:
         return math.pi * (self.filament_diameter / 2.0) ** 2
@@ -115,6 +120,7 @@ class MotionStep:
 class MotionProgram:
     steps: List[MotionStep]
     config: PlannerConfig
+    decisions: Optional[object] = None      # rules.DecisionLog when planned with print rules
 
     def total_time(self) -> float:
         return sum(s.dt for s in self.steps)
@@ -215,11 +221,47 @@ def _assign_paths(ordered: List[Tuple[int, Path]], num_arms: int) -> List[List[T
     return lanes
 
 
-def _is_coordinated(cfg: PlannerConfig, kind: str) -> bool:
-    """True if the turntable rotates while printing this path kind."""
+def _is_coordinated(cfg: PlannerConfig, kind: str, path: Optional[Path] = None) -> bool:
+    """True if the turntable rotates while printing this path."""
     if kind == TRAVEL:
         return False
-    return cfg.use_turntable and (kind in _WALLS or cfg.turntable_for_infill)
+    if not cfg.use_turntable:
+        return False
+    if cfg.rules is not None and path is not None and getattr(path, "_turn", None) is not None:
+        return path._turn
+    return kind in _WALLS or cfg.turntable_for_infill
+
+
+def apply_rules(slc: SliceResult, cfg: PlannerConfig):
+    """Decide, per path, whether the bed turns (cfg.rules). Marks each path with _turn and,
+    for held paths, _anchor (plate angle of its centre, to face the arm). Returns a
+    rules.DecisionLog. No-op (None) without rules."""
+    if cfg.rules is None or not cfg.use_turntable:
+        return None
+    from rules import path_turntable_decision, layer_is_symmetric, DecisionLog
+    rs = cfg.rules
+    log = DecisionLog()
+    ox, oy = cfg.part_offset
+    face = bool(rs.get("turntable.face_arm", True))
+    cfg.face_limit = math.radians(float(rs.get("turntable.face_limit_deg", 60.0)))
+    for layer in slc.layers:
+        plate_paths = [[(p[0] + ox, p[1] + oy) for p in path.points] for path in layer.paths
+                       if path.kind != TRAVEL]
+        sym = layer_is_symmetric(plate_paths)
+        for path in layer.paths:
+            if path.kind == TRAVEL:
+                continue
+            pts = [(p[0] + ox, p[1] + oy) for p in path.points]
+            turn, rid, why = path_turntable_decision(pts, path.kind, rs, sym)
+            path._turn = turn
+            path._anchor = None
+            if not turn and face and pts:
+                cx = sum(p[0] for p in pts) / len(pts)
+                cy = sum(p[1] for p in pts) / len(pts)
+                if math.hypot(cx, cy) > 5.0:
+                    path._anchor = math.atan2(cy, cx)
+            log.add(rid, why, f"layer {layer.index + 1} {path.kind.lower()}")
+    return log
 
 
 def _lane_vertices(cfg: PlannerConfig, lane: List[Tuple[int, Path]], slc: SliceResult):
@@ -235,7 +277,9 @@ def _lane_vertices(cfg: PlannerConfig, lane: List[Tuple[int, Path]], slc: SliceR
         pts = _prep_points(path, cfg.min_segment_length)
         # Subdivide only paths the turntable coordinates, so straight sides stay
         # straight in polar. Others (held infill, or Cartesian) need no extra pts.
-        if _is_coordinated(cfg, path.kind) and cfg.max_segment_length > 0:
+        coord = _is_coordinated(cfg, path.kind, path)
+        anchor = getattr(path, "_anchor", None) if (not coord and cfg.rules is not None) else None
+        if coord and cfg.max_segment_length > 0:
             pts = _densify(pts, cfg.max_segment_length)
         prev = None
         for j, pt in enumerate(pts):
@@ -246,17 +290,18 @@ def _lane_vertices(cfg: PlannerConfig, lane: List[Tuple[int, Path]], slc: SliceR
                 pz = pt[2]
                 w, h = (pt[3], pt[4]) if len(pt) >= 5 else (None, None)
             if j == 0:
-                yield (plate, pz, False, 0.0, layer_idx, path.kind, w, h)
+                yield (plate, pz, False, 0.0, layer_idx, path.kind, w, h, coord, anchor)
             else:
                 if len(pt) == 2:
                     seg = math.hypot(plate[0] - prev[0][0], plate[1] - prev[0][1])
                 else:
                     seg = math.dist((plate[0], plate[1], pz), (prev[0][0], prev[0][1], prev[1]))
-                yield (plate, pz, not travel, seg, layer_idx, path.kind, w, h)
+                yield (plate, pz, not travel, seg, layer_idx, path.kind, w, h, coord, anchor)
             prev = (plate, pz)
 
 
 def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
+    decisions = apply_rules(slc, cfg)
     ordered = order_toolpaths(slc)
     n = max(1, cfg.num_arms)
     lanes = _assign_paths(ordered, n)
@@ -277,12 +322,20 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
             for i, rec in enumerate(recs):
                 if rec is None:
                     continue
-                kind = rec[5]
-                if kind == TRAVEL or (not cfg.turntable_for_infill and kind not in _WALLS):
-                    continue
-                plate = rec[0]
-                theta = math.atan2(plate[1], plate[0])
+                coord, anchor = rec[8], rec[9]
                 alpha = cfg.arm_azimuths[i % len(cfg.arm_azimuths)]
+                if coord:
+                    plate = rec[0]
+                    theta = math.atan2(plate[1], plate[0])
+                elif anchor is not None:
+                    # Held path: if its centre is more than face_limit away from this arm,
+                    # turn it to face the arm first; otherwise leave the bed where it is.
+                    off = _wrap_to_pi(anchor + phi - alpha)
+                    if abs(off) <= cfg.face_limit:
+                        continue
+                    theta = anchor
+                else:
+                    continue
                 desired.append(phi + _wrap_to_pi((alpha - theta) - phi))
             if desired:
                 sx = sum(math.sin(a) for a in desired)
@@ -302,7 +355,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
             if rec is None:
                 tmp.append(None)
                 continue
-            plate, z, extrude, seg, layer_idx, kind, w, h = rec
+            plate, z, extrude, seg, layer_idx, kind, w, h = rec[:8]
             speed = cfg.print_speed if extrude else cfg.travel_speed
             t_feed = max(t_feed, seg / speed if speed > 0 else 0.0)
             world = _world(cfg, plate, phi_target, z)
@@ -347,7 +400,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                                 arms=arms, layer=step_layer, kind=step_kind))
         phi = phi_target
 
-    return MotionProgram(steps=steps, config=cfg)
+    return MotionProgram(steps=steps, config=cfg, decisions=decisions)
 
 
 # ----------------------------------------------------------------------------

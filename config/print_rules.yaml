@@ -1,0 +1,266 @@
+# Print rules for the cell.
+#
+# One place for the decisions the slicer and planner make about HOW a part is
+# printed. The same file is the contract for the rule-based AI layer:
+#   * every rule has an `id`, a `why` and, for numbers, a `range`;
+#   * the AI may propose new values (scripts/rules.py: propose()), and only
+#     values inside the range are accepted;
+#   * every decision the planner takes is logged with the rule id that made it,
+#     so a print can be explained afterwards ("layer 12, post circle: bed held,
+#     rule turntable.hold_off_axis").
+# Edit here or in Cell Studio: Settings ▸ Print rules.
+
+version: 1
+
+turntable:
+  enabled:
+    id: turntable.enabled
+    value: true
+    why: Use the turntable at all. Off = the arm draws everything on a still bed.
+
+  coordinate_only_round_paths:
+    id: turntable.round_paths
+    value: true
+    why: >
+      The bed turns only for paths that go around the turntable axis and are
+      close to round. Everything else (squares, off-centre features, infill) is
+      drawn by the arm on a still bed, so straight lines stay straight and the
+      bed does not swing back and forth.
+
+  max_radial_variation:
+    id: turntable.max_radial_variation
+    value: 0.15
+    range: [0.0, 1.0]
+    why: >
+      Spread of a path's radius along its length (10th to 90th percentile)
+      divided by its mean radius. A circle on the axis is 0; a square on the
+      axis is about 0.3; a round wall with a few small bumps stays low. Above
+      this the path is drawn with the bed held.
+
+  min_radius_mm:
+    id: turntable.min_radius_mm
+    value: 8.0
+    range: [0.0, 100.0]
+    why: Paths whose mean radius is smaller than this are too close to the axis to turn the bed for.
+
+  kinds_never_turned:
+    id: turntable.kinds_never_turned
+    value: [SKIN, INFILL]
+    choices: [WALL_OUTER, WALL_INNER, SKIN, INFILL]
+    why: Path kinds always drawn on a still bed (zig-zag fill reverses too often to follow).
+
+  face_arm_before_held_path:
+    id: turntable.face_arm
+    value: true
+    why: >
+      Before a held path that is far round from the printing arm, turn the part
+      so the feature faces the arm (shortest reach, stays in that arm's safe
+      zone), then hold.
+
+  face_limit_deg:
+    id: turntable.face_limit_deg
+    value: 60.0
+    range: [0.0, 180.0]
+    why: >
+      A held feature within this angle of the arm is printed where it is (no
+      turn). Further round than this, the part is turned to face the arm first.
+
+  symmetric_parts_turn:
+    id: turntable.symmetric_parts
+    value: true
+    why: >
+      If a layer is the same on both sides of the axis (two-fold symmetric),
+      paths that go around the axis keep turning even if they are not round,
+      so both arms can print their half at once.
+
+lines:
+  min_line_width_of_nozzle:
+    id: lines.min_width
+    value: 0.8
+    range: [0.5, 1.0]
+    why: Narrowest line, as a fraction of the nozzle, the panel will suggest.
+
+  max_line_width_of_nozzle:
+    id: lines.max_width
+    value: 1.6
+    range: [1.0, 2.5]
+    why: Widest line, as a fraction of the nozzle.
+
+  thin_features:
+    id: lines.thin_features
+    value: centreline
+    choices: [centreline, skip]
+    why: >
+      Parts narrower than one line. centreline = print one line down the middle,
+      as wide as the feature, pushing less plastic where it is narrower (never
+      narrower than lines.min_width). skip = do not print them.
+
+  thin_skip_below:
+    id: lines.thin_skip_below
+    value: 0.4
+    range: [0.0, 1.0]
+    why: Features narrower than this fraction of the nozzle are too thin to print at all and are left out.
+
+  warn_lost_percent:
+    id: lines.warn_lost_percent
+    value: 0.5
+    range: [0.0, 20.0]
+    why: Warn when more than this % of a layer is narrower than one line and would not print.
+
+# What the cell can physically do. The tactics below must stay inside these; the
+# AI reads them to know which manoeuvres are possible.
+hardware:
+  nozzle_tilt_max_deg:
+    id: hardware.tilt_max
+    value: 30
+    range: [0, 60]
+    why: >
+      Largest lean of the nozzle from vertical either arm may use (6-axis arm,
+      nozzle straight down at 0). Limited by the extruder body hitting the part.
+  turntable_max_speed:
+    id: hardware.tt_max_speed
+    value: 1.5
+    range: [0.0, 3.0]
+    why: Turntable speed limit, rad/s.
+  turntable_max_accel:
+    id: hardware.tt_max_accel
+    value: 3.0
+    range: [0.1, 20.0]
+    why: Turntable acceleration limit, rad/s². Straight lines in polar need fast speed changes; above this, hold the bed.
+  arms:
+    id: hardware.arms
+    value: [right, left]
+    choices: [right, left]
+    why: Arms available. Right is the primary printing arm.
+  arm_reach_mm:
+    id: hardware.reach
+    value: 850
+    range: [300, 1000]
+    why: xArm 850 reach from the base axis.
+
+# Tactics: the manoeuvres the cell can use for a CELL of the part (one connected
+# region over a band of layers). The planner picks the first tactic whose `when`
+# matches, in this order; an AI may reorder them or change their parameters
+# within range, and every choice is logged with the cell's measurements so the
+# outcome can be learned from.
+# status: in_use = the planner does it today; preview = reported per cell, not
+# generated yet; planned = described only.
+tactics:
+  - id: tactic.thin_centreline
+    status: in_use
+    when: {narrower_than_line: true}
+    uses: [arm]
+    why: Feature thinner than one line -> one variable-width line down its middle, less plastic.
+
+  - id: tactic.polar_wall
+    status: in_use
+    when: {encloses_axis: true, round: true}
+    uses: [turntable, arm]
+    why: Round wall around the axis -> bed turns, arm mostly still, smooth and fast.
+
+  - id: tactic.held_cartesian
+    status: in_use
+    when: {}
+    uses: [arm]
+    why: Squares, off-centre features, infill -> bed held (turned first to face the arm), arm draws straight lines.
+
+  - id: tactic.dual_arm_mirror
+    status: preview
+    when: {has_mirror_partner: true}
+    uses: [arm, arm]
+    why: The same feature on the opposite side of the axis -> each arm prints one at the same time.
+
+  - id: tactic.spiral_vase
+    status: preview
+    when: {single_loop: true, wall_mm_below: 1.8}
+    uses: [turntable, arm]
+    why: One thin loop -> continuous spiral (no layer seam).
+
+  - id: tactic.spiral_brick
+    status: preview
+    when: {single_loop: true, wall_mm_at_least: 1.8}
+    uses: [turntable, arm, arm, tilt]
+    tilt_deg: {id: tactic.spiral_brick.tilt, value: 5, range: [0, 20], why: Lean of each nozzle toward the wall centre.}
+    why: >
+      Two-bead wall as a double helix offset half a layer, each nozzle leaning
+      toward the wall centre; outer bead right arm, inner bead left arm.
+
+  - id: tactic.tilted_overhang
+    status: preview
+    when: {overhang_deg_over: 30}
+    uses: [arm, tilt]
+    max_tilt_deg: {id: tactic.tilted_overhang.max_tilt, value: 25, range: [0, 45], why: Largest lean used to follow an overhang.}
+    why: >
+      Wall leaning outward more than this -> tilt the nozzle to follow the wall
+      so each bead is supported by the one below (non-planar, no supports).
+
+  - id: tactic.radial_winding
+    status: planned
+    when: {encloses_axis: true, round: true}
+    uses: [turntable, arm, tilt]
+    why: >
+      Nozzle at 45-90 deg depositing on the side of the rotating part,
+      filament-winding style, to build wall thickness radially.
+
+  - id: tactic.conformal_top
+    status: planned
+    when: {top_surface: true, curved: true}
+    uses: [arm, tilt]
+    why: Curved top surfaces printed as one non-planar skin following the surface.
+
+# Non-planar preferences, per layer band. First matching band wins.
+# Status: the panel REPORTS which band each layer falls in (slice report).
+# Generating the non-planar toolpaths from these is the next step.
+nonplanar:
+  enabled:
+    id: nonplanar.enabled
+    value: false
+    why: Off = every layer flat. On = layers are grouped into the bands below.
+
+  bands:
+    - id: nonplanar.bottom
+      when: {first_layers: 3}
+      style: planar
+      why: Flat first layers for bed adhesion.
+
+    - id: nonplanar.top
+      when: {last_layers: 3}
+      style: planar
+      why: Flat finish on top surfaces and rims.
+
+    - id: nonplanar.shape_change
+      when: {section_change_percent_over: 5}
+      style: planar
+      why: Where the cross-section changes (slots, posts starting or ending), print flat layers.
+
+    - id: nonplanar.spiral_brick
+      when: {single_loop: true, wall_mm_at_least: 1.8}
+      style: spiral_brick
+      beads: 2
+      tilt_deg: {id: nonplanar.spiral_brick.tilt, value: 5, range: [0, 20], why: Lean toward the wall centre.}
+      bead_offset_layers: 0.5
+      arms: {outer: right, inner: left}
+      why: >
+        One continuous screw instead of layers. The wall is two beads offset
+        half a layer (like bricks); each nozzle leans toward the wall centre so
+        beads press into the groove between the two below. Outer bead right
+        arm, inner bead left arm, sharing the wall.
+
+    - id: nonplanar.spiral
+      when: {single_loop: true}
+      style: spiral
+      why: Thin single-loop walls print as a single-bead spiral (vase mode).
+
+  default_style: planar
+
+  limits:
+    max_tilt_deg:
+      id: nonplanar.max_tilt
+      value: 15
+      range: [0, 30]
+      why: Largest nozzle lean from vertical the arms are allowed.
+    max_rise_per_turn_mm:
+      id: nonplanar.max_rise
+      value: 1.2
+      range: [0.1, 2.0]
+      why: Largest Z climb per revolution of a spiral (about 2 layers).

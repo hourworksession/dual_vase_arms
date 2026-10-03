@@ -97,6 +97,21 @@ the log console, and an error that stops the panel opening stays on that window.
   Pitch ±90 is the xArm's roll/yaw gimbal lock, so the arm may report a different but equivalent
   roll/yaw; the panel always commands these. Turntable centre defaults (Cylinder ▸ centre) are the
   new-mount values: right 508.18, -22.88, Z 107.4; left 512.1, -8.4, Z 110.2.
+* **Settings ▸ Print rules** (`config/print_rules.yaml`, engine `scripts/rules.py`): the decisions
+  about HOW a part is printed, in one file that is also the contract for the rule-based AI layer.
+  Every rule has an id, a reason and an allowed range; `RuleSet.propose()` only accepts values in
+  range, and every planner decision is logged with the rule that made it.
+  - *Turntable*: the bed turns only for round paths around the axis. Squares, off-centre features
+    and fill are drawn by the arm on a held bed (turned to face the arm first if far round).
+    The trug: 3,712 turntable reversals → 552.
+  - *Thin features*: parts narrower than one line print as one line down their middle, as wide as
+    the feature, with less plastic (instead of being dropped).
+  - *Hardware* limits and *tactics*: the manoeuvres the cell can use per region (polar wall, held
+    Cartesian, thin centreline in use; dual-arm mirror, spiral vase, spiral brick with tilt, tilted
+    overhang previewed; radial winding, conformal top planned). The slice is split into *cells*
+    (a region carried up through layers); each cell's measurements and chosen tactic are written to
+    `scripts/cells_<model>.json` for the AI to learn from.
+  - *Non-planar bands*: which layers would be flat, spiral or spiral-brick (reported, not generated yet).
 * **Live panel** (always visible): arm poses, turntable angle, temperatures, job timer,
   and the live turntable speed slider.
 * **Settings ▸ Home positions**: a custom home per arm (joint angles or Cartesian pose,

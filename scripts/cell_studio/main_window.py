@@ -151,6 +151,7 @@ class MainWindow(QMainWindow):
         a = m.addAction("Home positions…")
         a.triggered.connect(self.open_home_dialog)
         m.addAction("Tool and nozzle…").triggered.connect(self.open_tool_dialog)
+        m.addAction("Print rules…").triggered.connect(self.open_rules_dialog)
         m.addSeparator()
         self.act_console = m.addAction("Show log console")
         self.act_console.setCheckable(True)
@@ -355,6 +356,11 @@ class MainWindow(QMainWindow):
             toolmod.save(d)
             self.c.tool = d
             logging.getLogger("cell_studio").info("Tool settings saved: %s", d)
+
+    def open_rules_dialog(self):
+        from .views.rules_dialog import RulesDialog
+        self._rules_dlg = RulesDialog(self)
+        self._rules_dlg.show()          # non-modal: the E-stop stays reachable
 
     def _show_paths(self):
         from . import home_config

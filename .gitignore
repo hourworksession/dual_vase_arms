@@ -15,3 +15,4 @@ dist/
 *.plan.json
 !tests/fixtures/*.plan.json
 scripts/motion_debug.csv
+scripts/cells_*.json

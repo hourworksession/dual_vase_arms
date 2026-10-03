@@ -86,6 +86,13 @@ class SliceSettings:
     infill_pattern: str = "grid"     # 'lines' or 'grid'
     top_layers: int = 3
     bottom_layers: int = 3
+    # Parts narrower than one line: "centreline" prints them as a single line down their
+    # middle, as wide as the feature (less plastic per mm), never narrower than
+    # thin_min_width (0 = 0.75 x line width); features narrower than thin_skip_below are
+    # dropped. "skip" = the old behaviour (not printed).
+    thin_mode: str = "centreline"
+    thin_min_width: float = 0.0
+    thin_skip_below: float = 0.0
 
 
 @dataclass
@@ -107,6 +114,8 @@ class SliceResult:
                 f"extrude path length ~= {total_len/1000:.2f} m"
                 + (f" | {self.thin} feature cross-section(s) thinner than the {self.settings.line_width} mm line "
                    "were skipped" if getattr(self, "thin", 0) else "")
+                + (f" | {len(self.narrow)} layer(s) have parts narrower than the line (not printed)"
+                   if getattr(self, "narrow", None) else "")
                 + (f" | {len(self.failures)} layer(s) FAILED to slice (first: layer "
                    f"{self.failures[0][0]}, {self.failures[0][1]})" if getattr(self, "failures", None) else ""))
 
@@ -279,6 +288,11 @@ def slice_model(mesh_path: str, settings: SliceSettings, progress=None) -> Slice
     layers: List[Layer] = []
     failures = []
     thin = 0                            # cross-sections too thin for even one line
+    all_polys = []                      # per layer cross-sections, for the per-region features
+    thin_filled = []                    # layers where narrow parts were printed as centrelines
+    section_stats = []                  # per layer: parts, holes, area, perimeter (non-planar bands)
+    narrow = []                         # (layer, z, mm² narrower than one line, % of the section)
+    worst = (0.0, None)                 # (lost %, polygons) of the layer that loses the most
     for i in range(n_layers):
         if progress is not None and i % 5 == 0:
             progress(i, n_layers)
@@ -290,6 +304,24 @@ def slice_model(mesh_path: str, settings: SliceSettings, progress=None) -> Slice
         except Exception as e:          # keep going, but never silently: reported below
             polys = []
             failures.append((i, f"{type(e).__name__}: {e}"))
+        section_stats.append({"polys": len(polys), "holes": sum(len(q.interiors) for q in polys),
+                              "area": sum(q.area for q in polys), "perimeter": sum(q.length for q in polys)})
+        lost = narrower_than(polys, settings.line_width)
+        total = sum(p_.area for p_ in polys)
+        all_polys.append(polys)
+        if total > 0 and lost / total > 0.005:
+            pct = 100.0 * lost / total
+            narrow.append((i, z, lost, pct))
+            if pct > worst[0]:
+                worst = (pct, polys)
+        thin_here = 0
+        if settings.thin_mode == "centreline" and lost > 0:
+            for poly in polys:
+                tp = thin_feature_paths(poly, settings, z)
+                thin_here += len(tp)
+                layer.paths.extend(tp)
+        if thin_here:
+            thin_filled.append(i)
         for poly in polys:
             if poly.is_empty or poly.area <= 0:
                 continue
@@ -309,7 +341,186 @@ def slice_model(mesh_path: str, settings: SliceSettings, progress=None) -> Slice
     res = SliceResult(layers=layers, settings=settings, bounds=mesh.bounds)
     res.failures = failures
     res.thin = thin
+    res.narrow = narrow
+    res.section_stats = section_stats
+    res.thin_filled = thin_filled
+    try:
+        res.region_features = region_features(all_polys, settings)
+    except Exception as e:              # features feed reports and the AI only; never block a slice
+        res.region_features = []
+        failures.append((-1, f"region features: {type(e).__name__}: {e}"))
+    res.narrow_worst_polys = worst[1]
     return res
+
+
+def thin_feature_paths(poly: Polygon, settings: SliceSettings, z: float) -> List[Path]:
+    """Single lines down the middle of the parts of `poly` narrower than one line width.
+
+    Uses the medial axis (centres of the largest circles that fit), found from the
+    Voronoi diagram of the densified outline. Each point carries its own width = the
+    local feature width (clamped to thin_min_width .. line width), so the planner
+    extrudes less plastic where the feature is narrower. Points are (x, y, z, w, h)."""
+    from scipy.spatial import Voronoi
+    import shapely
+    lw = settings.line_width
+    w_min = settings.thin_min_width or 0.75 * lw
+    w_skip = settings.thin_skip_below or 0.4 * lw
+    step = lw / 4.0
+    pts = []
+    for ring in [poly.exterior] + list(poly.interiors):
+        L = ring.length
+        n = max(8, int(L / step))
+        pts.extend((p.x, p.y) for p in (ring.interpolate(L * k / n) for k in range(n)))
+    if len(pts) < 8:
+        return []
+    pts = np.array(pts)
+    try:
+        vor = Voronoi(pts)
+    except Exception:
+        return []
+    V = vor.vertices
+    inside = shapely.contains_xy(poly, V[:, 0], V[:, 1])
+    r = np.full(len(V), np.inf)
+    if inside.any():
+        r[inside] = shapely.distance(poly.boundary, shapely.points(V[inside]))
+    keep = inside & (r < lw / 2.0) & (2 * r >= w_skip)
+    adj = {}
+    for a, b in vor.ridge_vertices:
+        if a < 0 or b < 0 or not (keep[a] and keep[b]):
+            continue
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+    if not adj:
+        return []
+    # walk the graph into chains (split at junctions and ends)
+    seen_edges = set()
+    chains = []
+    starts = [v for v, nb in adj.items() if len(nb) != 2] or [next(iter(adj))]
+    for s0 in starts + list(adj):
+        for nb in list(adj[s0]):
+            e = (min(s0, nb), max(s0, nb))
+            if e in seen_edges:
+                continue
+            chain = [s0]
+            prev, cur = s0, nb
+            seen_edges.add(e)
+            while True:
+                chain.append(cur)
+                if len(adj[cur]) != 2 or cur == s0:
+                    break
+                nxt = [q for q in adj[cur] if q != prev][0]
+                e = (min(cur, nxt), max(cur, nxt))
+                if e in seen_edges:
+                    break
+                seen_edges.add(e)
+                prev, cur = cur, nxt
+            chains.append(chain)
+    out = []
+    h = settings.layer_height
+    for ch in chains:
+        xy = V[ch]
+        seg = np.hypot(*np.diff(xy, axis=0).T).sum() if len(xy) > 1 else 0.0
+        if seg < lw:                      # stubs at corners and junctions
+            continue
+        closed = len(ch) > 2 and ch[0] == ch[-1]
+        if closed:
+            xy, ch = xy[:-1], ch[:-1]
+        # thin out to ~step spacing
+        keep_i = [0]
+        acc = 0.0
+        for i in range(1, len(xy)):
+            acc += float(np.hypot(*(xy[i] - xy[i - 1])))
+            if acc >= step or i == len(xy) - 1:
+                keep_i.append(i)
+                acc = 0.0
+        p5 = [(float(xy[i][0]), float(xy[i][1]), float(z),
+               float(min(lw, max(w_min, 2.0 * r[ch[i]]))), float(h)) for i in keep_i]
+        out.append(Path(WALL_OUTER, p5, closed=closed))
+    return out
+
+
+def region_features(all_polys, settings: SliceSettings):
+    """Measurements of every connected region of every layer, for choosing a tactic per
+    region (print rules) and for the AI to learn from. Model frame; the turntable axis is
+    at the model origin (as placed for printing). Returns [layer][region] dicts."""
+    from shapely.geometry import Point as _P
+    from shapely.ops import unary_union as _uu
+    lh, lw = settings.layer_height, settings.line_width
+    unions = [(_uu(ps) if ps else None) for ps in all_polys]
+    out = []
+    origin = _P(0.0, 0.0)
+    for i, polys in enumerate(all_polys):
+        below = unions[i - 1] if i > 0 else None
+        above = unions[i + 1] if i + 1 < len(unions) else None
+        feats = []
+        for q in polys:
+            if q.is_empty or q.area <= 0:
+                continue
+            c = q.centroid
+            ext = list(q.exterior.coords)
+            radii = sorted(math.hypot(x, y) for x, y in ext)
+            mean_r = sum(radii) / len(radii)
+            r10, r90 = radii[len(radii) // 10], radii[(len(radii) * 9) // 10]
+            overhang = 0.0
+            if below is not None and not below.is_empty:
+                diff = q.difference(below)
+                if not diff.is_empty and diff.area > 0.5 * lw * lw:
+                    pts = [_P(x, y) for g in getattr(diff, "geoms", [diff]) if g.geom_type == "Polygon"
+                           for x, y in g.exterior.coords[::max(1, len(g.exterior.coords) // 60)]]
+                    if pts:
+                        overhang = max(below.distance(pp) for pp in pts)
+            top = 0.0
+            if above is None or above.is_empty:
+                top = 1.0
+            else:
+                top = max(0.0, q.difference(above).area / q.area)
+            feats.append({
+                "layer": i, "area": round(q.area, 2), "holes": len(q.interiors),
+                "perimeter": round(q.length, 2),
+                "wall_mm": round(2.0 * q.area / q.length, 3) if q.length > 0 else 0.0,
+                "centroid": (round(c.x, 2), round(c.y, 2)),
+                "encloses_axis": bool(Polygon(q.exterior).contains(origin)),
+                "radial_variation": round((r90 - r10) / mean_r, 3) if mean_r > 0 else 1.0,
+                "narrow_pct": round(100.0 * narrower_than([q], lw) / q.area, 2),
+                "overhang_mm": round(overhang, 3),
+                "overhang_deg": round(math.degrees(math.atan2(overhang, lh)), 1),
+                "top_fraction": round(top, 3),
+            })
+        # mirror partners: same area, centroid mirrored through the axis
+        for a in feats:
+            a["has_mirror_partner"] = any(
+                b is not a and abs(b["area"] - a["area"]) <= 0.05 * a["area"] and
+                math.hypot(a["centroid"][0] + b["centroid"][0], a["centroid"][1] + b["centroid"][1]) <= 1.0
+                for b in feats) and math.hypot(*a["centroid"]) > 1.0
+        out.append(feats)
+    return out
+
+
+def narrower_than(polys, width: float) -> float:
+    """Area (mm²) of these cross-sections that is narrower than `width`, i.e. that a
+    line that wide cannot reach (morphological opening)."""
+    lost = 0.0
+    for poly in polys:
+        if poly.is_empty or poly.area <= 0:
+            continue
+        opened = poly.buffer(-width / 2.0).buffer(width / 2.0)
+        lost += max(0.0, poly.area - opened.area)
+    return lost
+
+
+def suggest_line_width(polys, current: float, minimum: float, step: float = 0.05,
+                       tolerance_pct: float = 0.5) -> Optional[float]:
+    """Widest line (≤ current, ≥ minimum) that keeps all but tolerance_pct of these
+    cross-sections printable. None if even the minimum loses more than that."""
+    total = sum(p.area for p in polys if not p.is_empty)
+    if total <= 0:
+        return None
+    w = round(current - step, 3)
+    while w >= minimum - 1e-9:
+        if 100.0 * narrower_than(polys, w) / total <= tolerance_pct:
+            return round(w, 2)
+        w = round(w - step, 3)
+    return None
 
 
 # ----------------------------------------------------------------------------

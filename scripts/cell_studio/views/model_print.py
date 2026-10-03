@@ -65,8 +65,8 @@ class LayerView(QWidget):
             if len(pts) < 2:
                 continue
             qp = QPainterPath(QPointF(ox + pts[0][0] * scale, oy - pts[0][1] * scale))
-            for (x, y) in pts[1:]:
-                qp.lineTo(ox + x * scale, oy - y * scale)
+            for pt in pts[1:]:                       # (x, y) or (x, y, z, width, height)
+                qp.lineTo(ox + pt[0] * scale, oy - pt[1] * scale)
             p.setPen(QPen(QColor(col), 1.3))
             p.drawPath(qp)
         p.setPen(QColor(theme.TEXT))
@@ -115,6 +115,7 @@ class ModelPrintPage(QWidget):
         # machine / motion
         self.v_num_arms = IntVar(1)
         self.v_use_turntable = BoolVar(True)
+        self.v_use_rules = BoolVar(True)
         self.v_tt_for_infill = BoolVar(False)
         self.v_print_speed = DoubleVar(30.0)
         self.v_travel_speed = DoubleVar(150.0)
@@ -241,7 +242,11 @@ class ModelPrintPage(QWidget):
                "The planner can split a model across two arms, but printing drives one arm so far. "
                "Use 2 for planning and dry runs.")
         mm.full(Check("Use turntable (off = Cartesian plate)", self.v_use_turntable))
-        mm.full(Check("Turntable coordinates infill too", self.v_tt_for_infill))
+        mm.full(Check("Follow the print rules (Settings ▸ Print rules)", self.v_use_rules))
+        infill_chk = Check("Turntable coordinates infill too (rules off only)", self.v_tt_for_infill)
+        infill_chk.setEnabled(not self.v_use_rules.get())
+        self.v_use_rules.changed.connect(lambda on: infill_chk.setEnabled(not on))
+        mm.full(infill_chk)
         mm.row("Print speed", NumberField(self.v_print_speed, "mm/s", 1, 1))
         mm.row("Travel speed", NumberField(self.v_travel_speed, "mm/s", 1, 5))
         mm.row("Max arm speed", NumberField(self.v_max_arm_speed, "mm/s", 1, 5))
@@ -317,7 +322,15 @@ class ModelPrintPage(QWidget):
 
     def _settings(self):
         from slicer import SliceSettings
+        nozzle = float(self.app.tool.get("nozzle_diameter", 1.2))
+        rs = self._rules() if self.v_use_rules.get() else None
+        thin = dict(thin_mode="skip")
+        if rs is not None:
+            thin = dict(thin_mode=str(rs.get("lines.thin_features", "centreline")),
+                        thin_min_width=float(rs.get("lines.min_width", 0.8)) * nozzle,
+                        thin_skip_below=float(rs.get("lines.thin_skip_below", 0.4)) * nozzle)
         return SliceSettings(
+            **thin,
             layer_height=float(self.v_layer_height.get()),
             line_width=float(self.v_line_width.get()),
             wall_count=int(self.v_wall_count.get()),
@@ -348,6 +361,7 @@ class ModelPrintPage(QWidget):
             flow_multiplier=float(self.v_flow.get()) / 100.0,
             first_layer_flow=float(self.v_first_layer_flow.get()) / 100.0,
             min_segment_length=float(self.v_min_seg.get()),
+            rules=self._rules() if self.v_use_rules.get() else None,
             max_segment_length=float(self.v_max_seg.get()),
             extruder_tool=0,
             orientation=self.app.orientation("right"),   # arm 0 = right (primary)
@@ -431,12 +445,68 @@ class ModelPrintPage(QWidget):
         self._log("Sliced: " + res.summary())
         self._show_plan(*out)
         self._planned_settings = snapshot
+        self._check_narrow(res)
+
+    def _check_narrow(self, res):
+        """Parts of the model narrower than one line are not printed. Say so, and offer the
+        widest line width that keeps them (not below 80 % of the nozzle)."""
+        narrow = getattr(res, "narrow", None)
+        if not narrow:
+            return
+        if res.settings.thin_mode == "centreline":
+            filled = getattr(res, "thin_filled", [])
+            if filled:
+                self._log(f"Thin features: in {len(filled)} layers, parts narrower than the "
+                          f"{res.settings.line_width:g} mm line are printed as single lines down their middle, "
+                          f"as wide as the feature (min {res.settings.thin_min_width or 0.75 * res.settings.line_width:.2f} mm) "
+                          "with less plastic [rule lines.thin_features].", append=True)
+            return
+        from slicer import suggest_line_width
+        lw = res.settings.line_width
+        nozzle = float(self.app.tool.get("nozzle_diameter", lw))
+        worst = max(narrow, key=lambda n: n[3])
+        zmin = res.bounds[0][2]
+        text = (f"In {len(narrow)} of {len(res.layers)} layers, part of the model is narrower than the "
+                f"{lw:g} mm line and will NOT be printed (worst: layer {worst[0] + 1}, "
+                f"{worst[1] - zmin:.1f} mm up, {worst[3]:.0f} % of that layer).")
+        w = suggest_line_width(res.narrow_worst_polys or [], lw, round(0.8 * nozzle, 2))
+        self._log("Warning: " + text, append=True)
+        if w is None:
+            self.app.ui.warn("Thin features", text + f"\n\nThese features are too thin for the {nozzle:g} mm "
+                                                     "nozzle even at its narrowest line. Thicken them in CAD.")
+            return
+        if self.app.ui.confirm("Thin features", text + f"\n\nA {w:g} mm line keeps them. "
+                                                       f"Use {w:g} mm and slice again?"):
+            self.v_line_width.set(w)
+            self.do_slice()
 
     @staticmethod
     def _plan_compute(res, cfg):
         from planner import plan, analyze, dt_stats, extrusion_runs
         prog = plan(res, cfg)
         return prog, cfg, analyze(prog), dt_stats(prog), len(extrusion_runs(prog))
+
+    def _save_cells(self, cells, rs):
+        """Cells, their measurements, the chosen tactics and the rules in force, as JSON:
+        the record an AI can learn from (add the print outcome to it afterwards)."""
+        import json
+        name = os.path.splitext(os.path.basename(self.model_path or "model"))[0]
+        path = os.path.join(SCRIPTS_DIR, f"cells_{name}.json")
+        try:
+            with open(path, "w") as f:
+                json.dump({"model": self.model_path, "rules": {k: r.value for k, r in rs.rules.items()},
+                           "cells": cells, "outcome": None}, f, indent=1, default=str)
+            return path
+        except OSError as e:
+            self._log(f"Could not write {path}: {e}", append=True)
+            return None
+
+    def _rules(self):
+        from rules import RuleSet
+        rs = RuleSet.load()
+        if rs.load_error:
+            self._log(f"Print rules not loaded ({rs.load_error}); using the defaults.", append=True)
+        return rs
 
     def _show_plan(self, prog, cfg, st, dts, runs):
         self.program = prog
@@ -448,6 +518,26 @@ class ModelPrintPage(QWidget):
         if cfg.use_turntable:
             lines.append(f"  turntable: {st.tt_travel / (2 * math.pi):.1f} turns, {st.tt_reversals} reversals")
         lines.append(f"  dt(ms): min {dts['dt_ms_min']} / avg {dts['dt_ms_avg']} / max {dts['dt_ms_max']}")
+        if getattr(prog, "decisions", None) is not None:
+            lines.append("Turntable decisions (print rules):")
+            lines.append(prog.decisions.summary())
+        stats = getattr(self.slice_result, "section_stats", None)
+        if cfg.rules is not None and stats:
+            from rules import classify_layers
+            on = cfg.rules.get("nonplanar.enabled", False)
+            lines.append("Non-planar bands (preview only, " + ("rules on" if on else "rules off: all layers flat")
+                         + "; not yet generated):")
+            lines.append(classify_layers(stats, cfg.rules)[1])
+        feats = getattr(self.slice_result, "region_features", None)
+        if cfg.rules is not None and feats:
+            from rules import build_cells, cells_summary
+            cells = build_cells(feats, cfg.rules)
+            lines.append(f"Cells and tactics ({len(cells)} cells; in_use = done by the planner, "
+                         "preview = what it would use):")
+            lines.append(cells_summary(cells))
+            path = self._save_cells(cells, cfg.rules)
+            if path:
+                lines.append(f"  cells written to {path} (for the AI layer)")
         self._log("\n".join(lines), append=True)
         self.v_status.set(f"Planned: {len(prog.steps):,} points, about {st.total_time / 60:.1f} min. Ready to print.")
 

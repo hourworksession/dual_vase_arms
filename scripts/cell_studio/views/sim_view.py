@@ -58,6 +58,7 @@ class _Canvas(QWidget):
             p.setFont(QFont(p.font().family(), 11))
             p.drawText(self.rect().adjusted(20, 20, -20, -20), Qt.AlignCenter | Qt.TextWordWrap,
                        "Slice (or generate) and plan a part, then press Play to watch the print.")
+            p.end()
             return
         k = o.k
         cx, cy = w / 2, h / 2
@@ -107,6 +108,7 @@ class _Canvas(QWidget):
         p.setFont(QFont(p.font().family(), 9))
         p.drawText(QRectF(12, h - 24, w - 24, 18), Qt.AlignLeft,
                    "View from above · scroll to zoom · double-click to reset")
+        p.end()
 
 
 class SimulationView(QWidget):

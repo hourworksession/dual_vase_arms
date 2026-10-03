@@ -1207,7 +1207,7 @@ def s76(x):
 @scenario("Wil (owner)", "18:00", "Sets the new vertical nozzle in Tool and nozzle, runs a cylinder")
 def s77(x):
     x.connect()
-    x.c.tool = dict(x.c.tool, pitch=0.0, roll=180.0, yaw=20.0)
+    x.c.tool = dict(x.c.tool, pitch_right=0.0, roll_right=180.0, yaw_right=20.0)
     x.quick_cylinder(0.3)
     mk = x.mark(); ANSWERS.extend([True] * 3)
     x.c.start_cylinder(); x.wait_idle(8)
@@ -1351,6 +1351,96 @@ def s83(x):
         w.close(); w2.close()
     finally:
         sp.STEPS = saved
+
+
+@scenario("Wil (owner)", "19:30", "Part with a thin off-centre tube (narrower than one line)")
+def s84(x):
+    import trimesh
+    ring = trimesh.creation.annulus(r_min=40, r_max=42.2, height=12)
+    tube = trimesh.creation.annulus(r_min=4.0, r_max=5.0, height=12)
+    tube.apply_translation((47, 0, 0))
+    m_ = trimesh.util.concatenate([ring, tube])
+    m_.apply_translation((0, 0, 6))
+    path = os.path.join(GEN_TMP, "thin_tube.stl")
+    m_.export(path)
+    m = x.w.model
+    x.w.go(2)
+    m.v_layer_height.set(0.6)
+    m.v_line_width.set(1.3)
+    m.load_model(path)
+    m.do_slice()
+    t = time.time()
+    while getattr(m, "_slicing", False) and time.time() - t < 120:
+        pump(0.05)
+    res = m.slice_result
+    if res is None:
+        x.expect(False, f"Not sliced: {m.v_status.get()}")
+        return
+    mid = res.layers[len(res.layers) // 2]
+    thin = [p for p in mid.paths if len(p.points[0]) >= 5]
+    near_tube = [p for p in thin if abs(p.points[0][0] - 47) < 8]
+    x.expect(near_tube, "The 1 mm tube was not printed (no centreline path near it)")
+    if near_tube:
+        w = [pt[3] for pt in near_tube[0].points]
+        x.expect(0.9 <= min(w) and max(w) <= 1.3, f"Tube line width {min(w):.2f}-{max(w):.2f} mm, expected about 1.0")
+    x.expect(m.program is not None and m.program.decisions is not None, "Plan did not use the print rules")
+
+
+@scenario("Chloe (PhD student)", "19:40", "Square box on the turntable: bed should hold for the straight sides")
+def s85(x):
+    import rules, planner
+    from slicer import SliceSettings, slice_model
+    import trimesh
+    box = trimesh.creation.box((60, 60, 6))
+    box.apply_translation((0, 0, 3))
+    p1 = os.path.join(GEN_TMP, "box60.stl"); box.export(p1)
+    cyl = trimesh.creation.annulus(r_min=28, r_max=30.4, height=6, sections=128)
+    cyl.apply_translation((0, 0, 3))
+    p2 = os.path.join(GEN_TMP, "tube60.stl"); cyl.export(p2)
+    rs = rules.RuleSet.load()
+    st = SliceSettings(layer_height=0.6, line_width=1.2, wall_count=2, infill_density=0.2)
+    for path, want_turn in ((p1, False), (p2, True)):
+        res = slice_model(path, st)
+        cfg = planner.PlannerConfig(line_width=1.2, layer_height=0.6, rules=rs)
+        prog = planner.plan(res, cfg)
+        walls = [(rid, dec) for rid, dec, where in prog.decisions.rows if "wall" in where]
+        turned = sum("bed turns" in d for _, d in walls)
+        held = sum("bed held" in d for _, d in walls)
+        if want_turn:
+            x.expect(turned > 0 and held == 0, f"Round tube: walls turned {turned}, held {held}")
+        else:
+            x.expect(held > 0 and turned == 0, f"Square box: walls turned {turned}, held {held}")
+    # the rules can be explained and changed only inside their ranges
+    acc, rej = rs.propose({"turntable.max_radial_variation": 5.0, "turntable.min_radius_mm": 12,
+                           "tactic.spiral_brick.tilt": 10, "nope": 1})
+    x.expect("turntable.max_radial_variation" in rej and "nope" in rej, "Out-of-range / unknown rule was accepted")
+    x.expect(acc.get("turntable.min_radius_mm") == 12 and acc.get("tactic.spiral_brick.tilt") == 10,
+             f"In-range changes were refused: {rej}")
+    x.expect("turntable.round_paths" in rs.explain(), "explain() does not list the rules")
+
+
+@scenario("Tom (IT)", "19:50", "Opens Settings ▸ Print rules and saves a broken edit")
+def s86(x):
+    from cell_studio.views.rules_dialog import RulesDialog
+    import rules
+    saved = rules.RULES_FILE
+    tmp = os.path.join(GEN_TMP, "rules_test.yaml")
+    with open(saved) as f, open(tmp, "w") as g:
+        g.write(f.read())
+    try:
+        d = RulesDialog(x.w)
+        d.path = tmp
+        d.reload()
+        x.expect("turntable" in d.summary.toPlainText(), "Summary tab empty")
+        d.editor.setPlainText(d.editor.toPlainText().replace("value: 0.15", "value: 9.0", 1))
+        n = len(MSGS)
+        d.save()
+        with open(tmp) as f:
+            x.expect("value: 9.0" not in f.read(), "An out-of-range rule was saved")
+        x.expect("outside" in d.status.text(), f"No reason shown: {d.status.text()}")
+        d.close()
+    finally:
+        pass
 
 
 # ---------------------------------------------------------------- runner
