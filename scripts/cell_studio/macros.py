@@ -484,9 +484,12 @@ class DualSpiralJob:
                     break
                 # filament for the next 10°, both tools in one move, at the rate the disc is turning
                 if speed > 0 and extruded - prog < CHUNK_RAD / 2:
-                    target = min(end, max(prog, extruded) + CHUNK_RAD)
-                    secs = max((target - max(prog, extruded)) / speed, 0.05)
-                    amt = {s: self._e(s, target) - self._e(s, extruded) for s in self.arms}
+                    # If the disc has run past what was extruded (speed-up, hiccup), the missed
+                    # stretch is skipped rather than dumped into the next chunk as a blob.
+                    base = max(prog, extruded)
+                    target = min(end, base + CHUNK_RAD)
+                    secs = max((target - base) / speed, 0.05)
+                    amt = {s: self._e(s, target) - self._e(s, base) for s in self.arms}
                     l0, l1 = (amt["right"], amt["left"]) if self.right_tool == 0 else (amt["left"], amt["right"])
                     ext.extrude_sync(l0, max(l0 / secs, 1e-3), l1, max(l1 / secs, 1e-3), wait=False)
                     extruded = target

@@ -8,6 +8,7 @@ collapsible sections beside the preview.
 import csv as csvmod
 import logging
 import math
+import numpy as np
 import os
 import threading
 import time
@@ -31,6 +32,8 @@ class LayerView(QWidget):
         super().__init__()
         self.result = None
         self.idx = 0
+        self.show_neighbours = True              # previous (dark) and next (faint) layers too
+        self.side = False                        # side view: radius from the axis vs height
         self.setMinimumSize(360, 300)
 
     def show_layer(self, result, idx):
@@ -49,8 +52,13 @@ class LayerView(QWidget):
             return
         layer = self.result.layers[self.idx]
         b = self.result.bounds
-        minx, miny = float(b[0][0]), float(b[0][1])
-        maxx, maxy = float(b[1][0]), float(b[1][1])
+        if self.side:
+            rmax = float(np.hypot(b[:, 0], b[:, 1]).max()) if hasattr(b, "shape") else 100.0
+            minx, maxx = -rmax, rmax
+            miny, maxy = float(b[0][2]), float(b[1][2])
+        else:
+            minx, miny = float(b[0][0]), float(b[0][1])
+            maxx, maxy = float(b[1][0]), float(b[1][1])
         span = max(maxx - minx, maxy - miny, 1.0)
         top = 62                                  # room for the layer caption
         scale = (min(w, h - top) - 40) / span
@@ -59,22 +67,62 @@ class LayerView(QWidget):
         # bounding box
         p.setPen(QPen(QColor("#1f2731"), 1, Qt.DashLine))
         p.drawRect(QRectF(ox + minx * scale, oy - maxy * scale, (maxx - minx) * scale, (maxy - miny) * scale))
-        for path in layer.paths:
-            col = theme.KIND_COLOR.get(path.kind, "#888888")
-            pts = path.points + ([path.points[0]] if (path.closed and len(path.points) > 1) else [])
-            if len(pts) < 2:
-                continue
-            qp = QPainterPath(QPointF(ox + pts[0][0] * scale, oy - pts[0][1] * scale))
-            for pt in pts[1:]:                       # (x, y) or (x, y, z, width, height)
-                qp.lineTo(ox + pt[0] * scale, oy - pt[1] * scale)
-            p.setPen(QPen(QColor(col), 1.3))
-            p.drawPath(qp)
+        side = self.side
+
+        def xy(pt, lay):
+            if not side:
+                return pt[0], pt[1]
+            r = math.hypot(pt[0], pt[1])
+            r = r if pt[1] >= 0 else -r              # near half to the right, far half to the left
+            return r, (pt[2] if len(pt) >= 3 else lay.z)
+
+        def draw_layer(lay, colour_of, width):
+            for path in lay.paths:
+                pts = path.points + ([path.points[0]] if (path.closed and len(path.points) > 1) else [])
+                if len(pts) < 2:
+                    continue
+                x0, y0 = xy(pts[0], lay)
+                qp = QPainterPath(QPointF(ox + x0 * scale, oy - y0 * scale))
+                for pt in pts[1:]:                       # (x, y) or (x, y, z, width, height)
+                    x1, y1 = xy(pt, lay)
+                    qp.lineTo(ox + x1 * scale, oy - y1 * scale)
+                p.setPen(QPen(colour_of(path.kind), width))
+                p.drawPath(qp)
+
+        layers = self.result.layers
+        # previous layer: darker, under everything
+        if self.show_neighbours and self.idx > 0:
+            draw_layer(layers[self.idx - 1], lambda k: QColor(theme.KIND_COLOR.get(k, "#888888")).darker(260), 2.2)
+        # current layer: bright
+        draw_layer(layer, lambda k: QColor(theme.KIND_COLOR.get(k, "#888888")).lighter(125), 1.6)
+        # next layer: faint on top, so where the three cross you still see the other two
+        if self.show_neighbours and self.idx + 1 < len(layers):
+            def faint(k):
+                c = QColor("#ffffff")
+                c.setAlpha(70)
+                return c
+            draw_layer(layers[self.idx + 1], faint, 1.2)
+        if self.show_neighbours:
+            p.setFont(QFont(p.font().family(), 9))
+            y0 = h - 16
+            for text, col in (("previous", QColor(theme.KIND_COLOR.get("WALL_OUTER")).darker(260)),
+                              ("this layer", QColor(theme.KIND_COLOR.get("WALL_OUTER")).lighter(125)),
+                              ("next", QColor(255, 255, 255, 110))):
+                p.setPen(QPen(col, 3))
+                p.drawLine(QPointF(16, y0), QPointF(34, y0))
+                p.setPen(QColor(theme.MUTED))
+                p.drawText(QPointF(40, y0 + 4), text)
+                p.translate(110, 0)
+            p.resetTransform()
         p.setPen(QColor(theme.TEXT))
         p.setFont(QFont(p.font().family(), 11, QFont.DemiBold))
         p.drawText(QPointF(16, 26), f"Layer {self.idx + 1} / {len(self.result.layers)}")
         p.setPen(QColor(theme.MUTED))
         p.setFont(QFont(p.font().family(), 10))
-        p.drawText(QPointF(16, 46), f"z = {layer.z:.2f} mm   ·   {'solid' if layer.solid else 'sparse'}")
+        zs = [pt[2] for path in layer.paths for pt in path.points if len(pt) >= 3]
+        ztxt = f"z = {min(zs):.1f}–{max(zs):.1f} mm" if zs and max(zs) - min(zs) > 0.05 else f"z = {layer.z:.2f} mm"
+        p.drawText(QPointF(16, 46), f"{ztxt}   ·   {'solid' if layer.solid else 'sparse'}"
+                   + ("   ·   side view (radius vs height)" if side else ""))
 
 
 class ModelPrintPage(QWidget):
@@ -110,6 +158,9 @@ class ModelPrintPage(QWidget):
         self.v_wall_count = IntVar(2)
         self.v_infill_density = DoubleVar(20.0)
         self.v_infill_pattern = StrVar("grid")
+        self.v_strategy = StrVar("auto")
+        self.v_cone_angle = DoubleVar(15.0)
+        self.v_strategy_used = StrVar("")
         self.v_top_layers = IntVar(3)
         self.v_bottom_layers = IntVar(3)
         # machine / motion
@@ -219,6 +270,10 @@ class ModelPrintPage(QWidget):
         ps.row("Layer height", NumberField(self.v_layer_height, "mm", 2, 0.05, minimum=0.01))
         ps.row("Line width", NumberField(self.v_line_width, "mm", 2, 0.05, minimum=0.05))
         ps.row("Wall count", NumberField(self.v_wall_count, "", 0, 1, integer=True, minimum=0, maximum=20))
+        ps.row("Layer strategy", Combo(self.v_strategy, ["auto", "planar", "spiral", "cone_out", "cone_in"], width=130),
+               "auto picks from the model: cones for overhangs (cone_out grows outward like a tree), "
+               "spiral for one continuous loop, else planar")
+        ps.row("Cone angle", NumberField(self.v_cone_angle, "°", 0, 5, minimum=5, maximum=40))
         ps.row("Infill density", NumberField(self.v_infill_density, "%", 0, 5, minimum=0, maximum=100))
         ps.row("Infill pattern", Combo(self.v_infill_pattern, ["grid", "lines"], width=130))
         ps.row("Bottom layers", NumberField(self.v_bottom_layers, "", 0, 1, integer=True, minimum=0, maximum=50))
@@ -294,7 +349,11 @@ class ModelPrintPage(QWidget):
         self.layer_slider.valueChanged.connect(lambda i: self.canvas.show_layer(self.slice_result, i))
         self.layer_lbl = label("Layer", "Muted")
         self.layer_slider.valueChanged.connect(lambda i: self.layer_lbl.setText(f"Layer {i + 1}"))
-        lt.addWidget(hrow(self.layer_lbl, self.layer_slider))
+        side_chk = Check("Side view", BoolVar(False))
+        side_chk.toggled.connect(lambda on: (setattr(self.canvas, "side", on), self.canvas.update()))
+        nb_chk = Check("Prev / next", BoolVar(True))
+        nb_chk.toggled.connect(lambda on: (setattr(self.canvas, "show_neighbours", on), self.canvas.update()))
+        lt.addWidget(hrow(self.layer_lbl, self.layer_slider, nb_chk, side_chk, spacing=10))
         from .sim_view import SimulationView
         self.sim = SimulationView()
         self.preview_tabs = QTabWidget()
@@ -372,7 +431,7 @@ class ModelPrintPage(QWidget):
 
     def _settings_snapshot(self):
         return {k: v.get() for k, v in vars(self).items() if k.startswith("v_") and
-                k not in ("v_status", "v_model", "v_debug")}
+                k not in ("v_status", "v_model", "v_debug", "v_strategy_used")}
 
     def _changed_since_plan(self):
         if self._planned_settings is None:
@@ -411,17 +470,37 @@ class ModelPrintPage(QWidget):
                                  "pip install trimesh shapely numpy scipy networkx")
             return
         settings, cfg, path = self._settings(), self._planner_config(), self.model_path
+        rs = cfg.rules
         self._slicing = True
         self.program = None
         self.v_status.set("Slicing…")
         snapshot = self._settings_snapshot()
         post = self.app.ui.post
+        want = self.v_strategy.get()
+        settings.cone_angle_deg = float(self.v_cone_angle.get())
+        if rs is not None and rs.get("nonplanar.enabled", False):
+            from rules import classify_layers
+            settings.layer_style = lambda stats: [st for _, st, _ in classify_layers(stats, rs)[0]]
 
         def progress(done, total):
             post(lambda d=done, t=total: self.v_status.set(f"Slicing… layer {d} of {t}"))
 
         def work():
             try:
+                if want == "auto":
+                    from dataclasses import replace
+                    from rules import recommend_strategy, RuleSet
+                    post(lambda: self.v_status.set("Looking at the model to choose a layer strategy…"))
+                    coarse = slice_model(path, replace(settings, layer_height=max(2.0, settings.layer_height),
+                                                       wall_count=1, infill_density=0.0, top_layers=0,
+                                                       bottom_layers=0, thin_mode="skip", strategy="planar",
+                                                       layer_style=None))
+                    strat, why = recommend_strategy(coarse.region_features, rs or RuleSet.load())
+                    settings.strategy = strat
+                    post(lambda: self._log(f"Layer strategy: {strat} ({why}) [rule strategy.default=auto]", append=True))
+                else:
+                    settings.strategy = want
+                post(lambda: self.v_strategy_used.set(settings.strategy))
                 res = slice_model(path, settings, progress)
                 post(lambda: self.v_status.set(f"Planning the motion for {len(res.layers)} layers…"))
                 out = self._plan_compute(res, cfg)
@@ -442,7 +521,8 @@ class ModelPrintPage(QWidget):
         self.layer_slider.setRange(0, max(0, n - 1))
         self.layer_slider.setValue(n // 2)
         self.canvas.show_layer(res, n // 2)
-        self._log("Sliced: " + res.summary())
+        self._log("Sliced: " + res.summary() + f" | strategy {res.settings.strategy}"
+                  + (f", {res.spiral_layers} spiral layers" if getattr(res, "spiral_layers", 0) else ""))
         self._show_plan(*out)
         self._planned_settings = snapshot
         self._check_narrow(res)
@@ -683,6 +763,8 @@ class ModelPrintPage(QWidget):
                     if now - last_follow > 0.1:          # Simulation tab follows the print live
                         last_follow = now
                         app.ui.post(lambda k=si: self.sim.follow(k))
+                        if step.layer >= 0 and hasattr(self, "layer_slider"):
+                            app.ui.post(lambda L=step.layer: self.layer_slider.setValue(L))
                 t += dt
                 if si % 50 == 0:
                     frac = (si + 1) / max(1, len(prog.steps))

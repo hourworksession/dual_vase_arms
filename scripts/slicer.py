@@ -93,6 +93,19 @@ class SliceSettings:
     thin_mode: str = "centreline"
     thin_min_width: float = 0.0
     thin_skip_below: float = 0.0
+    # Layer strategy (see strategies.py):
+    #   planar   - flat layers
+    #   spiral   - flat layers, but walls that go around the turntable axis climb
+    #              continuously (one helix, no layer seam), where layer_style allows
+    #   cone_out - conical layers, apex up ("Christmas tree"): outward overhangs
+    #   cone_in  - conical layers, apex down: inward overhangs
+    # Cones follow Wüthrich et al. 2021 (RotBot): transform the mesh so the cones
+    # become planes, slice flat, transform the paths back.
+    strategy: str = "planar"
+    cone_angle_deg: float = 15.0
+    # optional: callable(section_stats) -> per-layer style ("planar"/"spiral"/...),
+    # from the print rules' non-planar bands; None = spiral everywhere it can.
+    layer_style: object = None
 
 
 @dataclass
@@ -178,7 +191,13 @@ def _section_polygons(mesh: trimesh.Trimesh, z: float) -> List[Polygon]:
     regions = [r for r in (_body_region(b, z) for b in _bodies(mesh)) if r is not None and not r.is_empty]
     if not regions:
         return []
-    return list(_iter_polys(unary_union(regions)))
+    # 0.02 mm simplification: far below what the nozzle can show, and it keeps refined
+    # (cone-space) outlines from having thousands of vertices per loop.
+    out = []
+    for q in _iter_polys(unary_union(regions)):
+        q2 = q.simplify(0.02, preserve_topology=True)
+        out.append(q2 if (not q2.is_empty and q2.geom_type == "Polygon") else q)
+    return out
 
 
 def _ring_points(ring) -> List[Point]:
@@ -280,6 +299,12 @@ def slice_model(mesh_path: str, settings: SliceSettings, progress=None) -> Slice
         raise ImportError(f"Slicing needs trimesh and shapely ({_MESH_IMPORT_ERROR}). "
                           "pip install trimesh shapely")
     mesh = _load_mesh(mesh_path)
+    bounds0 = mesh.bounds.copy()
+    cone = None
+    if settings.strategy in ("cone_out", "cone_in"):
+        cone = (math.radians(settings.cone_angle_deg), 1.0 if settings.strategy == "cone_out" else -1.0,
+                float(bounds0[0][2]))
+        mesh = cone_transform_mesh(mesh, *cone[:2])
     zmin, zmax = float(mesh.bounds[0][2]), float(mesh.bounds[1][2])
     height = zmax - zmin
     lh = settings.layer_height
@@ -338,7 +363,18 @@ def slice_model(mesh_path: str, settings: SliceSettings, progress=None) -> Slice
     if not any(layer.paths for layer in layers):
         raise RuntimeError("The model sliced into layers but produced no toolpaths. It may be too small for "
                            f"the {settings.line_width} mm line width, or not a closed solid.")
-    res = SliceResult(layers=layers, settings=settings, bounds=mesh.bounds)
+    # Strategy: which layers climb as a spiral (from the rules' bands when given), and the
+    # conical back-transform. Cones are applied last so spiralled z is bent with them.
+    res_spiral = 0
+    styles = settings.layer_style(section_stats) if settings.layer_style else None
+    if settings.strategy == "spiral" or (styles and any(st in ("spiral", "spiral_brick") for st in styles)):
+        res_spiral = spiral_walls(layers, settings, styles if settings.strategy != "spiral" else None)
+    if cone is not None:
+        cone_back_transform(layers, *cone)
+        if not any(layer.paths for layer in layers):
+            raise RuntimeError("Nothing left above the bed after the conical transform. Try a smaller cone angle.")
+    res = SliceResult(layers=layers, settings=settings, bounds=bounds0)
+    res.spiral_layers = res_spiral
     res.failures = failures
     res.thin = thin
     res.narrow = narrow
@@ -366,14 +402,15 @@ def thin_feature_paths(poly: Polygon, settings: SliceSettings, z: float) -> List
     w_min = settings.thin_min_width or 0.75 * lw
     w_skip = settings.thin_skip_below or 0.4 * lw
     step = lw / 4.0
-    pts = []
+    chunks = []
     for ring in [poly.exterior] + list(poly.interiors):
         L = ring.length
         n = max(8, int(L / step))
-        pts.extend((p.x, p.y) for p in (ring.interpolate(L * k / n) for k in range(n)))
+        sampled = shapely.line_interpolate_point(ring, np.linspace(0.0, L, n, endpoint=False))
+        chunks.append(shapely.get_coordinates(sampled))
+    pts = np.concatenate(chunks) if chunks else np.zeros((0, 2))
     if len(pts) < 8:
         return []
-    pts = np.array(pts)
     try:
         vor = Voronoi(pts)
     except Exception:
@@ -439,6 +476,116 @@ def thin_feature_paths(poly: Polygon, settings: SliceSettings, z: float) -> List
     return out
 
 
+# ---------------------------------------------------------------- strategies
+def cone_transform_mesh(mesh, angle, sign, max_edge: float = 1.5):
+    """Mesh -> the space where conical layers are flat (RotBot transform):
+    x' = x / cos a, y' = y / cos a, z' = z + sign * r * tan a   (r about the turntable axis).
+    The mesh is refined first so straight triangle edges bend correctly."""
+    import trimesh as _tm
+    v, f = mesh.vertices, mesh.faces
+    try:
+        v, f = _tm.remesh.subdivide_to_size(v, f, max_edge=max_edge, max_iter=12)
+    except Exception:
+        pass
+    v = np.array(v, dtype=float)
+    r = np.hypot(v[:, 0], v[:, 1])
+    c, t = math.cos(angle), math.tan(angle)
+    out = np.empty_like(v)
+    out[:, 0] = v[:, 0] / c
+    out[:, 1] = v[:, 1] / c
+    out[:, 2] = v[:, 2] + sign * r * t
+    return _tm.Trimesh(out, f, process=False)
+
+
+def _densify_pts(pts, closed, step):
+    out = []
+    n = len(pts)
+    m = n if closed else n - 1
+    for i in range(m):
+        a, b = pts[i], pts[(i + 1) % n]
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        k = max(1, int(math.ceil(L / step)))
+        for j in range(k):
+            t = j / k
+            out.append(tuple(a[q] + (b[q] - a[q]) * t if q < 3 else a[q] for q in range(len(a))))
+    if not closed:
+        out.append(tuple(pts[-1]))
+    return out
+
+
+def cone_back_transform(layers, angle, sign, bed_z, step: float = 1.0):
+    """Paths sliced in cone space -> real 3D points (x, y, z[, w, h]) on the cones.
+    Points that would be under the bed are dropped (paths split there); points just
+    above it are lifted onto it."""
+    c, t = math.cos(angle), math.tan(angle)
+    for layer in layers:
+        new_paths = []
+        for path in layer.paths:
+            pts = [(p[0], p[1], p[2] if len(p) >= 3 else layer.z) + tuple(p[3:]) for p in path.points]
+            if len(pts) < 2:
+                continue
+            pts = _densify_pts(pts, path.closed, step / c)
+            run = []
+            for p in pts:
+                x, y = p[0] * c, p[1] * c
+                z = p[2] - sign * math.hypot(x, y) * t
+                if z < bed_z - 1e-6:
+                    if len(run) > 1:
+                        new_paths.append(Path(path.kind, run, closed=False))
+                    run = []
+                    continue
+                run.append((x, y, max(z, bed_z + 0.05)) + tuple(p[3:]))
+            if len(run) > 1:
+                whole = len(run) == len(pts) and path.closed
+                new_paths.append(Path(path.kind, run, closed=whole))
+        layer.paths = new_paths
+
+
+def spiral_walls(layers, settings: SliceSettings, styles=None) -> int:
+    """Turn wall loops that go around the turntable axis into one continuous climb:
+    over the loop, z rises from (layer z - h/2) to (layer z + h/2), starting at the
+    +X side and running anticlockwise, so each layer's loop ends where the next one
+    starts (no layer-change seam). Other paths stay flat. Layers whose style is not
+    'spiral' are left flat. Returns how many layers were spiralled."""
+    from shapely.geometry import Point as _P, Polygon as _Poly
+    h = settings.layer_height
+    n_done = 0
+    for li, layer in enumerate(layers):
+        if styles is not None and (li >= len(styles) or styles[li] not in ("spiral", "spiral_brick")):
+            continue
+        changed = False
+        for path in layer.paths:
+            if path.kind not in (WALL_OUTER, WALL_INNER) or not path.closed or len(path.points) < 3:
+                continue
+            xy = [(p[0], p[1]) for p in path.points]
+            try:
+                if not _Poly(xy).contains(_P(0.0, 0.0)):
+                    continue
+            except Exception:
+                continue
+            area2 = sum(xy[i][0] * xy[(i + 1) % len(xy)][1] - xy[(i + 1) % len(xy)][0] * xy[i][1]
+                        for i in range(len(xy)))
+            pts = list(path.points) if area2 > 0 else list(reversed(path.points))
+            # start at the point closest to the +X ray
+            k0 = min(range(len(pts)), key=lambda i: abs(math.atan2(pts[i][1], pts[i][0])))
+            pts = pts[k0:] + pts[:k0]
+            pts = pts + [pts[0]]
+            seg = [0.0] + [math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+                           for i in range(1, len(pts))]
+            total = sum(seg) or 1.0
+            acc, out = 0.0, []
+            base = layer.z
+            for p, d in zip(pts, seg):
+                acc += d
+                z = base - h / 2 + h * acc / total
+                out.append((p[0], p[1], z) + tuple(p[3:]) if len(p) >= 5 else (p[0], p[1], z))
+            path.points = out
+            path.closed = False
+            changed = True
+        n_done += changed
+    return n_done
+
+
 def region_features(all_polys, settings: SliceSettings):
     """Measurements of every connected region of every layer, for choosing a tactic per
     region (print rules) and for the AI to learn from. Model frame; the turntable axis is
@@ -463,12 +610,21 @@ def region_features(all_polys, settings: SliceSettings):
             r10, r90 = radii[len(radii) // 10], radii[(len(radii) * 9) // 10]
             overhang = 0.0
             if below is not None and not below.is_empty:
-                diff = q.difference(below)
+                diff = q.simplify(0.1).difference(below.simplify(0.1))
                 if not diff.is_empty and diff.area > 0.5 * lw * lw:
                     pts = [_P(x, y) for g in getattr(diff, "geoms", [diff]) if g.geom_type == "Polygon"
                            for x, y in g.exterior.coords[::max(1, len(g.exterior.coords) // 60)]]
                     if pts:
                         overhang = max(below.distance(pp) for pp in pts)
+            # grows outward = the new material lies further from the axis than the layer below
+            grows_out = True
+            if overhang > 0 and below is not None and not below.is_empty:
+                try:
+                    dc = diff.centroid
+                    bc = below.centroid
+                    grows_out = math.hypot(dc.x, dc.y) >= math.hypot(bc.x, bc.y) - 1e-6
+                except Exception:
+                    pass
             top = 0.0
             if above is None or above.is_empty:
                 top = 1.0
@@ -485,6 +641,7 @@ def region_features(all_polys, settings: SliceSettings):
                 "overhang_mm": round(overhang, 3),
                 "overhang_deg": round(math.degrees(math.atan2(overhang, lh)), 1),
                 "top_fraction": round(top, 3),
+                "grows_outward": bool(grows_out),
             })
         # mirror partners: same area, centroid mirrored through the axis
         for a in feats:

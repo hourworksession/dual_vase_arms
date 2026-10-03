@@ -35,7 +35,7 @@ def main():
     splash.show()
     app.processEvents()
 
-    n_build = 7                                # panel modules + MainWindow's progress steps
+    n_build = 8                                # panel modules + MainWindow's progress steps
     if not splash.run_steps(n_build):
         sys.exit(app.exec())                   # error is on the start-up window; Close quits
     from cell_studio.splash import STEPS

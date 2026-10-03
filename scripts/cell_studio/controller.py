@@ -179,6 +179,7 @@ class CellController:
         self._speed_notice_given = False
         self.turntable_speed_var.changed.connect(self._speed_changed_live)
 
+        self.live = {}
         self._poll_stop = threading.Event()
         threading.Thread(target=self._poll_loop, daemon=True, name="telemetry").start()
 
@@ -971,8 +972,36 @@ class CellController:
     # Telemetry poller (background thread, posts text to the UI)
     # ==================================================================
     def _poll_loop(self):
-        while not self._poll_stop.wait(1.0):
+        """Every 0.1 s: arm poses / joints and the turntable angle into self.live (numbers, for
+        the 3D view). Every 1 s: the text telemetry and temperatures for the live panel."""
+        self.live = {}
+        tick = 0
+        while not self._poll_stop.wait(0.1):
             if not self.hw_connected:
+                self.live = {}
+                continue
+            live = {}
+            for side, arm in (('left', self.left), ('right', self.right)):
+                if arm is None:
+                    continue
+                try:
+                    p = arm.get_pose()
+                    if p:
+                        live[f'{side}_pose'] = [float(v) for v in p[:6]]
+                    if not self.conn_simulated.get() and hasattr(arm, "get_joints"):
+                        j = arm.get_joints()
+                        if j:
+                            live[f'{side}_joints'] = [float(v) for v in j[:6]]
+                except Exception:
+                    pass
+            if self.turntable is not None:
+                try:
+                    live['tt_deg'] = float(self.turntable.get_angle())
+                except Exception:
+                    pass
+            self.live = live
+            tick += 1
+            if tick % 10:
                 continue
             out = {}
             for side, arm in (('left', self.left), ('right', self.right)):

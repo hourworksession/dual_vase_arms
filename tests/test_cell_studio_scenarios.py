@@ -1465,6 +1465,66 @@ def s87(x):
     x.expect(not getattr(m.sim, "live", False), "Still marked LIVE after the print stopped")
 
 
+@scenario("Wil (owner)", "20:10", "Flared cup: auto strategy picks conical layers; spiral climbs without a seam")
+def s88(x):
+    import trimesh
+    import numpy as np
+    prof = np.array([(0, 0), (30, 0), (30, 40), (55, 70), (57, 70), (32, 40), (32, 2), (0, 2)], float)
+    cup = trimesh.creation.revolve(prof, sections=64)
+    path = os.path.join(GEN_TMP, "flare.stl")
+    cup.export(path)
+    m = x.w.model
+    x.w.go(2)
+    m.v_layer_height.set(0.6)
+    m.v_line_width.set(1.1)
+    for want, expect in (("auto", "cone_out"), ("spiral", "spiral")):
+        m.v_strategy.set(want)
+        m.load_model(path)
+        m.do_slice()
+        t = time.time()
+        while (getattr(m, "_slicing", False) or m.program is None) and time.time() - t < 300:
+            pump(0.05)
+        x.expect(m.v_strategy_used.get() == expect, f"{want}: strategy {m.v_strategy_used.get()!r}, expected {expect!r}")
+        res = m.slice_result
+        if res is None:
+            x.expect(False, f"{want}: not sliced: {m.v_status.get()}")
+            continue
+        if expect == "spiral":
+            walls = [p for L in res.layers for p in L.paths if p.kind == "WALL_OUTER"]
+            climbing = [p for p in walls if len(p.points[0]) >= 3 and p.points[-1][2] - p.points[0][2] > 0.4]
+            x.expect(len(climbing) >= len(walls) * 0.9, f"Only {len(climbing)} of {len(walls)} walls climb")
+            x.expect(getattr(res, "spiral_layers", 0) > 100, "spiral_layers not reported")
+        else:
+            zs = [pt[2] for L in res.layers for p in L.paths for pt in p.points if len(pt) >= 3]
+            x.expect(zs and min(zs) >= -0.01 and max(zs) <= 70.5, f"Cone paths outside the part: z {min(zs):.1f}..{max(zs):.1f}")
+        x.expect(m.program is not None, f"{want}: no plan")
+    m.canvas.side = True
+    m.layer_slider.setValue(60)
+    pump(0.1)
+    m.canvas.side = False
+
+
+@scenario("Hassan (research fellow)", "20:20", "Watches the arms in the 3D cell view during a simulated print")
+def s89(x):
+    x.connect()
+    m = sliced(x)
+    x.w.go(2)
+    ANSWERS.extend([True] * 4)
+    m.start_print()
+    x.wait_for(lambda: m.sim.k > 50, 6)
+    x.w.go(5)
+    pump(0.5)
+    v = x.w.cell3d
+    x.expect(all(v.arms[s_].pose is not None for s_ in ("left", "right")), "3D view did not get the arm poses")
+    x.expect(v.arms["right"].ok, "Right arm pose could not be solved for the 3D view")
+    q0 = list(v.arms["right"].q)
+    x.wait_for(lambda: any(abs(a - b) > 1e-4 for a, b in zip(v.arms["right"].q, q0)), 3)
+    x.expect(any(abs(a - b) > 1e-4 for a, b in zip(v.arms["right"].q, q0)), "Right arm does not move in the 3D view")
+    x.expect(v.part_source() is not None, "No part shown in the 3D view during the print")
+    m.stop_print()
+    x.wait_for(lambda: not m.printing, 5)
+
+
 # ---------------------------------------------------------------- runner
 def run(selected=None):
     rows = []

@@ -107,6 +107,37 @@ lines:
     range: [0.0, 20.0]
     why: Warn when more than this % of a layer is narrower than one line and would not print.
 
+# Layer strategy: how the model is cut into layers before the tactics above are
+# applied per region. "auto" lets the panel pick from a quick coarse slice.
+strategy:
+  default:
+    id: strategy.default
+    value: auto
+    choices: [auto, planar, spiral, cone_out, cone_in]
+    why: >
+      planar = flat layers. spiral = flat layers whose axis-enclosing walls climb
+      continuously (no seam). cone_out = conical layers, apex up (Christmas tree):
+      the part grows outward from the axis, so outward overhangs are supported.
+      cone_in = apex down, for inward overhangs. auto = pick from the model.
+
+  cone_angle_deg:
+    id: strategy.cone_angle
+    value: 15
+    range: [5, 40]
+    why: Slope of the conical layers. Steeper supports bigger overhangs but needs more nozzle tilt (hardware.tilt_max).
+
+  auto_overhang_deg:
+    id: strategy.auto_overhang
+    value: 35
+    range: [10, 80]
+    why: In auto, overhangs steeper than this (from vertical) over more than auto_overhang_fraction of the walls pick a cone.
+
+  auto_overhang_fraction:
+    id: strategy.auto_overhang_fraction
+    value: 0.15
+    range: [0.0, 1.0]
+    why: Fraction of layers that must overhang before a cone is chosen.
+
 # What the cell can physically do. The tactics below must stay inside these; the
 # AI reads them to know which manoeuvres are possible.
 hardware:

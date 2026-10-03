@@ -39,7 +39,7 @@ class _QtLogHandler(logging.Handler):
 
 
 class MainWindow(QMainWindow):
-    PAGES = ("Machine", "Cylinder", "Model print", "Generators", "Macros")
+    PAGES = ("Machine", "Cylinder", "Model print", "Generators", "Macros", "3D cell")
 
     def __init__(self, progress=None):
         """progress(text): optional callback, called before each slow part (start-up window)."""
@@ -75,8 +75,11 @@ class MainWindow(QMainWindow):
         self.generators = GeneratorsPage(self.c, self)
         step("Building the Macros page")
         self.macros = MacrosPage(self.c, self)
+        step("Building the 3D cell view")
+        from .views.cell3d_view import Cell3DView
+        self.cell3d = Cell3DView(self.c, part_source=self._part_source)
         self.print_pages = (self.model, self.generators)
-        for p in (self.machine, self.cylinder, self.model, self.generators, self.macros):
+        for p in (self.machine, self.cylinder, self.model, self.generators, self.macros, self.cell3d):
             self.stack.addWidget(p)
 
         centre = QVBoxLayout()
@@ -215,7 +218,8 @@ class MainWindow(QMainWindow):
         v.addSpacing(4)
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
-        for i, text in enumerate(("◎   Machine", "◍   Cylinder", "▦   Model print", "⌬   Generators", "⟲   Macros")):
+        for i, text in enumerate(("◎   Machine", "◍   Cylinder", "▦   Model print", "⌬   Generators", "⟲   Macros",
+                                     "▣   3D cell")):
             b = QPushButton(text)
             b.setObjectName("NavBtn")
             b.setCheckable(True)
@@ -231,6 +235,13 @@ class MainWindow(QMainWindow):
         self.console_btn.toggled.connect(lambda on: self.act_console.setChecked(on))
         v.addWidget(self.console_btn)
         return nav
+
+    def _part_source(self):
+        """Part printed so far, from whichever print page is running (else the Model print plan)."""
+        for pg in self.print_pages:
+            if pg.printing:
+                return pg.sim.part_so_far()
+        return None
 
     def go(self, i):
         self.stack.setCurrentIndex(i)

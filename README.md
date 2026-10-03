@@ -112,6 +112,16 @@ the log console, and an error that stops the panel opening stays on that window.
     (a region carried up through layers); each cell's measurements and chosen tactic are written to
     `scripts/cells_<model>.json` for the AI to learn from.
   - *Non-planar bands*: which layers would be flat, spiral or spiral-brick (reported, not generated yet).
+* **Layer strategies** (Print settings ▸ Layer strategy, rule `strategy.default`): *planar*;
+  *spiral* (walls around the axis climb continuously, no seam); *cone_out* / *cone_in* (conical
+  layers, apex up or down, after Wüthrich et al. 2021: the mesh is transformed so the cones are
+  flat, sliced, and the paths bent back; outward overhangs are built outward like a tree);
+  *auto* measures the model on a quick coarse slice and picks. Per-region choice ("cellular")
+  is the tactics catalogue above; the Layers preview shows the previous layer dark, the current
+  bright and the next faint, with a side view (radius vs height) for non-planar layers.
+* **3D cell** page: both 850s (real CAD) on the official joint chain, the disc and the part so
+  far, live. Real arms are drawn from their reported joint angles; simulated arms from their
+  pose by IK. Drag to orbit, right-drag to pan, scroll to zoom.
 * **Live panel** (always visible): arm poses, turntable angle, temperatures, job timer,
   and the live turntable speed slider.
 * **Settings ▸ Home positions**: a custom home per arm (joint angles or Cartesian pose,

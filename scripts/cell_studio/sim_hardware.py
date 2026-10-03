@@ -123,7 +123,7 @@ class _SimXArm:
             return code
         self.o._joints = [float(a) for a in angle]
         j = self.o._joints
-        self.o._pose = [400 + 2 * j[0], 170 + j[1], 250 + j[2], 180.0, 45.0, 20 + j[5]]
+        self.o._pose = _flange_pose(j)
         record(self.o.name, "joint_move", (tuple(self.o._joints), speed))
         if wait:
             time.sleep(0.01)
@@ -146,11 +146,20 @@ class _SimXArm:
         return 0
 
 
+def _flange_pose(joints):
+    """Where the real UF850 puts its flange for these joints (cell_studio.arm_model)."""
+    try:
+        from .arm_model import flange_pose
+        return [round(v, 3) for v in flange_pose(joints)]
+    except Exception:
+        return [400.0, 174.0, 250.0, 180.0, 45.0, 20.0]
+
+
 class SimArm:
     def __init__(self, ip, name):
         self.ip, self.name = ip, name
-        self._pose = [400.0, 174.0, 250.0, 180.0, 45.0, 20.0]
         self._joints = [0.0, -45.0, -45.0, 0.0, 90.0, 0.0]
+        self._pose = _flange_pose(self._joints)
         self.arm = None
         self.estopped = False
         self.online = False

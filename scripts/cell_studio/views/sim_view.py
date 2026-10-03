@@ -315,6 +315,23 @@ class SimulationView(QWidget):
         self._update_info()
         self.canvas.update()
 
+    def part_so_far(self, max_points=8000):
+        """(plate xy Nx2, model z N, extruding-into-this-point N bool, original index N) of the
+        right/first arm up to the current step, for the 3D view. None without a plan."""
+        if self.n == 0:
+            return None
+        k = self.k
+        a = 0
+        idx = np.arange(0, k + 1)
+        if len(idx) > max_points:
+            recent = idx[-max_points // 2:]
+            older = np.linspace(0, recent[0] - 1, max_points // 2).astype(int)
+            idx = np.concatenate([older, recent])
+        ok = self.valid[a][idx]
+        idx = idx[ok]
+        xy = np.stack([self.px[a][idx], self.py[a][idx]], 1)
+        return xy, self.z[a][idx], self.ext[a][idx], idx
+
     def follow(self, k):
         """Live mode: show step k of the plan now being sent to the cell (or the simulator)."""
         if self.n == 0:

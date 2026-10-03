@@ -41,6 +41,10 @@ DEFAULTS = {
     "lines.max_width": 1.6,
     "lines.warn_lost_percent": 0.5,
     "nonplanar.enabled": False,
+    "strategy.default": "auto",
+    "strategy.cone_angle": 15.0,
+    "strategy.auto_overhang": 35.0,
+    "strategy.auto_overhang_fraction": 0.15,
     "nonplanar.max_tilt": 15,
     "nonplanar.max_rise": 1.2,
 }
@@ -487,3 +491,32 @@ def cells_summary(cells, limit: int = 12) -> str:
     if len(rows) > limit:
         out.append(f"  … {len(rows) - limit} more")
     return "\n".join(out)
+
+
+# ======================================================================== strategy
+def recommend_strategy(region_features, rs: RuleSet):
+    """Pick a layer strategy from a coarse planar slice's region features.
+    Returns (strategy, reason)."""
+    if not region_features:
+        return "planar", "no cross-sections measured"
+    limit = float(rs.get("strategy.auto_overhang", 35.0))
+    need = float(rs.get("strategy.auto_overhang_fraction", 0.15))
+    n = len(region_features)
+    out_layers = in_layers = loop_layers = 0
+    for feats in region_features:
+        if not feats:
+            continue
+        big = max(feats, key=lambda f: f["area"])
+        if big["overhang_deg"] > limit:
+            # outward if the region grew away from the axis: compare mean radius trend via area
+            out_layers += 1 if big.get("grows_outward", True) else 0
+            in_layers += 0 if big.get("grows_outward", True) else 1
+        if big["encloses_axis"] and big["holes"] <= 1 and len(feats) == 1:
+            loop_layers += 1
+    if out_layers / n >= need:
+        return "cone_out", f"{out_layers} of {n} layers overhang outward by more than {limit:g}°"
+    if in_layers / n >= need:
+        return "cone_in", f"{in_layers} of {n} layers overhang inward by more than {limit:g}°"
+    if loop_layers / n >= 0.6:
+        return "spiral", f"{loop_layers} of {n} layers are a single loop around the axis"
+    return "planar", "no large overhangs; mixed cross-sections"
