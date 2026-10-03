@@ -73,7 +73,11 @@ A start-up window opens at once and shows each library and page as it loads; mis
 parts (slicer libraries, FullControl, camera, xArm SDK, turntable driver) are listed there and in
 the log console, and an error that stops the panel opening stays on that window.
 
-* **Model print**: import → slice → print / dry run. The preview has a **Simulation** tab that
+* **Model print**: import → slice → print / dry run, with **both arms** (Machine + motion ▸ Arms = 2,
+  the default): walls around the axis are split in half, one half per arm, printed at the same time
+  while the disc turns (halves alternate so the disc never swings back); features mirrored through
+  the axis are printed together, one per arm; everything else by the right arm while the left
+  waits. Right arm = tool 0, left = tool 1. Trug: 71 min with one arm, 44 with two. The preview has a **Simulation** tab that
   replays the plan from above: the disc turns, the nozzle moves and the part builds up layer by
   layer (play / pause, scrub, 1× to 200×). Generators has the same tab. No hardware needed.
 * **Generators**: toolpaths from code. FullControl designs (generate() functions or

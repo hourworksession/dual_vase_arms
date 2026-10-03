@@ -596,9 +596,18 @@ def region_features(all_polys, settings: SliceSettings):
     unions = [(_uu(ps) if ps else None) for ps in all_polys]
     out = []
     origin = _P(0.0, 0.0)
+    unsupported = []            # (layer, mm² of new material with nothing under it)
     for i, polys in enumerate(all_polys):
         below = unions[i - 1] if i > 0 else None
         above = unions[i + 1] if i + 1 < len(unions) else None
+        if i > 0 and polys:
+            try:
+                here = unary_union(polys)
+                air = here.area if (below is None or below.is_empty) else here.difference(below.buffer(0.3 * lw)).area
+                if air > 2.0 * lw * lw:
+                    unsupported.append((i, round(air, 1)))
+            except Exception:
+                pass
         feats = []
         for q in polys:
             if q.is_empty or q.area <= 0:
@@ -650,7 +659,16 @@ def region_features(all_polys, settings: SliceSettings):
                 math.hypot(a["centroid"][0] + b["centroid"][0], a["centroid"][1] + b["centroid"][1]) <= 1.0
                 for b in feats) and math.hypot(*a["centroid"]) > 1.0
         out.append(feats)
-    return out
+    out_feats = out
+    out_feats_unsupported = unsupported
+    return _RegionFeatures(out_feats, out_feats_unsupported)
+
+
+class _RegionFeatures(list):
+    """Per-layer region features, plus .unsupported: [(layer, mm²)] of material in the air."""
+    def __init__(self, feats, unsupported):
+        super().__init__(feats)
+        self.unsupported = unsupported
 
 
 def narrower_than(polys, width: float) -> float:

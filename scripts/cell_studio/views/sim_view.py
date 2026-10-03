@@ -321,16 +321,18 @@ class SimulationView(QWidget):
         if self.n == 0:
             return None
         k = self.k
-        a = 0
-        idx = np.arange(0, k + 1)
-        if len(idx) > max_points:
-            recent = idx[-max_points // 2:]
+        idx0 = np.arange(0, k + 1)
+        if len(idx0) > max_points:
+            recent = idx0[-max_points // 2:]
             older = np.linspace(0, recent[0] - 1, max_points // 2).astype(int)
-            idx = np.concatenate([older, recent])
-        ok = self.valid[a][idx]
-        idx = idx[ok]
-        xy = np.stack([self.px[a][idx], self.py[a][idx]], 1)
-        return xy, self.z[a][idx], self.ext[a][idx], idx
+            idx0 = np.concatenate([older, recent])
+        out = []
+        for a in range(self.arms):
+            ok = self.valid[a][idx0]
+            idx = idx0[ok]
+            xy = np.stack([self.px[a][idx], self.py[a][idx]], 1)
+            out.append((xy, self.z[a][idx], self.ext[a][idx], idx))
+        return out
 
     def follow(self, k):
         """Live mode: show step k of the plan now being sent to the cell (or the simulator)."""

@@ -221,6 +221,110 @@ def _assign_paths(ordered: List[Tuple[int, Path]], num_arms: int) -> List[List[T
     return lanes
 
 
+def _split_loop(path: Path, ox: float, oy: float) -> Optional[Tuple[Path, Path]]:
+    """Cut a closed loop around the axis into two halves of equal angular span, starting at
+    the +X side, both running the same way round. Each half ends where the other starts,
+    so two arms on opposite sides finish it together in half a disc turn."""
+    pts = list(path.points)
+    if len(pts) < 6:
+        return None
+    ang = [math.atan2(p[1] + oy, p[0] + ox) for p in pts]
+    # orient anticlockwise
+    area2 = sum((pts[i][0] + ox) * (pts[(i + 1) % len(pts)][1] + oy) - (pts[(i + 1) % len(pts)][0] + ox) * (pts[i][1] + oy)
+                for i in range(len(pts)))
+    if area2 < 0:
+        pts.reverse()
+        ang.reverse()
+    k0 = min(range(len(pts)), key=lambda i: abs(ang[i]))              # near +X
+    k1 = min(range(len(pts)), key=lambda i: abs(_wrap_to_pi(ang[i] - math.pi)))   # near -X
+    if k0 == k1:
+        return None
+    if k0 < k1:
+        a, b = pts[k0:k1 + 1], pts[k1:] + pts[:k0 + 1]
+    else:
+        a, b = pts[k0:] + pts[:k1 + 1], pts[k1:k0 + 1]
+    if len(a) < 2 or len(b) < 2:
+        return None
+    pa, pb = Path(path.kind, a, closed=False), Path(path.kind, b, closed=False)
+    for q in (pa, pb):
+        for attr in ("_turn", "_anchor"):
+            if hasattr(path, attr):
+                setattr(q, attr, getattr(path, attr))
+    return pa, pb
+
+
+def _mirror_pairs(items, ox, oy, tol=1.5):
+    """Indices of held paths that are the same shape on the opposite side of the axis."""
+    feats = []
+    for idx, (li, path) in items:
+        pts = [(p[0] + ox, p[1] + oy) for p in path.points]
+        cx = sum(x for x, _ in pts) / len(pts)
+        cy = sum(y for _, y in pts) / len(pts)
+        feats.append((idx, cx, cy, path.length()))
+    pairs, used = {}, set()
+    for i, (ia, ax, ay, la) in enumerate(feats):
+        if ia in used or math.hypot(ax, ay) < 3.0:
+            continue
+        for ib, bx, by, lb in feats[i + 1:]:
+            if ib in used:
+                continue
+            if math.hypot(ax + bx, ay + by) <= tol and abs(la - lb) <= 0.05 * max(la, lb, 1e-6):
+                pairs[ia] = ib
+                used.update((ia, ib))
+                break
+    return pairs
+
+
+def assign_slots(ordered: List[Tuple[int, Path]], cfg: PlannerConfig):
+    """Two-arm work split, one SLOT per step group: [item for arm 0, item for arm 1] (None =
+    that arm idles). Walls that go round the axis are cut in half, one half per arm, so both
+    arms print the loop at once while the disc turns. Held features that are mirrored
+    through the axis are printed together, one per arm. Everything else goes to arm 0 (the
+    right arm) with arm 1 waiting. Needs the arms on opposite sides of the disc."""
+    ox, oy = cfg.part_offset
+    flip = False
+    slots: List[List[Optional[Tuple[int, Path]]]] = []
+    by_layer: Dict[int, List[Tuple[int, Tuple[int, Path]]]] = {}
+    order = []
+    for n, item in enumerate(ordered):
+        by_layer.setdefault(item[0], []).append((n, item))
+        if item[0] not in order:
+            order.append(item[0])
+    for li in order:
+        items = by_layer[li]
+        held = [(n, it) for n, it in items if it[1].kind != TRAVEL and not getattr(it[1], "_turn", False)]
+        pairs = _mirror_pairs(held, ox, oy)
+        partner_of = {b: a for a, b in pairs.items()}
+        done = set()
+        for n, (lidx, path) in items:
+            if n in done:
+                continue
+            if path.kind == TRAVEL:
+                slots.append([(lidx, path), None])
+            elif getattr(path, "_turn", False) and path.closed and getattr(path, "_encloses", False):
+                halves = _split_loop(path, ox, oy)
+                if halves:
+                    # alternate which arm takes which half: after half a turn each arm is over
+                    # the other half's start, so the next loop carries on without a swing back
+                    if flip:
+                        halves = (halves[1], halves[0])
+                    flip = not flip
+                    slots.append([(lidx, halves[0]), (lidx, halves[1])])
+                else:
+                    slots.append([(lidx, path), None])
+            elif n in pairs:
+                m = pairs[n]
+                other = next(it for nn, it in items if nn == m)
+                slots.append([(lidx, path), other])
+                done.add(m)
+            elif n in partner_of:
+                continue
+            else:
+                slots.append([(lidx, path), None])
+            done.add(n)
+    return slots
+
+
 def _is_coordinated(cfg: PlannerConfig, kind: str, path: Optional[Path] = None) -> bool:
     """True if the turntable rotates while printing this path."""
     if kind == TRAVEL:
@@ -255,6 +359,8 @@ def apply_rules(slc: SliceResult, cfg: PlannerConfig):
             turn, rid, why = path_turntable_decision(pts, path.kind, rs, sym)
             path._turn = turn
             path._anchor = None
+            from rules import _encloses_axis
+            path._encloses = bool(path.closed and len(pts) >= 3 and _encloses_axis(pts))
             if not turn and face and pts:
                 cx = sum(p[0] for p in pts) / len(pts)
                 cy = sum(p[1] for p in pts) / len(pts)
@@ -304,8 +410,19 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
     decisions = apply_rules(slc, cfg)
     ordered = order_toolpaths(slc)
     n = max(1, cfg.num_arms)
-    lanes = _assign_paths(ordered, n)
-    streams = [list(_lane_vertices(cfg, lanes[i], slc)) for i in range(n)]
+    pinned = any(getattr(p, "arm", None) is not None for _, p in ordered)
+    if n == 2 and cfg.rules is not None and not pinned:
+        # slot-based split (both arms on one layer at once); each slot's two vertex lists
+        # are padded with None so the arms stay step-aligned
+        streams = [[], []]
+        for slot in assign_slots(ordered, cfg):
+            parts = [list(_lane_vertices(cfg, [it], slc)) if it is not None else [] for it in slot]
+            m = max(len(q) for q in parts)
+            for i in range(2):
+                streams[i].extend(parts[i] + [None] * (m - len(parts[i])))
+    else:
+        lanes = _assign_paths(ordered, n)
+        streams = [list(_lane_vertices(cfg, lanes[i], slc)) for i in range(n)]
 
     fil_area = cfg.filament_area()
     phi = cfg.start_phi

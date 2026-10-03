@@ -204,9 +204,13 @@ class Cell3DView(QWidget):
 
     def _draw_part(self, p, cam, w, h):
         src = self.part_source()
-        if src is None:
+        if not src:
             return
-        xy, z, ext, idx = src
+        for a, (xy, z, ext, idx) in enumerate(src):
+            self._draw_bead(p, cam, w, h, xy, z, ext, idx,
+                            QColor(theme.RIGHT if a == 0 else theme.LEFT) if len(src) > 1 else QColor("#7fd4ff"))
+
+    def _draw_bead(self, p, cam, w, h, xy, z, ext, idx, colour):
         if len(xy) < 2:
             return
         phi = math.radians(self.tt_deg)          # the part sits on the disc and turns with it
@@ -221,7 +225,7 @@ class Cell3DView(QWidget):
             sel = np.flatnonzero(draw & band)
             if not len(sel):
                 continue
-            col = QColor("#7fd4ff")
+            col = QColor(colour)
             col.setAlpha(alpha)
             p.setPen(QPen(col, 1.6))
             from PySide6.QtCore import QLineF

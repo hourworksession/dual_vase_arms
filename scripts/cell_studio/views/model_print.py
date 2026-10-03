@@ -164,7 +164,7 @@ class ModelPrintPage(QWidget):
         self.v_top_layers = IntVar(3)
         self.v_bottom_layers = IntVar(3)
         # machine / motion
-        self.v_num_arms = IntVar(1)
+        self.v_num_arms = IntVar(2)
         self.v_use_turntable = BoolVar(True)
         self.v_use_rules = BoolVar(True)
         self.v_tt_for_infill = BoolVar(False)
@@ -293,9 +293,10 @@ class ModelPrintPage(QWidget):
 
     def _machine_section(self):
         mm = Section("Machine + motion", expanded=False)
-        mm.row("Arms", Segmented(self.v_num_arms, [(1, "1"), (2, "2 (plan only)")]),
-               "The planner can split a model across two arms, but printing drives one arm so far. "
-               "Use 2 for planning and dry runs.")
+        mm.row("Arms", Segmented(self.v_num_arms, [(1, "1 (right)"), (2, "2")]),
+               "2: walls around the axis are shared (one half each, both at once while the disc turns), "
+               "mirrored features are printed together, the rest by the right arm while the left waits. "
+               "Right arm = tool 0, left = tool 1.")
         mm.full(Check("Use turntable (off = Cartesian plate)", self.v_use_turntable))
         mm.full(Check("Follow the print rules (Settings ▸ Print rules)", self.v_use_rules))
         infill_chk = Check("Turntable coordinates infill too (rules off only)", self.v_tt_for_infill)
@@ -511,6 +512,7 @@ class ModelPrintPage(QWidget):
 
     def _sliced(self, res, out, snapshot, err):
         self._slicing = False
+        self._print_when_ready = False if err is not None else getattr(self, "_print_when_ready", False)
         if err is not None:
             self.v_status.set("Slicing failed.")
             self._log(f"Slicing failed: {type(err).__name__}: {err}")
@@ -526,6 +528,29 @@ class ModelPrintPage(QWidget):
         self._show_plan(*out)
         self._planned_settings = snapshot
         self._check_narrow(res)
+        self._check_air(res)
+        if getattr(self, "_print_when_ready", False):
+            self._print_when_ready = False
+            if self.program is not None and not getattr(self, "_slicing", False):
+                self.start_print()
+
+    def _check_air(self, res):
+        """Material with nothing under it (bridges, downward domes) cannot be printed with flat
+        layers; say where, so the strategy or the model can be changed."""
+        air = getattr(getattr(res, "region_features", None), "unsupported", None)
+        if not air:
+            return
+        zmin = res.bounds[0][2]
+        worst = max(air, key=lambda a: a[1])
+        first = air[0]
+        total = sum(a for _, a in air)
+        text = (f"{len(air)} layer(s) start new material in mid-air with nothing below it "
+                f"(first: layer {first[0] + 1}, {res.layers[first[0]].z - zmin:.1f} mm up; worst: layer "
+                f"{worst[0] + 1}, {worst[1]:.0f} mm²; {total:.0f} mm² in all). With flat layers this prints "
+                "into air. Options: the conical strategy (cone_in for domes that open downward), thicker "
+                "bridges in CAD, or supports.")
+        self._log("Warning: " + text, append=True)
+        self.app.ui.warn("Unsupported material", text)
 
     def _check_narrow(self, res):
         """Parts of the model narrower than one line are not printed. Say so, and offer the
@@ -598,6 +623,17 @@ class ModelPrintPage(QWidget):
         if cfg.use_turntable:
             lines.append(f"  turntable: {st.tt_travel / (2 * math.pi):.1f} turns, {st.tt_reversals} reversals")
         lines.append(f"  dt(ms): min {dts['dt_ms_min']} / avg {dts['dt_ms_avg']} / max {dts['dt_ms_max']}")
+        if cfg.num_arms > 1 and prog.steps:
+            share = []
+            for ai in range(cfg.num_arms):
+                busy = sum(1 for s_ in prog.steps if ai < len(s_.arms) and s_.arms[ai] is not None and s_.arms[ai].extrude)
+                share.append(100.0 * busy / len(prog.steps))
+            lines.append("  arm share of the print: right {:.0f} %, left {:.0f} %".format(*share[:2]))
+            if share[1] < 5.0:
+                note = ("The left arm has almost nothing to do for this part: no round walls around the axis to "
+                        "share and no features mirrored through the axis. It will wait while the right arm prints.")
+                lines.append("  " + note)
+                self.app.ui.warn("Two arms", note)
         if getattr(prog, "decisions", None) is not None:
             lines.append("Turntable decisions (print rules):")
             lines.append(prog.decisions.summary())
@@ -650,17 +686,13 @@ class ModelPrintPage(QWidget):
         if missing:
             QMessageBox.warning(self, "Print", "Connect " + " and ".join(missing) + " first.")
             return
-        if cfg.num_arms > 1:
-            QMessageBox.warning(self, "Print",
-                                "This plan is for 2 arms, but the print streamer only drives one arm so far. "
-                                f"Set Arms to 1 in Machine + motion and {self.redo_verb.lower()} again.")
-            return
         changed = self._changed_since_plan()
         if changed:
             if QMessageBox.question(self, "Settings changed",
                                     f"These settings changed since the last {self.redo_verb.lower()}: " +
-                                    ", ".join(changed) + f".\n\n{self.redo_verb} again now? (No cancels the print.)"
-                                    ) == QMessageBox.Yes:
+                                    ", ".join(changed) + f".\n\n{self.redo_verb} again now, then print? "
+                                    "(No cancels the print.)") == QMessageBox.Yes:
+                self._print_when_ready = True
                 self.redo()
             return
         if not app.ui.confirm("Confirm print", "Stream the planned motion to the machines now?"):
@@ -700,23 +732,25 @@ class ModelPrintPage(QWidget):
         prog = self.program
         cfg = prog.config
         app = self.app
-        pidx = 0
-        runs = extrusion_runs(prog, pidx)
+        n_arms = max(1, cfg.num_arms)
+        runs_by_arm = [extrusion_runs(prog, i) for i in range(n_arms)]
+        runs = runs_by_arm[0]
         debug = bool(self.v_debug.get()) or dry
-        stats = dt_stats(prog, pidx)
+        stats = dt_stats(prog, 0)
         active = [] if dry else self._connected_arms()
         blend = float(self.v_blend_radius.get())
-        tool = cfg.extruder_tool
+        # arm 0 = right = tool 0 (E), arm 1 = left = tool 1 (X axis), as in the dual-vase macro
+        tools = [cfg.extruder_tool, 1 - cfg.extruder_tool]
         try:
-            if not dry and len(active) < cfg.num_arms:
-                raise RuntimeError(f"Plan uses {cfg.num_arms} arm(s) but only {len(active)} connected. "
-                                   "Switch the arms on in Connections.")
+            if not dry and len(active) < n_arms:
+                raise RuntimeError(f"Plan uses {n_arms} arm(s) but only {len(active)} connected. "
+                                   "Switch the arms on in Connections, or set Arms to 1 and plan again.")
             f = writer = None
             if debug:
                 try:
                     f = open(self._debug_csv_path(), "w", newline="")
                     writer = csvmod.writer(f)
-                    writer.writerow(["i", "t_s", "dt_ms", "layer", "kind", "move",
+                    writer.writerow(["i", "t_s", "dt_ms", "layer", "kind", "arm", "move",
                                      "x", "y", "z", "yaw", "tt_deg", "e_mm", "feed_mm_s"])
                 except Exception as e:
                     logger.warning("Could not open debug CSV: %s", e)
@@ -730,33 +764,34 @@ class ModelPrintPage(QWidget):
                 if self.stop_requested:
                     break
                 dt = max(step.dt, 1e-3)
-                at = step.arms[pidx] if pidx < len(step.arms) else None
-                feed_dbg = ""
-                run = runs.get(si)
-                if run:
-                    total_e, feed = run
-                    feed_dbg = feed
-                    if not dry and app.extruder is not None and total_e > 0 and feed > 0:
-                        app.extruder.extrude(tool, total_e, feed, wait=False)
                 if not dry and cfg.use_turntable and app.turntable is not None:
                     cur = app.turntable.get_angle()
                     err = ((step.tt_angle_deg - cur + 180.0) % 360.0) - 180.0
                     vmax = math.degrees(cfg.max_tt_speed)
                     vel = max(-vmax, min(vmax, err / dt))
                     app.turntable.rotate_velocity(vel)
-                if at is not None and not dry and active:
-                    arm, _tool = active[pidx]
-                    self._move_arm(arm, at, cfg.max_arm_speed, blend)
-                if debug:
-                    row = [si, round(t, 4), round(dt * 1000, 2), step.layer, step.kind,
-                           ("EXTRUDE" if (at and at.extrude) else "travel"),
-                           (at.x if at else ""), (at.y if at else ""), (at.z if at else ""),
-                           (at.yaw if at else ""), round(step.tt_angle_deg, 3),
-                           (at.e if at else 0.0), feed_dbg]
-                    if writer:
-                        writer.writerow(row)
-                    if si < 40 or si % sample == 0:
-                        panel_rows.append(row)
+                for ai in range(n_arms):
+                    at = step.arms[ai] if ai < len(step.arms) else None
+                    feed_dbg = ""
+                    run = runs_by_arm[ai].get(si)
+                    if run:
+                        total_e, feed = run
+                        feed_dbg = feed
+                        if not dry and app.extruder is not None and total_e > 0 and feed > 0:
+                            app.extruder.extrude(tools[ai], total_e, feed, wait=False)
+                    if at is not None and not dry and active:
+                        arm, _tool = active[ai]
+                        self._move_arm(arm, at, cfg.max_arm_speed, blend)
+                    if debug and (at is not None or ai == 0):
+                        row = [si, round(t, 4), round(dt * 1000, 2), step.layer, step.kind, ai,
+                               ("EXTRUDE" if (at and at.extrude) else ("travel" if at else "idle")),
+                               (at.x if at else ""), (at.y if at else ""), (at.z if at else ""),
+                               (at.yaw if at else ""), round(step.tt_angle_deg, 3),
+                               (at.e if at else 0.0), feed_dbg]
+                        if writer:
+                            writer.writerow(row)
+                        if si < 40 or si % sample == 0:
+                            panel_rows.append(row)
                 if not dry:
                     time.sleep(dt)
                     now = time.monotonic()
@@ -793,6 +828,7 @@ class ModelPrintPage(QWidget):
                 except Exception:
                     pass
             app.ui.error("Motion error", str(e))
+            app.ui.post(lambda e=e: self.v_status.set(f"Print stopped by an error: {e}"))
         finally:
             self.printing = False
             if not dry:
@@ -831,10 +867,10 @@ class ModelPrintPage(QWidget):
     def _show_debug(self, summary, rows):
         self._log(summary)
         if rows:
-            hdr = f"{'#':>6} {'t(s)':>8} {'dt(ms)':>7} {'lyr':>4} {'kind':<10} {'move':<8} " \
+            hdr = f"{'#':>6} {'t(s)':>8} {'dt(ms)':>7} {'lyr':>4} {'kind':<10} {'arm':>3} {'move':<8} " \
                   f"{'x':>8} {'y':>8} {'z':>7} {'ttdeg':>8} {'e':>6}"
             self._log(hdr, append=True)
             for r in rows:
-                self._log(f"{r[0]:>6} {r[1]:>8} {r[2]:>7} {r[3]:>4} {str(r[4]):<10} {str(r[5]):<8} "
-                          f"{str(r[6]):>8} {str(r[7]):>8} {str(r[8]):>7} {str(r[10]):>8} {str(r[11]):>6}",
+                self._log(f"{r[0]:>6} {r[1]:>8} {r[2]:>7} {r[3]:>4} {str(r[4]):<10} {str(r[5]):>3} {str(r[6]):<8} "
+                          f"{str(r[7]):>8} {str(r[8]):>8} {str(r[9]):>7} {str(r[11]):>8} {str(r[12]):>6}",
                           append=True)

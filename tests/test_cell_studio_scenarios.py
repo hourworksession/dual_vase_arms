@@ -707,13 +707,14 @@ def s45(x):
 @scenario("Victor (PhD)", "18:00", "Sets Arms = 2 for a model print to halve the time")
 def s46(x):
     x.connect(); m = sliced(x)
+    n = len(MSGS)
     m.v_num_arms.set(2); m.do_plan()
-    mk, n = x.mark(), len(MSGS); ANSWERS.extend([True, True])
+    mk = x.mark(); ANSWERS.extend([True, True])
     m.start_print(); pump(1.0); m.stop_print(); x.wait_for(lambda: not m.printing, 5)
     left_moves = x.log_since(mk, dev="left", cmd="move")
     right_moves = x.log_since(mk, dev="right", cmd="move")
-    refused = not right_moves and x.said(n, "one arm")
-    x.expect(left_moves or refused,
+    explained = x.said(n, "left arm", "wait")
+    x.expect(left_moves or explained,
              "Arms = 2 plans for two arms but only the first arm is ever driven, without saying so")
 
 
@@ -917,8 +918,14 @@ def s61(x):
         both = sum(1 for s in g.program.steps if s.arms[0] is not None and s.arms[1] is not None)
         x.expect(both > 100, "Arms not planned side by side")
     n, m = len(MSGS), x.mark()
-    g.start_print(); pump(0.3)
-    x.expect(not x.log_since(m, cmd="move") and x.said(n, "one arm"), "Two-arm plan streamed to one arm")
+    ANSWERS.extend([True] * 3)
+    g.start_print()
+    x.wait_for(lambda: len(x.log_since(m, dev="left", cmd="move")) > 10 and
+               len(x.log_since(m, dev="right", cmd="move")) > 10, 8)
+    x.expect(len(x.log_since(m, dev="left", cmd="move")) > 10 and len(x.log_since(m, dev="right", cmd="move")) > 10,
+             "Two-arm plan did not drive both arms")
+    g.stop_print()
+    x.wait_for(lambda: not g.printing, 5)
 
 
 @scenario("Chloe (PhD student)", "12:00", "Changes a parameter after planning and presses Print")
@@ -1523,6 +1530,69 @@ def s89(x):
     x.expect(v.part_source() is not None, "No part shown in the 3D view during the print")
     m.stop_print()
     x.wait_for(lambda: not m.printing, 5)
+
+
+@scenario("Wil (owner)", "20:30", "Prints a ring with both arms: each takes half the loop, both extruders run")
+def s90(x):
+    import trimesh
+    ring = trimesh.creation.annulus(r_min=40, r_max=42.2, height=6, sections=96)
+    ring.apply_translation((0, 0, 3))
+    path = os.path.join(GEN_TMP, "ring2.stl")
+    ring.export(path)
+    x.connect()
+    m = x.w.model
+    x.w.go(2)
+    m.v_num_arms.set(2)
+    m.v_layer_height.set(0.6)
+    m.v_line_width.set(1.1)
+    m.v_strategy.set("planar")
+    m.load_model(path)
+    m.do_slice()
+    t = time.time()
+    while (getattr(m, "_slicing", False) or m.program is None) and time.time() - t < 120:
+        pump(0.05)
+    prog = m.program
+    if prog is None:
+        x.expect(False, f"No plan: {m.v_status.get()}")
+        return
+    both = sum(1 for st in prog.steps if len(st.arms) > 1 and st.arms[1] is not None and st.arms[1].extrude)
+    x.expect(both > 0.3 * len(prog.steps), f"Left arm extrudes in only {both} of {len(prog.steps)} steps")
+    ANSWERS.extend([True] * 4)
+    mk = x.mark()
+    m.start_print()
+    x.wait_for(lambda: len({e[3][0] for e in x.log_since(mk, dev="extruder", cmd="extrude")}) == 2 and
+               len(x.log_since(mk, dev="left", cmd="move")) > 20, 15)
+    x.expect(len(x.log_since(mk, dev="left", cmd="move")) > 20, "Left arm never moved during the print")
+    x.expect(len(x.log_since(mk, dev="right", cmd="move")) > 20, "Right arm never moved during the print")
+    tools = {e[3][0] for e in x.log_since(mk, dev="extruder", cmd="extrude")}
+    x.expect(tools == {0, 1}, f"Extruder tools used: {tools}, expected both 0 and 1")
+    m.stop_print()
+    x.wait_for(lambda: not m.printing, 5)
+
+
+@scenario("Chloe (PhD student)", "20:40", "Model with a bridge: warned that it starts in mid-air")
+def s91(x):
+    import trimesh
+    a = trimesh.creation.box((10, 10, 20)); a.apply_translation((-20, 0, 10))
+    b = trimesh.creation.box((10, 10, 20)); b.apply_translation((20, 0, 10))
+    bridge = trimesh.creation.box((50, 6, 4)); bridge.apply_translation((0, 0, 30))
+    m_ = trimesh.util.concatenate([a, b, bridge])
+    path = os.path.join(GEN_TMP, "bridge.stl")
+    m_.export(path)
+    m = x.w.model
+    x.w.go(2)
+    m.v_num_arms.set(1)
+    m.v_layer_height.set(0.6)
+    m.v_line_width.set(1.1)
+    m.v_strategy.set("planar")
+    n = len(MSGS)
+    m.load_model(path)
+    m.do_slice()
+    t = time.time()
+    while (getattr(m, "_slicing", False) or m.program is None) and time.time() - t < 120:
+        pump(0.05)
+    pump(0.2)
+    x.expect(x.said(n, "mid-air"), "No warning that the bridge prints into air")
 
 
 # ---------------------------------------------------------------- runner
