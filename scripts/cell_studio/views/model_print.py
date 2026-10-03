@@ -361,50 +361,80 @@ class ModelPrintPage(QWidget):
         self.canvas.show_layer(None, 0)
 
     def do_slice(self):
+        """Slice and plan on a worker thread: big models take tens of seconds and must not freeze the panel."""
         if not self.model_path:
             QMessageBox.warning(self, "Slicer", "Import a model first.")
             return
+        if getattr(self, "_slicing", False):
+            return
         try:
             from slicer import slice_model
+            from planner import plan, analyze, dt_stats, extrusion_runs  # noqa: F401
         except Exception as e:
             QMessageBox.critical(self, "Slicer", f"Slicing packages unavailable:\n{e}\n\n"
                                  "pip install trimesh shapely numpy scipy networkx")
             return
-        try:
-            self.slice_result = slice_model(self.model_path, self._settings())
-        except Exception as e:
-            QMessageBox.critical(self, "Slice failed", str(e))
+        settings, cfg, path = self._settings(), self._planner_config(), self.model_path
+        self._slicing = True
+        self.program = None
+        self.v_status.set("Slicing…")
+        snapshot = self._settings_snapshot()
+        post = self.app.ui.post
+
+        def progress(done, total):
+            post(lambda d=done, t=total: self.v_status.set(f"Slicing… layer {d} of {t}"))
+
+        def work():
+            try:
+                res = slice_model(path, settings, progress)
+                post(lambda: self.v_status.set(f"Planning the motion for {len(res.layers)} layers…"))
+                out = self._plan_compute(res, cfg)
+                post(lambda: self._sliced(res, out, snapshot, None))
+            except Exception as e:
+                post(lambda e=e: self._sliced(None, None, snapshot, e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _sliced(self, res, out, snapshot, err):
+        self._slicing = False
+        if err is not None:
+            self.v_status.set("Slicing failed.")
+            self._log(f"Slicing failed: {type(err).__name__}: {err}")
+            QMessageBox.critical(self, "Slice failed", str(err))
             return
-        n = len(self.slice_result.layers)
+        self.slice_result = res
+        n = len(res.layers)
         self.layer_slider.setRange(0, max(0, n - 1))
         self.layer_slider.setValue(n // 2)
-        self.canvas.show_layer(self.slice_result, n // 2)
-        self._log("Sliced: " + self.slice_result.summary())
-        self.do_plan()
+        self.canvas.show_layer(res, n // 2)
+        self._log("Sliced: " + res.summary())
+        self._show_plan(*out)
+        self._planned_settings = snapshot
 
-    def do_plan(self):
-        if not self.slice_result:
-            return
-        try:
-            from planner import plan, analyze, dt_stats, extrusion_runs
-        except Exception as e:
-            QMessageBox.critical(self, "Planner", f"Planner unavailable:\n{e}")
-            return
-        cfg = self._planner_config()
-        self.program = plan(self.slice_result, cfg)
-        st = analyze(self.program)
-        dts = dt_stats(self.program)
+    @staticmethod
+    def _plan_compute(res, cfg):
+        from planner import plan, analyze, dt_stats, extrusion_runs
+        prog = plan(res, cfg)
+        return prog, cfg, analyze(prog), dt_stats(prog), len(extrusion_runs(prog))
+
+    def _show_plan(self, prog, cfg, st, dts, runs):
+        self.program = prog
         mode = "polar (turntable coordinated)" if cfg.use_turntable else "cartesian (fixed plate)"
         lines = [f"Motion plan: {mode}",
-                 f"  points: {len(self.program.steps)}   est. time: {st.total_time / 60:.1f} min",
-                 f"  extrusion paths: {len(extrusion_runs(self.program))}",
+                 f"  points: {len(prog.steps)}   est. time: {st.total_time / 60:.1f} min",
+                 f"  extrusion paths: {runs}",
                  f"  arm avg {st.arm_avg_speed[0]:.1f} / peak {st.arm_peak_speed[0]:.1f} mm/s"]
         if cfg.use_turntable:
             lines.append(f"  turntable: {st.tt_travel / (2 * math.pi):.1f} turns, {st.tt_reversals} reversals")
         lines.append(f"  dt(ms): min {dts['dt_ms_min']} / avg {dts['dt_ms_avg']} / max {dts['dt_ms_max']}")
         self._log("\n".join(lines), append=True)
+        self.v_status.set(f"Planned: {len(prog.steps):,} points, about {st.total_time / 60:.1f} min. Ready to print.")
+
+    def do_plan(self):
+        """Re-plan the current slice (synchronous; used after settings change and by tests)."""
+        if not self.slice_result:
+            return
+        self._show_plan(*self._plan_compute(self.slice_result, self._planner_config()))
         self._planned_settings = self._settings_snapshot()
-        self.v_status.set(f"Planned: {len(self.program.steps)} points, about {st.total_time / 60:.1f} min. Ready to print.")
 
     def start_print(self):
         app = self.app

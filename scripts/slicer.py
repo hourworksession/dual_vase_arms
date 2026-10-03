@@ -103,7 +103,11 @@ class SliceResult:
         return (f"{len(self.layers)} layers | "
                 f"outer={counts[WALL_OUTER]} inner={counts[WALL_INNER]} "
                 f"skin={counts[SKIN]} infill={counts[INFILL]} | "
-                f"extrude path length ~= {total_len/1000:.2f} m")
+                f"extrude path length ~= {total_len/1000:.2f} m"
+                + (f" | {self.thin} feature cross-section(s) thinner than the {self.settings.line_width} mm line "
+                   "were skipped" if getattr(self, "thin", 0) else "")
+                + (f" | {len(self.failures)} layer(s) FAILED to slice (first: layer "
+                   f"{self.failures[0][0]}, {self.failures[0][1]})" if getattr(self, "failures", None) else ""))
 
 
 # ----------------------------------------------------------------------------
@@ -117,12 +121,31 @@ def _load_mesh(mesh_path: str) -> trimesh.Trimesh:
 
 
 def _section_polygons(mesh: trimesh.Trimesh, z: float) -> List[Polygon]:
-    """Return the filled cross-section polygons (with holes) at height z."""
+    """Return the filled cross-section polygons (with holes) at height z, in model XY.
+
+    Built with shapely from the section's closed loops (even-odd rule: XOR of all loops),
+    so a part with holes or several islands needs no extra packages (trimesh's own
+    polygons_full needs `rtree`), and the coordinates are the model's own XY."""
     section = mesh.section(plane_origin=[0, 0, z], plane_normal=[0, 0, 1])
     if section is None:
         return []
-    planar, _to3d = section.to_planar()
-    return list(planar.polygons_full)
+    loops = []
+    for d in section.discrete:
+        pts = np.asarray(d)[:, :2]
+        if len(pts) < 4:
+            continue
+        poly = Polygon(pts)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if not poly.is_empty and poly.area > 1e-6:
+            loops.append(poly)
+    if not loops:
+        return []
+    loops.sort(key=lambda g: -g.area)
+    region = loops[0]
+    for g in loops[1:]:
+        region = region.symmetric_difference(g)
+    return list(_iter_polys(region))
 
 
 def _ring_points(ring) -> List[Point]:
@@ -218,7 +241,8 @@ def _infill_for_region(region: Polygon, layer_index: int, solid: bool,
 
 
 # ----------------------------------------------------------------------------
-def slice_model(mesh_path: str, settings: SliceSettings) -> SliceResult:
+def slice_model(mesh_path: str, settings: SliceSettings, progress=None) -> SliceResult:
+    """progress(done, total) is called every few layers if given."""
     if _MESH_IMPORT_ERROR is not None:
         raise ImportError(f"Slicing needs trimesh and shapely ({_MESH_IMPORT_ERROR}). "
                           "pip install trimesh shapely")
@@ -229,24 +253,39 @@ def slice_model(mesh_path: str, settings: SliceSettings) -> SliceResult:
     n_layers = max(1, int(math.floor(height / lh + 1e-6)))
 
     layers: List[Layer] = []
+    failures = []
+    thin = 0                            # cross-sections too thin for even one line
     for i in range(n_layers):
+        if progress is not None and i % 5 == 0:
+            progress(i, n_layers)
         z = zmin + lh * (i + 0.5)
         solid = (i < settings.bottom_layers) or (i >= n_layers - settings.top_layers)
         layer = Layer(index=i, z=z, solid=solid)
         try:
             polys = _section_polygons(mesh, z)
-        except Exception:
+        except Exception as e:          # keep going, but never silently: reported below
             polys = []
+            failures.append((i, f"{type(e).__name__}: {e}"))
         for poly in polys:
             if poly.is_empty or poly.area <= 0:
                 continue
             wall_paths, infill_regions = _walls_for_polygon(poly, settings)
+            if not wall_paths:
+                thin += 1
             layer.paths.extend(wall_paths)
             for region in infill_regions:
                 layer.paths.extend(_infill_for_region(region, i, solid, settings))
         layers.append(layer)
 
-    return SliceResult(layers=layers, settings=settings, bounds=mesh.bounds)
+    if failures and len(failures) == n_layers:
+        raise RuntimeError(f"Every layer failed to slice. First error: {failures[0][1]}")
+    if not any(layer.paths for layer in layers):
+        raise RuntimeError("The model sliced into layers but produced no toolpaths. It may be too small for "
+                           f"the {settings.line_width} mm line width, or not a closed solid.")
+    res = SliceResult(layers=layers, settings=settings, bounds=mesh.bounds)
+    res.failures = failures
+    res.thin = thin
+    return res
 
 
 # ----------------------------------------------------------------------------

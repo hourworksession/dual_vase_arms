@@ -204,6 +204,9 @@ def sliced(ctx):
     m.load_model(os.path.join(ROOT, "scripts", "cube40.3mf"))
     if "res" not in _SLICE_CACHE:
         m.do_slice()
+        t = time.time()
+        while getattr(m, "_slicing", False) and time.time() - t < 120:
+            pump(0.05)
         _SLICE_CACHE["res"] = m.slice_result
     else:
         m.slice_result = _SLICE_CACHE["res"]
@@ -1231,6 +1234,31 @@ def s78(x):
         if isinstance(wdg, QPushButton) and wdg.width() + 1 < wdg.sizeHint().width():
             bad.append(f"squeezed '{wdg.text()}'")
     x.expect(not bad, "Overlapping or clipped widgets: " + ", ".join(sorted(set(bad))[:5]))
+
+
+
+@scenario("Wil (owner)", "18:30", "Imports a thin-walled Tinkercad part with holes (several outlines per layer)")
+def s79(x):
+    import trimesh
+    ring = trimesh.creation.annulus(r_min=28.0, r_max=30.2, height=20.0)
+    ring.apply_translation((0, 0, 10.0))
+    path = os.path.join(GEN_TMP, "thin_ring.obj")
+    ring.export(path)
+    m = x.w.model
+    x.w.go(2)
+    m.load_model(path)
+    m.do_slice()
+    statuses = set()
+    t = time.time()
+    while getattr(m, "_slicing", False) and time.time() - t < 120:
+        statuses.add(m.v_status.get())
+        pump(0.02)
+    rep = m.stats_text.toPlainText()
+    walls = sum(1 for L in (m.slice_result.layers if m.slice_result else []) for p in L.paths if p.kind == "WALL_OUTER")
+    x.expect(walls >= 2 * len(m.slice_result.layers) if m.slice_result else False,
+             f"Part with an inner and outer outline sliced to {walls} outer walls: {rep[:160]}")
+    x.expect(m.program is not None, f"Not planned: {m.v_status.get()}")
+    x.expect(any("Slicing…" in st for st in statuses), "No progress shown while slicing (panel looks frozen)")
 
 
 # ---------------------------------------------------------------- runner
