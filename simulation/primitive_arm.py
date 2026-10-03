@@ -19,6 +19,12 @@ aren't exported yet, links are drawn as cylinders that bridge each joint to the
 next; swap in the official STL meshes later for photoreal geometry without
 touching the kinematics.
 
+Real geometry: when ``assets/uf850/<link>.stl`` exist (made from UFACTORY's
+"UFACTORY 850(FX8510)-20260626.STEP" by ``step_to_link_meshes.py``), each link
+is drawn with its real shell instead of the cylinders. Collision shapes stay
+primitive (cheap and good enough for a kinematic viewer). Pass
+``meshes=False`` to force the old look.
+
 A Hemera-style extruder is mounted on the flange at a fixed 45 deg
 (``TOOL_MOUNT_RPY``); joint6 (wrist roll) rotates the angled tool to set the
 print direction, as on the hardware. Limits are the official UF850 values.
@@ -62,6 +68,25 @@ REST_POSE = [0.0, 0.30, -0.60, 0.0, 0.30, 0.0]
 EE_LINK_NAME = "tool_tip"
 _GEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets_generated")
 _GEN_PATH = os.path.join(_GEN_DIR, "primitive_xarm850.urdf")
+MESH_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "uf850")
+LINK_NAMES = ["link_base", "link1", "link2", "link3", "link4", "link5", "link6"]
+ARM_WHITE = "0.93 0.93 0.94 1"
+
+
+def meshes_available() -> bool:
+    return all(os.path.exists(os.path.join(MESH_DIR, f"{n}.stl")) for n in LINK_NAMES)
+
+
+def _mesh_visual(link, urdf_dir):
+    rel = os.path.relpath(os.path.join(MESH_DIR, f"{link}.stl"), urdf_dir).replace(os.sep, "/")
+    return (f'    <visual><origin xyz="0 0 0" rpy="0 0 0"/>'
+            f'<geometry><mesh filename="{rel}" scale="1 1 1"/></geometry>'
+            f'<material name="arm_white"><color rgba="{ARM_WHITE}"/></material></visual>\n')
+
+
+def _collision_only(xml):
+    """Keep the <collision> lines of a primitive block, drop its <visual>."""
+    return "".join(l + "\n" for l in xml.splitlines() if "<collision>" in l)
 
 
 def _fmt_rpy(rpy):
@@ -101,8 +126,11 @@ def _inertial():
             '</inertial>\n')
 
 
-def generate_urdf(path: str = _GEN_PATH, tool_mount_rpy=TOOL_MOUNT_RPY) -> Tuple[str, str]:
+def generate_urdf(path: str = _GEN_PATH, tool_mount_rpy=TOOL_MOUNT_RPY,
+                  meshes: bool = True) -> Tuple[str, str]:
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    real = meshes and meshes_available()
+    udir = os.path.dirname(os.path.abspath(path))
     out: List[str] = ['<?xml version="1.0"?>\n<robot name="uf850_primitive">\n']
 
     # child-joint origin in each parent link's frame -> draws the bridging segment
@@ -123,7 +151,8 @@ def generate_urdf(path: str = _GEN_PATH, tool_mount_rpy=TOOL_MOUNT_RPY) -> Tuple
 
     # base link with the vertical column up to joint1
     out.append('  <link name="link_base">\n')
-    out.append(_connector(child_origin["link_base"], 0.055, seg_rgba["link_base"]))
+    col = _connector(child_origin["link_base"], 0.055, seg_rgba["link_base"])
+    out.append(_mesh_visual("link_base", udir) + _collision_only(col) if real else col)
     out.append(_inertial())
     out.append("  </link>\n")
 
@@ -138,10 +167,13 @@ def generate_urdf(path: str = _GEN_PATH, tool_mount_rpy=TOOL_MOUNT_RPY) -> Tuple
             f'  </joint>\n'
         )
         out.append(f'  <link name="{child}">\n')
-        out.append(_knuckle(0.05, "0.2 0.2 0.22 1"))
         seg = child_origin.get(child)
-        if seg is not None and child in seg_rgba:
-            out.append(_connector(seg, 0.045, seg_rgba[child]))
+        col = _connector(seg, 0.045, seg_rgba[child]) if seg is not None and child in seg_rgba else ""
+        if real:
+            out.append(_mesh_visual(child, udir) + _collision_only(col))
+        else:
+            out.append(_knuckle(0.05, "0.2 0.2 0.22 1"))
+            out.append(col)
         out.append(_inertial())
         out.append("  </link>\n")
         parent = child

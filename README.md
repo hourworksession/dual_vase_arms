@@ -103,6 +103,10 @@ the log console, and an error that stops the panel opening stays on that window.
   with "Use current position"). Home goes there instead of the xArm factory home.
   Stored in `config/home_positions.json`.
 
+3D digital twin (PyBullet, `simulation/`): the arms are drawn with UFACTORY's real 850
+geometry (`simulation/assets/uf850/`, converted from the official STEP by
+`python -m simulation.step_to_link_meshes <file.STEP>`) on the official joint chain.
+
 User scenario tests (simulated hardware, no cell needed):
 `python tests/test_cell_studio_scenarios.py` (add `--mode streamed` for follow-turntable extrusion).
 

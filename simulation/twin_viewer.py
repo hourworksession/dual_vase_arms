@@ -18,8 +18,9 @@ practice a dedicated subprocess launched by :mod:`simulation.twin_launcher`. The
 viewer pulls state through a ``snapshot_provider`` callable, so it doesn't care
 whether that state comes from an in-process ``SystemState`` or shared memory.
 
-When the real xArm 850 URDF + meshes are available, pass ``arm_urdf=<path>`` and
-``drive_mode="joints"`` to play back true servo angles for an exact match.
+The arms use UFACTORY's real 850 geometry (simulation/assets/uf850, made from the
+official STEP by step_to_link_meshes.py) on the official joint chain, so with
+``drive_mode="joints"`` the twin plays back true servo angles for an exact match.
 """
 
 from __future__ import annotations
