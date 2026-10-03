@@ -39,13 +39,18 @@ class _QtLogHandler(logging.Handler):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    PAGES = ("Machine", "Cylinder", "Model print", "Generators", "Macros")
+
+    def __init__(self, progress=None):
+        """progress(text): optional callback, called before each slow part (start-up window)."""
         super().__init__()
+        step = progress or (lambda text: None)
         self.setWindowTitle("Cell Studio · dual arm print control")
         self.resize(1480, 920)
         self.setMinimumSize(1180, 640)
         self.ui = UiBridge()
         self.ui.parent_widget = self
+        step("Reading the cell configuration")
         self.c = CellController(self.ui)
 
         root = QWidget()
@@ -60,10 +65,15 @@ class MainWindow(QMainWindow):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         self.stack = QStackedWidget()
+        step("Building the Machine page")
         self.machine = MachinePage(self.c, self)
+        step("Building the Cylinder page")
         self.cylinder = CylinderPage(self.c, self)
+        step("Building the Model print page")
         self.model = ModelPrintPage(self.c, self)
+        step("Building the Generators page (scanning the generator library)")
         self.generators = GeneratorsPage(self.c, self)
+        step("Building the Macros page")
         self.macros = MacrosPage(self.c, self)
         self.print_pages = (self.model, self.generators)
         for p in (self.machine, self.cylinder, self.model, self.generators, self.macros):
@@ -105,7 +115,7 @@ class MainWindow(QMainWindow):
         tb = QVBoxLayout()
         tb.setSpacing(0)
         tb.addWidget(label("Cell Studio", "AppTitle"))
-        tb.addWidget(label("Dual xArm 850 · ADRS turntable · Hemera", "AppSub"))
+        tb.addWidget(label("Dual xArm 850 · ADRS turntable · Revo HF 1.2 mm", "AppSub"))
         lay.addLayout(tb)
         lay.addSpacing(18)
 

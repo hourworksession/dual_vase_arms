@@ -1288,6 +1288,71 @@ def s80(x):
                                "instead of 1")
 
 
+@scenario("Wil (owner)", "18:50", "Runs a cylinder on the new mounts (each arm has its own orientation)")
+def s81(x):
+    x.connect(); x.quick_cylinder(0.3, 2.0); ANSWERS.extend([True] * 3)
+    m = x.mark()
+    x.c.start_cylinder(); x.wait_idle(6)
+    for side, want in (("right", (90.0, -90.0, 90.0)), ("left", (0.0, 90.0, 0.0))):
+        moves = [e[3][0] for e in x.log_since(m, dev=side, cmd="move")]
+        if not moves:
+            x.expect(False, f"{side} arm never moved")
+            continue
+        bad = [mv[3:] for mv in moves if tuple(mv[3:]) != want]
+        x.expect(not bad, f"{side} arm commanded orientation {bad[:1]} instead of {want}")
+
+
+@scenario("Priya (MSc)", "19:00", "Watches the planned print in the Simulation tab before printing")
+def s82(x):
+    m = sliced(x)
+    x.w.go(2)
+    if m.program is None:
+        x.expect(False, "No plan to simulate")
+        return
+    sim_ = m.sim
+    m.preview_tabs.setCurrentIndex(1)
+    pump(0.05)
+    x.expect(sim_.n == len(m.program.steps), "Simulation did not load the plan")
+    sim_._seek_time(sim_.total * 0.5)
+    pump(0.05)
+    x.expect(sim_.layer[sim_.k] > 0, "Scrubbing to half way did not reach a later layer")
+    k0 = sim_.k
+    sim_.speed.set(200.0)
+    sim_.toggle()
+    x.wait_for(lambda: sim_.k > k0 + 5, 2)
+    x.expect(sim_.k > k0, "Play did not advance the simulation")
+    m.preview_tabs.setCurrentIndex(0)
+    pump(0.05)
+    x.expect(not sim_.playing, "Simulation keeps playing in the background after leaving the tab")
+    sim_._seek_time(sim_.total * 0.1)
+    x.expect(sim_.k < k0, "Scrubbing backwards did not go back")
+    m.program = None
+    x.expect(sim_.n == 0, "Simulation still shows an old plan after the plan was cleared")
+
+
+@scenario("Tom (IT)", "19:10", "Starts the panel on a PC missing a library")
+def s83(x):
+    from cell_studio import splash as sp
+    saved = sp.STEPS
+    try:
+        sp.STEPS = [("FullControl", sp._imp("no_such_module_fc"), False, "Generators will not run."),
+                    ("numpy", sp._imp("numpy"), True, "")]
+        w = sp.Splash()
+        ok = w.run_steps(0)
+        x.expect(ok, "A missing optional library stopped the panel from opening")
+        x.expect(any("FullControl" in t for t in w.warnings), "Missing optional library not listed")
+        sp.STEPS = [("numpy", sp._imp("no_such_module_np"), True, "")]
+        w2 = sp.Splash()
+        w2.show()
+        ok2 = w2.run_steps(0)
+        x.expect(not ok2, "A missing required library was ignored")
+        x.expect(w2.buttons.isVisible() and "no_such_module_np" in w2.log.toPlainText(),
+                 "The start-up window does not show the error")
+        w.close(); w2.close()
+    finally:
+        sp.STEPS = saved
+
+
 # ---------------------------------------------------------------- runner
 def run(selected=None):
     rows = []

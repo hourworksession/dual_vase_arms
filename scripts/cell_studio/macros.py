@@ -117,7 +117,7 @@ class MergeCalibration:
         ang = math.radians(self.s.right_angle if side == "right" else self.s.left_angle)
         r = r + self.c.safe_get(self.c.param_vars[f"radial_offset_{side}"], f"radial_offset_{side}")
         x, y, zz = self.geom.to_arm(side, (r * math.cos(ang), r * math.sin(ang), z))
-        return (x, y, zz) + self.c.orientation()
+        return (x, y, zz) + self.c.orientation(side)
 
     def _move(self, arm, p, speed=40, wait=True):
         self._abort_if_stopped()
@@ -428,7 +428,7 @@ class DualSpiralJob:
         ang = math.radians(arm.start_deg)
         x, y, zz = self.geom.to_arm(side, (r * math.cos(ang), r * math.sin(ang), z))
         o = [self.c.safe_get(self.c.offset_vars[f"{side}_{ax}"], f"{side}_{ax}") for ax in self.c.axes]
-        R0, P0, Y0 = self.c.orientation()
+        R0, P0, Y0 = self.c.orientation(side)
         return (x + o[0], y + o[1], zz + o[2], R0 + o[3], P0 + o[4], Y0 + o[5])
 
     def _e(self, side, prog):

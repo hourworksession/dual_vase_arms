@@ -113,12 +113,14 @@ class CellController:
             'feed_rate_right':    DoubleVar(4.0),
             'extrusion_factor_left':  DoubleVar(1.0),
             'extrusion_factor_right': DoubleVar(1.0),
-            'tt_cx_left':         DoubleVar(574.1),
-            'tt_cy_left':         DoubleVar(-5.4),
-            'tt_cz_left':         DoubleVar(153),
-            'tt_cx_right':        DoubleVar(567.7),
-            'tt_cy_right':        DoubleVar(6.7),
-            'tt_cz_right':        DoubleVar(151.1),
+            # New mounts (Oct 2026): XC/YC_{RIGHT,LEFT} and Z_{R,L}_OFFSET from the cell config.
+            # (Old mounts: left 574.1, -5.4, 153; right 567.7, 6.7, 151.1.)
+            'tt_cx_left':         DoubleVar(512.1),
+            'tt_cy_left':         DoubleVar(-8.4),
+            'tt_cz_left':         DoubleVar(110.2),
+            'tt_cx_right':        DoubleVar(508.18),
+            'tt_cy_right':        DoubleVar(-22.88),
+            'tt_cz_right':        DoubleVar(107.4),
             'angular_offset_deg': DoubleVar(5.0),
             'radial_offset_left':  DoubleVar(0.0),
             'radial_offset_right': DoubleVar(0.0),
@@ -187,10 +189,11 @@ class CellController:
         except Exception:
             return fallback
 
-    def orientation(self):
-        """(roll, pitch, yaw) the nozzle is commanded at: Settings ▸ Tool and nozzle."""
-        t = self.tool
-        return float(t["roll"]), float(t["pitch"]), float(t["yaw"])
+    def orientation(self, side="right"):
+        """(roll, pitch, yaw) that arm's nozzle is commanded at: Settings ▸ Tool and nozzle.
+        Each arm has its own (the new mounts face each other: right 90/-90/90, left 0/90/0)."""
+        from . import tool as toolmod
+        return toolmod.orientation(self.tool, side)
 
     # ==================================================================
     def safe_get(self, var, name):
@@ -507,21 +510,22 @@ class CellController:
     def _prepare_thread(self):
         temp = self.cfg['defaults']['temperature']['tool0']
         left, right, ext = self.left, self.right, self.extruder
-        R0, P0, Y0 = self.orientation()
+        RL, PL, YL = self.orientation("left")
+        RR, PR, YR = self.orientation("right")
         if ext is not None:
             ext.set_temperature(0, temp, wait=False)
             ext.set_temperature(1, temp, wait=False)
         if left is not None:
-            left.arm.set_position(442.5, 225, 160, R0, P0, Y0 - 20, speed=100, wait=False)
+            left.arm.set_position(442.5, 225, 160, RL, PL, YL, speed=100, wait=False)
         if right is not None:
-            right.arm.set_position(442.5, 230, 172, R0, P0, Y0 - 20, speed=100, wait=False)
+            right.arm.set_position(442.5, 230, 172, RR, PR, YR, speed=100, wait=False)
         if ext is not None:
             ext.heat_and_wait(0, temp)
             ext.heat_and_wait(1, temp)
         if left is not None:
-            left.arm.set_position(400, 174.4, 155, R0, P0, Y0, speed=100, wait=False)
+            left.arm.set_position(400, 174.4, 155, RL, PL, YL, speed=100, wait=False)
         if right is not None:
-            right.arm.set_position(400, 174.4, 155, R0, P0, Y0, speed=100, wait=False)
+            right.arm.set_position(400, 174.4, 155, RR, PR, YR, speed=100, wait=False)
         time.sleep(5)
         if self.estopped:
             return
@@ -737,16 +741,17 @@ class CellController:
 
             park_x, park_y, park_z = 400.0, 174.0, 180.0
             safe_z = 250.0
-            R0, P0, base_yaw = self.orientation()     # was 180, 45, 20 on the old tilted mount
+            RR, PR, YR = self.orientation("right")     # per arm: the new mounts face each other
+            RL, PL, YL = self.orientation("left")
             left_yaw_off = safe('left_yaw', self.offset_vars['left_Yaw'])
 
             approach = [
-                lambda: right.arm.set_position(park_x, park_y, park_z, R0, P0, base_yaw, speed=100, wait=True),
-                lambda: left.arm.set_position(park_x, park_y, park_z, R0, P0, base_yaw + left_yaw_off, speed=100, wait=True),
-                lambda: right.move_to(park_x, park_y, safe_z, R0, P0, base_yaw, speed=100, wait=True),
-                lambda: left.move_to(park_x, park_y, safe_z, R0, P0, base_yaw + left_yaw_off, speed=100, wait=True),
-                lambda: right.move_to(right_base_x, right_base_y, z_start + tt_cz_r, R0, P0, base_yaw, speed=50, wait=True),
-                lambda: left.move_to(left_base_x, left_base_y, z_start + tt_cz_l, R0, P0, base_yaw + left_yaw_off, speed=50, wait=True),
+                lambda: right.arm.set_position(park_x, park_y, park_z, RR, PR, YR, speed=100, wait=True),
+                lambda: left.arm.set_position(park_x, park_y, park_z, RL, PL, YL + left_yaw_off, speed=100, wait=True),
+                lambda: right.move_to(park_x, park_y, safe_z, RR, PR, YR, speed=100, wait=True),
+                lambda: left.move_to(park_x, park_y, safe_z, RL, PL, YL + left_yaw_off, speed=100, wait=True),
+                lambda: right.move_to(right_base_x, right_base_y, z_start + tt_cz_r, RR, PR, YR, speed=50, wait=True),
+                lambda: left.move_to(left_base_x, left_base_y, z_start + tt_cz_l, RL, PL, YL + left_yaw_off, speed=50, wait=True),
             ]
             for step in approach:
                 if self.stop_requested:
@@ -854,10 +859,10 @@ class CellController:
                 arm_speed = max(base_arm_speed * factor, required_speed * factor)
 
                 left.move_to(left_x, left_y, left_z,
-                             roll=R0 + lo[3], pitch=P0 + lo[4], yaw=base_yaw + lo[5],
+                             roll=RL + lo[3], pitch=PL + lo[4], yaw=YL + lo[5],
                              speed=arm_speed, wait=False)
                 right.move_to(right_x, right_y, right_z,
-                              roll=R0 + ro[3], pitch=P0 + ro[4], yaw=base_yaw + ro[5],
+                              roll=RR + ro[3], pitch=PR + ro[4], yaw=YR + ro[5],
                               speed=arm_speed, wait=False)
 
                 elapsed = time.time() - start_wall_time
@@ -875,8 +880,8 @@ class CellController:
             time.sleep(0.5)
             ext.send_gcode("M18 E X")
             lo = [safe(f'left_{ax}', self.offset_vars[f'left_{ax}']) for ax in self.axes]
-            right.arm.set_position(park_x, park_y, park_z, R0, P0, base_yaw, speed=100, wait=True)
-            left.arm.set_position(park_x, park_y, park_z, R0, P0, base_yaw + lo[5], speed=100, wait=True)
+            right.arm.set_position(park_x, park_y, park_z, RR, PR, YR, speed=100, wait=True)
+            left.arm.set_position(park_x, park_y, park_z, RL, PL, YL + lo[5], speed=100, wait=True)
             stopped = self.stop_requested
             self._job_finished()
             logger.info("Cylinder stopped." if stopped else "Cylinder finished.")

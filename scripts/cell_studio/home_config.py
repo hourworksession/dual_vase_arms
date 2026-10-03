@@ -27,9 +27,15 @@ _ARM_DEFAULT = {
     "safe_z": 250.0,
 }
 
+def _arm_default(rpy):
+    d = copy.deepcopy(_ARM_DEFAULT)
+    d["pose"] = d["pose"][:3] + list(rpy)        # each arm's own mount orientation (see tool.py)
+    return d
+
+
 DEFAULTS = {
-    "left": copy.deepcopy(_ARM_DEFAULT),
-    "right": copy.deepcopy(_ARM_DEFAULT),
+    "left": _arm_default((0.0, 90.0, 0.0)),
+    "right": _arm_default((90.0, -90.0, 90.0)),
     "sequence": "simultaneous",   # "simultaneous", "right_first", "left_first"
 }
 

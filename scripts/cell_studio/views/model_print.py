@@ -14,7 +14,7 @@ import time
 
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QSlider,
+from PySide6.QtWidgets import (QTabWidget, QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QSlider,
                                QPlainTextEdit, QFileDialog, QMessageBox)
 
 from .. import theme
@@ -78,6 +78,18 @@ class LayerView(QWidget):
 
 
 class ModelPrintPage(QWidget):
+    @property
+    def program(self):
+        return getattr(self, "_program", None)
+
+    @program.setter
+    def program(self, prog):
+        """Setting the plan also loads it into the Simulation tab (or clears it)."""
+        self._program = prog
+        sim = getattr(self, "sim", None)
+        if sim is not None:
+            sim.set_program(prog)
+
     def __init__(self, ctl, win):
         super().__init__()
         self.app = ctl
@@ -261,20 +273,30 @@ class ModelPrintPage(QWidget):
         vs = QSplitter(Qt.Vertical)
         vs.setHandleWidth(12)
 
-        prev = Card("Layer preview")
+        prev = Card("Preview")
         for kind, col in theme.KIND_COLOR.items():
             prev.add_header_widget(Dot(col, 8))
             lb = label(kind.replace("_", " ").title(), "Muted")
             lb.setStyleSheet("font-size:12px; margin-right:8px;")
             prev.add_header_widget(lb)
         self.canvas = LayerView()
-        prev.add(self.canvas, 1)
+        layers_tab = QWidget()
+        lt = QVBoxLayout(layers_tab)
+        lt.setContentsMargins(0, 6, 0, 0)
+        lt.addWidget(self.canvas, 1)
         self.layer_slider = QSlider(Qt.Horizontal)
         self.layer_slider.setRange(0, 0)
         self.layer_slider.valueChanged.connect(lambda i: self.canvas.show_layer(self.slice_result, i))
         self.layer_lbl = label("Layer", "Muted")
         self.layer_slider.valueChanged.connect(lambda i: self.layer_lbl.setText(f"Layer {i + 1}"))
-        prev.add(hrow(self.layer_lbl, self.layer_slider))
+        lt.addWidget(hrow(self.layer_lbl, self.layer_slider))
+        from .sim_view import SimulationView
+        self.sim = SimulationView()
+        self.preview_tabs = QTabWidget()
+        self.preview_tabs.addTab(layers_tab, "Layers")
+        self.preview_tabs.addTab(self.sim, "Simulation")
+        self.preview_tabs.currentChanged.connect(lambda i: i == 0 and self.sim.stop())
+        prev.add(self.preview_tabs, 1)
         vs.addWidget(prev)
 
         rep = Card("Report and motion debug")
@@ -328,7 +350,7 @@ class ModelPrintPage(QWidget):
             min_segment_length=float(self.v_min_seg.get()),
             max_segment_length=float(self.v_max_seg.get()),
             extruder_tool=0,
-            orientation=self.app.orientation(),
+            orientation=self.app.orientation("right"),   # arm 0 = right (primary)
         )
 
     def redo(self):
@@ -598,6 +620,14 @@ class ModelPrintPage(QWidget):
                 app.ui.post(lambda: app.job_state.set("idle"))
 
     def _move_arm(self, arm, at, speed, blend):
+        # Each arm has its own mount orientation; use the one for the arm actually moving
+        # (the plan carries the right arm's, but the left may be the one streaming).
+        side = "left" if arm is getattr(self.app, "left", None) else "right"
+        try:
+            r, p, y = self.app.orientation(side)
+            at = type(at)(**{**vars(at), "roll": r, "pitch": p, "yaw": y})
+        except Exception:
+            pass
         try:
             if blend and blend > 0:
                 arm.arm.set_position(x=at.x, y=at.y, z=at.z, roll=at.roll, pitch=at.pitch,

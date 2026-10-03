@@ -494,10 +494,11 @@ class MacrosPage(QWidget):
                 if off > 10:
                     warn.append(f"The {side} arm starts {off:.0f}° from where it was calibrated "
                                 f"({h[f'{side}_angle']:g}°); the radial correction may not hold there.")
-        R0, P0, Y0 = c.orientation()
+        ro, lo = c.orientation("right"), c.orientation("left")
         text = (f"{name}: right arm at {arms['right'].start_deg:.0f}°, left at {arms['left'].start_deg:.0f}°.\n"
                 f"Right arm tool T{self.v_right_tool.get()}, left T{1 - self.v_right_tool.get()}.\n"
-                f"Nozzle orientation roll {R0:g}, pitch {P0:g}, yaw {Y0:g} (Settings ▸ Tool and nozzle).\n"
+                f"Orientation (roll/pitch/yaw): right {ro[0]:g}/{ro[1]:g}/{ro[2]:g}, left {lo[0]:g}/{lo[1]:g}/{lo[2]:g} "
+                f"(Settings ▸ Tool and nozzle).\n"
                 f"Disc speed {c.turntable_speed_var.get():g} rad/s (live slider).")
         if warn:
             text += "\n\nCheck:\n• " + "\n• ".join(warn)

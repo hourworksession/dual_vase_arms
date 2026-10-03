@@ -69,7 +69,13 @@ python scripts/gleadell_panel_qt.py
 * **Machine**: connections (with a *Simulated hardware* option for rehearsal), Home,
   Prepare to print, jog, live offsets, extruder priming.
 * **Cylinder**: the dual arm cylinder print, polar preview / turntable simulator, presets.
-* **Model print**: import → slice → print / dry run.
+A start-up window opens at once and shows each library and page as it loads; missing optional
+parts (slicer libraries, FullControl, camera, xArm SDK, turntable driver) are listed there and in
+the log console, and an error that stops the panel opening stays on that window.
+
+* **Model print**: import → slice → print / dry run. The preview has a **Simulation** tab that
+  replays the plan from above: the disc turns, the nozzle moves and the part builds up layer by
+  layer (play / pause, scrub, 1× to 200×). Generators has the same tab. No hardware needed.
 * **Generators**: toolpaths from code. FullControl designs (generate() functions or
   ordinary scripts that call `fc.transform`), colleagues' Python, or G-code files. Set
   parameters, preview in 3D, then plan / dry run / print through the same planner as
@@ -85,8 +91,12 @@ python scripts/gleadell_panel_qt.py
   3. *George's code as the slicer*: any script with `slice(model_path, ...)`, or a `MODEL_PATH = "…stl"`
      constant, slices a model in Generators; the right arm prints it.
   Camera: `pip install opencv-python` (detection itself needs only numpy/scipy).
-* **Settings ▸ Tool and nozzle**: nozzle size, default line width / layer height, and the nozzle
-  orientation sent to both arms (now Revo High Flow 1.2 mm, straight down).
+* **Settings ▸ Tool and nozzle**: nozzle size, default line width / layer height, and the
+  orientation sent to EACH arm. New mounts (Oct 2026, Revo High Flow 1.2 mm, flange horizontal,
+  nozzle straight down): right roll 90 / pitch -90 / yaw 90, left roll 0 / pitch 90 / yaw 0.
+  Pitch ±90 is the xArm's roll/yaw gimbal lock, so the arm may report a different but equivalent
+  roll/yaw; the panel always commands these. Turntable centre defaults (Cylinder ▸ centre) are the
+  new-mount values: right 508.18, -22.88, Z 107.4; left 512.1, -8.4, Z 110.2.
 * **Live panel** (always visible): arm poses, turntable angle, temperatures, job timer,
   and the live turntable speed slider.
 * **Settings ▸ Home positions**: a custom home per arm (joint angles or Cartesian pose,

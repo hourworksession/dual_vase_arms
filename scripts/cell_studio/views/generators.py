@@ -17,7 +17,7 @@ from PySide6.QtCore import Qt, QProcess, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QSlider, QPlainTextEdit,
                                QFileDialog, QMessageBox, QTreeWidget, QTreeWidgetItem, QLineEdit,
-                               QGridLayout, QSizePolicy, QHeaderView)
+                               QGridLayout, QSizePolicy, QHeaderView, QTabWidget)
 
 from .. import theme, gen_library
 from .. import toolpath as tpmod
@@ -170,7 +170,13 @@ class GeneratorsPage(ModelPrintPage):
 
         prev = Card("Preview")
         self.view = ToolpathView()
-        prev.add(self.view, 1)
+        from .sim_view import SimulationView
+        self.sim = SimulationView()
+        self.preview_tabs = QTabWidget()
+        self.preview_tabs.addTab(self.view, "Toolpath")
+        self.preview_tabs.addTab(self.sim, "Simulation")
+        self.preview_tabs.currentChanged.connect(lambda i: i == 0 and self.sim.stop())
+        prev.add(self.preview_tabs, 1)
         self.order = QSlider(Qt.Horizontal)
         self.order.setRange(0, 1000)
         self.order.setValue(1000)
@@ -179,7 +185,9 @@ class GeneratorsPage(ModelPrintPage):
         trav.toggled.connect(lambda on: (setattr(self.view, "show_travel", on), self.view.update()))
         self.order_lbl = label("All", "Muted")
         self.order_lbl.setMinimumWidth(44)
-        prev.add(hrow(label("Print order", "Muted"), self.order, self.order_lbl, trav, spacing=10))
+        self.order_row = hrow(label("Print order", "Muted"), self.order, self.order_lbl, trav, spacing=10)
+        prev.add(self.order_row)
+        self.preview_tabs.currentChanged.connect(lambda i: self.order_row.setVisible(i == 0))
         self.stats_lbl = label("", "CardHint", wrap=True)
         prev.add(self.stats_lbl)
         vs.addWidget(prev)
