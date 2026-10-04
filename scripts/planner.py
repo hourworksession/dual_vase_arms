@@ -149,10 +149,44 @@ def _wrap_to_pi(a: float) -> float:
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
-def order_toolpaths(slc: SliceResult) -> List[Tuple[int, Path]]:
+def path_class(path: Path) -> int:
+    """Print order within a layer: 0 = wall round the turntable axis (the bed turns, the
+    arm hardly moves), 1 = closed round feature off the axis (posts, bores: one smooth
+    loop each), 2 = other closed loops (squares, straight-sided walls), 3 = skins and
+    infill (straight lines on a held bed). Also stored on the path as `_class`."""
+    c = getattr(path, "_class", None)
+    if c is not None:
+        return c
+    if path.kind in (SKIN, INFILL):
+        c = 3
+    elif getattr(path, "_encloses", False) or getattr(path, "_turn", False):
+        c = 0
+    elif path.closed and len(path.points) >= 8:
+        pts = path.points
+        cx = sum(q[0] for q in pts) / len(pts)
+        cy = sum(q[1] for q in pts) / len(pts)
+        rr = sorted(math.hypot(q[0] - cx, q[1] - cy) for q in pts)
+        lo, hi = rr[len(rr) // 10], rr[(9 * len(rr)) // 10]
+        mean = sum(rr) / len(rr)
+        c = 1 if mean > 1e-6 and (hi - lo) / mean < 0.15 else 2
+    else:
+        c = 2
+    path._class = c
+    return c
+
+
+_CLASS_NAMES = ["axis_wall", "circles", "straight", "fill"]
+
+
+def order_toolpaths(slc: SliceResult, rules=None) -> List[Tuple[int, Path]]:
+    """Per layer: the wall round the axis first, then the circles, then the straight
+    lines (rule print.order); within a class outer walls before inner, skins before infill."""
+    order = list(rules.get("print.order", _CLASS_NAMES)) if rules is not None else _CLASS_NAMES
+    rank = {name: k for k, name in enumerate(order)}
     ordered: List[Tuple[int, Path]] = []
     for layer in slc.layers:
-        paths = sorted(layer.paths, key=lambda p: _KIND_ORDER.get(p.kind, 9))
+        paths = sorted(layer.paths, key=lambda p: (rank.get(_CLASS_NAMES[path_class(p)], 9),
+                                                   _KIND_ORDER.get(p.kind, 9)))
         for p in paths:
             ordered.append((layer.index, p))
     return ordered
@@ -531,7 +565,7 @@ def _lane_vertices(cfg: PlannerConfig, lane: List[Tuple[int, Path]], slc: SliceR
 
 def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
     decisions = apply_rules(slc, cfg)
-    ordered = order_toolpaths(slc)
+    ordered = order_toolpaths(slc, cfg.rules)
     n = max(1, cfg.num_arms)
     pinned = any(getattr(p, "arm", None) is not None for _, p in ordered)
     if n == 2 and cfg.rules is not None and not pinned:

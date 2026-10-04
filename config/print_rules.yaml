@@ -115,6 +115,20 @@ lines:
     range: [0.0, 20.0]
     why: Warn when more than this % of a layer is narrower than one line and would not print.
 
+# Order of work within a layer (both strategies). Classes: axis_wall = the wall round
+# the turntable axis (bed turns, arm still), circles = closed round features off the
+# axis (posts, bores), straight = other closed loops (squares, straight-sided walls),
+# fill = skins and infill (straight lines, bed held).
+print:
+  order:
+    id: print.order
+    value: [axis_wall, circles, straight, fill]
+    choices: [axis_wall, circles, straight, fill]
+    why: >
+      Per layer: the wall round the axis first (one continuous bed turn), then every
+      circle (one smooth loop each, bed faced then held), then the straight lines last,
+      so the bed changes mode as few times as possible per layer.
+
 # Layer strategy: how the model is cut into layers before the tactics above are
 # applied per region. "auto" lets the panel pick from a quick coarse slice.
 strategy:

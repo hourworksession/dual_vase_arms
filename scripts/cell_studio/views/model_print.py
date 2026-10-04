@@ -162,6 +162,9 @@ class ModelPrintPage(QWidget):
         sim = getattr(self, "sim", None)
         if sim is not None:
             sim.set_program(prog)
+        tp = getattr(self, "toolpath", None)
+        if tp is not None:
+            tp.set_program(prog)
 
     def __init__(self, ctl, win):
         super().__init__()
@@ -386,13 +389,17 @@ class ModelPrintPage(QWidget):
         lt.addWidget(hrow(self.layer_lbl, self.layer_slider, nb_chk, side_chk, spacing=10))
         from .sim_view import SimulationView
         from .generation_view import GenerationView
+        from .plan_view import PlanView
         self.sim = SimulationView()
         self.gen = GenerationView()
+        self.toolpath = PlanView()
         self.preview_tabs = QTabWidget()
         self.preview_tabs.addTab(layers_tab, "Layers")
+        self.preview_tabs.addTab(self.toolpath, "Toolpath")
         self.preview_tabs.addTab(self.sim, "Simulation")
         self.preview_tabs.addTab(self.gen, "Generation")
         self.preview_tabs.currentChanged.connect(lambda i: i == 0 and self.sim.stop())
+        self.gen.use_requested.connect(self._use_compared)
         prev.add(self.preview_tabs, 1)
         vs.addWidget(prev)
 
@@ -630,12 +637,33 @@ class ModelPrintPage(QWidget):
             QMessageBox.critical(self, "Compare", str(err))
             return
         self.gen.set_results(spiral=out["spiral"], planar=out["planar"], delta=out)
+        self._compare_out = out
         self._log("Planar vs spiral:\n" + out["text"], append=True)
         rep = getattr(out["spiral"], "spiral_report", None)
         if rep is not None:
             self._log("Spiral fit: " + rep.summary(), append=True)
         self.preview_tabs.setCurrentWidget(self.gen)
         self.v_status.set("Compared. See the Generation tab (Spiral / Planar / Delta) and the report.")
+
+    def _use_compared(self, which):
+        """Make the compared planar or spiral plan the one Print streams."""
+        out = getattr(self, "_compare_out", None)
+        if not out:
+            return
+        from planner import analyze, dt_stats, extrusion_runs
+        res, prog = (out["spiral"], out["spiral_prog"]) if which == "spiral" else (out["planar"], out["planar_prog"])
+        self.slice_result = res
+        n = len(res.layers)
+        self.layer_slider.setRange(0, max(0, n - 1))
+        self.layer_slider.setValue(n // 2)
+        self.canvas.show_layer(res, n // 2)
+        self.v_strategy_used.set(res.settings.strategy)
+        self._show_plan(prog, prog.config, analyze(prog), dt_stats(prog), len(extrusion_runs(prog)))
+        self._planned_settings = self._settings_snapshot()
+        self._check_narrow(res)
+        self._check_air(res)
+        self._log(f"Using the {which} plan for Print.", append=True)
+        self.v_status.set(f"Using the {which} plan. Press Print to stream it.")
 
     def _sliced(self, res, out, snapshot, err):
         self._slicing = False

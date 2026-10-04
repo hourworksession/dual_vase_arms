@@ -9,16 +9,18 @@ Delta mode   : both path sets for a band of height overlaid, with the coverage n
 import math
 
 import numpy as np
-from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtCore import Qt, QPointF, QRectF, Signal
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QPainterPath, QPolygonF
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSlider, QPlainTextEdit
 
 from .. import theme
-from ..widgets import label, hrow, Segmented
+from ..widgets import label, hrow, Segmented, button
 from ..state import StrVar
 
 
 class GenerationView(QWidget):
+    use_requested = Signal(str)        # "spiral" / "planar": make that compared plan the print program
+
     def __init__(self):
         super().__init__()
         self.spiral = None          # SliceResult from the spiral fit
@@ -34,8 +36,12 @@ class GenerationView(QWidget):
         self.slider.setRange(0, 1000)
         self.slider.valueChanged.connect(lambda _: self.canvas.update())
         self.lbl = label("", "Muted")
+        self.use_btn = button("Use for Print", slot=lambda: self.use_requested.emit(
+            "planar" if self.mode.get() == "planar" else "spiral"),
+            tip="Make the plan shown here (Spiral or Planar) the one Print streams")
+        self.use_btn.setEnabled(False)
         v.addWidget(hrow(Segmented(self.mode, [("spiral", "Spiral"), ("planar", "Planar"), ("delta", "Delta")]),
-                         self.slider, self.lbl, spacing=10))
+                         self.slider, self.lbl, self.use_btn, spacing=10))
         self.mode.changed.connect(lambda _: self.canvas.update())
         self.info = QPlainTextEdit()
         self.info.setReadOnly(True)
@@ -51,6 +57,7 @@ class GenerationView(QWidget):
         if delta is not None:
             self.delta = delta
             self.info.setPlainText(delta.get("text", ""))
+            self.use_btn.setEnabled(bool(delta.get("spiral_prog") is not None and delta.get("planar_prog") is not None))
         self.canvas.update()
 
     def frac(self):
