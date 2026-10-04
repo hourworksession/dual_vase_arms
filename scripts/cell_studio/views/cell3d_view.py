@@ -100,7 +100,7 @@ class Cell3DView(QWidget):
         parts = []
         mt = am.tool_mesh()
         if mt is not None:
-            parts.append(mt @ R.T)
+            parts.append(mt @ toolmod.mesh_yaw().T @ R.T)
         bx = toolmod.EXTRUDER_BOX
         parts.append(am.box_tris(bx["x"], bx["y"], bx["z"]) @ R.T)
         return np.concatenate(parts)

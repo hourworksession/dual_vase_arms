@@ -65,6 +65,9 @@ MOUNT_TO_FLANGE = {
     "right": ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
     "left": ((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
 }
+# The mount MESH is turned this much about the flange axis on top of MOUNT_TO_FLANGE (the
+# extruder body and nozzle stay where they are: hanging down, inside the bracket).
+MOUNT_MESH_YAW_DEG = 180.0
 # extruder body (box, mm) in MODEL coordinates relative to the flange centre: INSIDE the
 # bracket, against the backbone plate's inner face (plate at x -35..-23, side bracket from
 # x +20), hanging down from the mount pattern (z 76) to the nozzle
@@ -118,6 +121,15 @@ def problems(data):
     return out
 
 
+def mesh_yaw():
+    """Rotation applied to the mount mesh about the flange axis (model Z)."""
+    import numpy as np
+    import math
+    a = math.radians(MOUNT_MESH_YAW_DEG)
+    c, s_ = math.cos(a), math.sin(a)
+    return np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
+
+
 def footprint(data, side):
     """Horizontal outline of the tool around the nozzle as a shapely Polygon in (approach,
     tangential) mm: approach = along the flange axis (toward the disc), tangential = flange Y.
@@ -136,7 +148,7 @@ def footprint(data, side):
         return None
     R = np.array(MOUNT_TO_FLANGE[side]).T
     off = np.array(tcp(data, side))
-    tri = (mt.reshape(-1, 3) @ R.T - off).reshape(-1, 3, 3)             # flange frame, nozzle at 0
+    tri = (mt.reshape(-1, 3) @ mesh_yaw().T @ R.T - off).reshape(-1, 3, 3)   # flange frame, nozzle at 0
     polys = []
     for t in tri:
         pts = [(float(q[2]), float(q[1])) for q in t]                   # (approach, tangential)
