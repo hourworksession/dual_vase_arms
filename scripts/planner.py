@@ -97,7 +97,12 @@ class PlannerConfig:
     retreat_clearance: float = 40.0      # mm outside the part's largest radius for an idle arm
     retreat_lift: float = 25.0           # mm above the current layer for an idle arm
     cross_angle: float = math.radians(100.0)   # further than this from its azimuth = in the other arm's half
-    min_separation: float = 45.0         # mm between nozzles, never closer (planner collision guard)
+    min_separation: float = 60.0         # mm between nozzles, never closer (the extruder bodies are ~45 mm wide)
+    # Tool outlines per arm, in the PLANNER frame relative to each nozzle (Nx2 mm). Each arm's
+    # tool keeps a fixed heading (the commanded orientation never changes), so these are fixed
+    # shapes; the collision guard then tests real body clearance instead of nozzle distance.
+    tool_footprints: Optional[List[object]] = None
+    tool_margin: float = 20.0            # mm kept between the tool bodies
     face_limit: float = math.radians(60.0)   # held features further round than this are turned to the arm
 
     def filament_area(self) -> float:
@@ -364,6 +369,26 @@ def assign_slots(ordered: List[Tuple[int, Path]], cfg: PlannerConfig):
     return slots
 
 
+def _clash_tester(cfg: PlannerConfig):
+    """Returns clash(j, i, p_j, p_i) -> True when tool j at p_j and tool i at p_i would come
+    within tool_margin (planner-frame points), from the fixed tool outlines (shapely
+    polygons in the planner frame, relative to each nozzle); None without outlines."""
+    fps = cfg.tool_footprints
+    if not fps or len(fps) < 2 or any(f is None for f in fps):
+        return None
+    try:
+        from shapely.affinity import translate
+        from shapely.prepared import prep
+    except Exception:
+        return None
+    grown = [prep(f.buffer(cfg.tool_margin)) for f in fps]
+
+    def clash(j, i, pj, pi):
+        moved = translate(fps[i], pi[0] - pj[0], pi[1] - pj[1])     # tool i in tool j's nozzle frame
+        return grown[j].intersects(moved)
+    return clash
+
+
 def _is_coordinated(cfg: PlannerConfig, kind: str, path: Optional[Path] = None) -> bool:
     """True if the turntable rotates while printing this path."""
     if kind == TRAVEL:
@@ -387,6 +412,8 @@ def apply_rules(slc: SliceResult, cfg: PlannerConfig):
     ox, oy = cfg.part_offset
     face = bool(rs.get("turntable.face_arm", True))
     cfg.face_limit = math.radians(float(rs.get("turntable.face_limit_deg", 60.0)))
+    cfg.min_separation = float(rs.get("hardware.min_nozzle_separation", cfg.min_separation))
+    cfg.tool_margin = float(rs.get("hardware.tool_margin", cfg.tool_margin))
     for layer in slc.layers:
         plate_paths = [[(p[0] + ox, p[1] + oy) for p in path.points] for path in layer.paths
                        if path.kind != TRAVEL]
@@ -481,6 +508,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
 
     retreated = [False] * n
     crossings: List[int] = []
+    clash = _clash_tester(cfg)
 
     steps: List[MotionStep] = []
     held_for = [0] * n
@@ -508,7 +536,8 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                       # an idle arm never blocks: it is (or is about to be) at its retreat pose,
                       # outside the part, which is further than the part edge from any target
                       other = targets[j]
-                      if other is not None and math.dist(targets[i][:2], other[:2]) < cfg.min_separation:
+                      if other is not None and (clash(j, i, other, targets[i]) if clash else
+                                                math.dist(targets[i][:2], other[:2]) < cfg.min_separation):
                           recs[i] = None
                           advance[i] = False
                           held_for[i] += 1

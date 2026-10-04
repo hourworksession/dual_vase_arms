@@ -426,7 +426,21 @@ class ModelPrintPage(QWidget):
             extruder_tool=0,
             orientation=self.app.orientation("right"),   # arm 0 = right (primary)
             arm_frames=self._arm_frames(),
+            tool_footprints=self._tool_footprints(),
         )
+
+    def _tool_footprints(self):
+        """Tool outlines in the planner (right arm) frame. Right tool points along planner +X
+        with flange Y = planner -Y; the left tool points along planner -X with flange Y = -Y."""
+        from .. import tool as toolmod
+        from shapely.affinity import scale
+        out = []
+        for side, sx, sy in (("right", 1.0, -1.0), ("left", -1.0, -1.0)):
+            fp = toolmod.footprint(self.app.tool, side)
+            if fp is None:
+                return None
+            out.append(scale(fp, xfact=sx, yfact=sy, origin=(0, 0)))
+        return out
 
     def _arm_frames(self):
         """Arm 0 = right (the frame the calibration fields describe), arm 1 = left, from the
@@ -641,6 +655,11 @@ class ModelPrintPage(QWidget):
                 busy = sum(1 for s_ in prog.steps if ai < len(s_.arms) and s_.arms[ai] is not None and s_.arms[ai].extrude)
                 share.append(100.0 * busy / len(prog.steps))
             lines.append("  arm share of the print: right {:.0f} %, left {:.0f} %".format(*share[:2]))
+            waits = sum(1 for s_ in prog.steps if len(s_.arms) > 1 and s_.arms[1] is None and s_.arms[0] is not None
+                        and s_.arms[0].extrude)
+            if waits > 0.05 * len(prog.steps):
+                lines.append(f"  the left arm waited for clearance in {100.0 * waits / len(prog.steps):.0f} % of steps "
+                             "(tool bodies would touch: hardware.tool_margin, mount outline, TCP offsets)")
             if share[1] < 5.0:
                 note = ("The left arm has almost nothing to do for this part: no round walls around the axis to "
                         "share and no features mirrored through the axis. It will wait while the right arm prints.")

@@ -168,6 +168,28 @@ def read_stl(path):
 
 
 _MESHES = None
+_TOOL = None
+TOOL_MESH = os.path.join(REPO_ROOT, "simulation", "assets", "tool", "revo_mount.stl")
+
+
+def tool_mesh():
+    """Mount triangles (mm, model frame centred on the flange), or None."""
+    global _TOOL
+    if _TOOL is None:
+        try:
+            _TOOL = read_stl(TOOL_MESH)
+        except OSError:
+            _TOOL = False
+    return _TOOL if _TOOL is not False else None
+
+
+def box_tris(x, y, z):
+    """12 triangles of an axis-aligned box given (lo, hi) per axis."""
+    import itertools
+    c = np.array(list(itertools.product(x, y, z)))          # 8 corners
+    f = [(0, 1, 3), (0, 3, 2), (4, 6, 7), (4, 7, 5), (0, 4, 5), (0, 5, 1),
+         (2, 3, 7), (2, 7, 6), (0, 2, 6), (0, 6, 4), (1, 5, 7), (1, 7, 3)]
+    return c[np.array(f)]
 
 
 def meshes():

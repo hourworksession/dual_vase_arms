@@ -158,6 +158,22 @@ hardware:
     value: 3.0
     range: [0.1, 20.0]
     why: Turntable acceleration limit, rad/s². Straight lines in polar need fast speed changes; above this, hold the bed.
+  min_nozzle_separation:
+    id: hardware.min_nozzle_separation
+    value: 60
+    range: [20, 200]
+    why: >
+      Closest the two nozzle tips may ever be (mm). The Revo mounts put the extruder
+      body about 45 mm wide around the nozzle; the planner holds the left arm back
+      rather than let them get closer.
+  tool_margin:
+    id: hardware.tool_margin
+    value: 20
+    range: [5, 100]
+    why: >
+      Clearance (mm) kept between the two tool bodies (mount + extruder outlines
+      from the mount model), allowing for calibration error. The planner holds the
+      left arm back when a move would bring the bodies closer than this.
   arms:
     id: hardware.arms
     value: [right, left]

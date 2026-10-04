@@ -40,9 +40,33 @@ DEFAULTS = {
     "roll_left": 0.0,
     "pitch_left": 90.0,
     "yaw_left": 0.0,
+    # Nozzle tip (TCP) relative to the flange, in the flange frame, mm. ESTIMATED from the
+    # mount model (revo_mount_new.3mf: extruder pattern 76 mm out along the flange axis, hanging
+    # ~65 mm below the flange centre line, ~55 mm to the side). Must match set_tcp_offset on
+    # each controller; measure and correct these.
+    "tcp_right": [-65.0, 55.0, 76.0],
+    "tcp_left": [65.0, -55.0, 76.0],
 }
 
 SIDES = ("right", "left")
+
+
+def tcp(data, side):
+    """Nozzle tip offset from the flange (flange frame, mm) for that arm."""
+    v = data.get(f"tcp_{side}") or [0.0, 0.0, 0.0]
+    return (float(v[0]), float(v[1]), float(v[2]))
+
+
+# The mount model's axes -> the flange frame, for each arm: the mount is turned on the flange
+# so the extruder hangs DOWN (flange -X for the right arm, +X for the left, given the mount
+# orientations above). Columns = where model x, y, z go.
+MOUNT_TO_FLANGE = {
+    "right": ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+    "left": ((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+}
+# extruder body (box, mm) in MODEL coordinates relative to the flange centre: on the backbone's
+# outer face, hanging down from the mount pattern (centre y 0.5, z 76) to the nozzle
+EXTRUDER_BOX = {"x": (-80.0, -36.0), "y": (-60.0, 12.0), "z": (58.0, 94.0)}
 
 
 def orientation(data, side):
@@ -57,7 +81,10 @@ def load():
             saved = json.load(f)
         for k in DEFAULTS:
             if k in saved:
-                data[k] = type(DEFAULTS[k])(saved[k])
+                if isinstance(DEFAULTS[k], list):
+                    data[k] = [float(v) for v in saved[k]][:3]
+                else:
+                    data[k] = type(DEFAULTS[k])(saved[k])
         # A file from before the per-arm orientation had one roll/pitch/yaw for both arms.
         # Those values were for the old mounts, so the new per-arm defaults are kept.
     except FileNotFoundError:
@@ -87,3 +114,35 @@ def problems(data):
         if not -90.0 <= p <= 90.0:
             out.append(f"{side.capitalize()} arm pitch {p:g}° is outside the xArm's -90…90° range.")
     return out
+
+
+def footprint(data, side):
+    """Horizontal outline of the tool around the nozzle as a shapely Polygon in (approach,
+    tangential) mm: approach = along the flange axis (toward the disc), tangential = flange Y.
+    The real (non-convex) outline: mount mesh triangles + extruder box, projected flat and
+    unioned. The bodies are at the same height, so the flat test is the safe one.
+    None without the mount mesh or shapely."""
+    import numpy as np
+    from . import arm_model as am
+    mt = am.tool_mesh()
+    if mt is None:
+        return None
+    try:
+        from shapely.geometry import Polygon, box as _box
+        from shapely.ops import unary_union
+    except Exception:
+        return None
+    R = np.array(MOUNT_TO_FLANGE[side]).T
+    off = np.array(tcp(data, side))
+    tri = (mt.reshape(-1, 3) @ R.T - off).reshape(-1, 3, 3)             # flange frame, nozzle at 0
+    polys = []
+    for t in tri:
+        pts = [(float(q[2]), float(q[1])) for q in t]                   # (approach, tangential)
+        pg = Polygon(pts)
+        if pg.area > 0.5:
+            polys.append(pg.buffer(0.5))
+    bx = EXTRUDER_BOX
+    c = np.array([[x, y, z] for x in bx["x"] for y in bx["y"] for z in bx["z"]]) @ R.T - off
+    polys.append(_box(c[:, 2].min(), c[:, 1].min(), c[:, 2].max(), c[:, 1].max()))
+    u = unary_union(polys).simplify(1.0)
+    return u

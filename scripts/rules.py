@@ -41,6 +41,8 @@ DEFAULTS = {
     "lines.max_width": 1.6,
     "lines.warn_lost_percent": 0.5,
     "nonplanar.enabled": False,
+    "hardware.min_nozzle_separation": 60.0,
+    "hardware.tool_margin": 20.0,
     "strategy.default": "auto",
     "strategy.cone_angle": 15.0,
     "strategy.auto_overhang": 35.0,

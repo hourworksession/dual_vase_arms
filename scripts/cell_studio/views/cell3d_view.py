@@ -19,7 +19,7 @@ from PySide6.QtCore import Qt, QTimer, QPointF, QRectF
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QPolygonF, QBrush
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
-from .. import theme, arm_model as am
+from .. import theme, arm_model as am, tool as toolmod
 from ..geometry import CellGeometry
 from ..widgets import label, hrow, Check
 from ..state import BoolVar
@@ -75,9 +75,10 @@ class Cell3DView(QWidget):
                 st.q = np.radians(joints[:6])
                 st.ok = True
             elif pose is not None and (st.pose is None or any(abs(a - b) > 1e-3 for a, b in zip(pose, st.pose))):
-                q, _, ok = am.ik(pose, st.q)
+                fl = self._flange_from_tcp(side, pose)
+                q, _, ok = am.ik(fl, st.q)
                 if not ok:                         # try again from the home posture
-                    q2, _, ok2 = am.ik(pose, np.radians(am.HOME_JOINTS_DEG))
+                    q2, _, ok2 = am.ik(fl, np.radians(am.HOME_JOINTS_DEG))
                     if ok2:
                         q, ok = q2, ok2
                 st.q, st.ok = q, ok
@@ -85,6 +86,24 @@ class Cell3DView(QWidget):
         if live.get("tt_deg") is not None:
             self.tt_deg = float(live["tt_deg"])
         self.update()
+
+    def _flange_from_tcp(self, side, pose):
+        """A reported/commanded pose is the nozzle tip; the flange sits back by the TCP offset."""
+        T = am.pose_matrix(pose)
+        off = np.array(toolmod.tcp(self.c.tool, side))
+        T[:3, 3] = T[:3, 3] - T[:3, :3] @ off
+        return am.matrix_to_pose(T)
+
+    def _tool_tris(self, side):
+        """Mount + extruder body + nozzle, in the FLANGE frame (mm)."""
+        R = np.array(toolmod.MOUNT_TO_FLANGE[side]).T          # columns = model axes in flange frame
+        parts = []
+        mt = am.tool_mesh()
+        if mt is not None:
+            parts.append(mt @ R.T)
+        bx = toolmod.EXTRUDER_BOX
+        parts.append(am.box_tris(bx["x"], bx["y"], bx["z"]) @ R.T)
+        return np.concatenate(parts)
 
     # ------------------------------------------------------------ camera
     def _camera(self, w, h):
@@ -245,7 +264,8 @@ class Cell3DView(QWidget):
             if not self._arm_present(side):
                 continue
             W = self._arm_world(side)
-            for T, tri in zip(am.fk(st.q), meshes):
+            links = am.fk(st.q)
+            for T, tri in list(zip(links, meshes)) + [(links[-1], self._tool_tris(side))]:
                 M = W @ T
                 V = tri @ M[:3, :3].T + M[:3, 3]
                 n = np.cross(V[:, 1] - V[:, 0], V[:, 2] - V[:, 0])
@@ -259,6 +279,17 @@ class Cell3DView(QWidget):
                 cols.append(np.stack([shade, np.full(len(shade), 0 if side == "left" else 1)], 1))
         if not tris:
             return
+        # nozzle tips
+        for side, st in self.arms.items():
+            if not self._arm_present(side):
+                continue
+            M = self._arm_world(side) @ am.fk(st.q)[-1]
+            tip = M[:3, :3] @ np.array(toolmod.tcp(self.c.tool, side)) + M[:3, 3]
+            x, y, _ = self._project(tip[None, :], cam, w, h)
+            col = QColor(theme.RIGHT if side == "right" else theme.LEFT)
+            p.setPen(QPen(col, 2))
+            p.setBrush(col)
+            p.drawEllipse(QPointF(float(x[0]), float(y[0])), 4, 4)
         V = np.concatenate(tris)
         C = np.concatenate(cols)
         x, y, z = self._project(V.reshape(-1, 3), cam, w, h)

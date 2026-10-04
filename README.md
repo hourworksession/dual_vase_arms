@@ -81,7 +81,11 @@ the log console, and an error that stops the panel opening stays on that window.
   Two carpenters on a log: an arm with nothing to do backs off to its own side, outside and above
   the part; the planner never lets the nozzles come within 45 mm (the left arm waits if it would);
   default home puts each arm 250 mm back on its own side (the old joints put both nozzles over the
-  disc centre). The preview has a **Simulation** tab that
+  disc centre). The tool bodies (Revo mount from `simulation/assets/tool/revo_mount_new.3mf` +
+  extruder) are drawn on the flanges and their real outlines drive the clearance guard
+  (`hardware.tool_margin`); the nozzle offsets (`tcp_right` / `tcp_left` in Settings ▸ Tool and
+  nozzle, config/tool.json) are ESTIMATED from the mount model and must match each controller's
+  TCP offset. The preview has a **Simulation** tab that
   replays the plan from above: the disc turns, the nozzle moves and the part builds up layer by
   layer (play / pause, scrub, 1× to 200×). Generators has the same tab. No hardware needed.
 * **Generators**: toolpaths from code. FullControl designs (generate() functions or
