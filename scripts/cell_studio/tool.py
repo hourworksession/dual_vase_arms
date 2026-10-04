@@ -47,6 +47,14 @@ DEFAULTS = {
     # set_tcp_offset on each controller; measure and correct these.
     "tcp_right": [-65.0, 0.0, 76.0],
     "tcp_left": [65.0, 0.0, 76.0],
+    # Approach: how the whole tool is turned about the vertical, per arm. 0 = the flange
+    # points at the disc (the mount seen edge-on from the disc). +90 / -90 = the flange
+    # points along the arm's Y (towards / away across the cell) so the mount lies sideways
+    # to the disc: a slimmer body towards the other arm, and the extruder can get in
+    # beside a tall feature. Added to the commanded yaw; the tool outline the collision
+    # guard uses turns with it.
+    "approach_right": 0.0,
+    "approach_left": 0.0,
 }
 
 SIDES = ("right", "left")
@@ -74,9 +82,17 @@ MOUNT_MESH_YAW_DEG = 180.0
 EXTRUDER_BOX = {"x": (-23.0, 19.0), "y": (-60.0, 12.0), "z": (58.0, 94.0)}
 
 
+def approach(data, side):
+    """Turn of the whole tool about the vertical (deg) for that arm: 0 = flange at the disc,
+    ±90 = flange along the arm's Y (mount sideways to the disc)."""
+    return float(data.get(f"approach_{side}", 0.0) or 0.0)
+
+
 def orientation(data, side):
-    """(roll, pitch, yaw) commanded to that arm."""
-    return (float(data[f"roll_{side}"]), float(data[f"pitch_{side}"]), float(data[f"yaw_{side}"]))
+    """(roll, pitch, yaw) commanded to that arm, with the approach turn in the yaw (a turn
+    of the whole tool about the base Z is a change of yaw whatever the pitch)."""
+    return (float(data[f"roll_{side}"]), float(data[f"pitch_{side}"]),
+            float(data[f"yaw_{side}"]) + approach(data, side))
 
 
 def load():
@@ -118,6 +134,9 @@ def problems(data):
         p = data[f"pitch_{side}"]
         if not -90.0 <= p <= 90.0:
             out.append(f"{side.capitalize()} arm pitch {p:g}° is outside the xArm's -90…90° range.")
+        a = approach(data, side)
+        if a not in (0.0, 90.0, -90.0):
+            out.append(f"{side.capitalize()} approach {a:g}° is unusual: 0 faces the disc, ±90 lies sideways.")
     return out
 
 
@@ -132,7 +151,8 @@ def mesh_yaw():
 
 def footprint(data, side):
     """Horizontal outline of the tool around the nozzle as a shapely Polygon in (approach,
-    tangential) mm: approach = along the flange axis (toward the disc), tangential = flange Y.
+    tangential) mm: approach = along the flange axis (toward the disc), tangential = flange Y,
+    turned by the arm's approach setting (so a sideways mount is sideways in the guard too).
     The real (non-convex) outline: mount mesh triangles + extruder box, projected flat and
     unioned. The bodies are at the same height, so the flat test is the safe one.
     None without the mount mesh or shapely."""
@@ -159,4 +179,8 @@ def footprint(data, side):
     c = np.array([[x, y, z] for x in bx["x"] for y in bx["y"] for z in bx["z"]]) @ R.T - off
     polys.append(_box(c[:, 2].min(), c[:, 1].min(), c[:, 2].max(), c[:, 1].max()))
     u = unary_union(polys).simplify(1.0)
+    a = approach(data, side)
+    if a:
+        from shapely.affinity import rotate
+        u = rotate(u, a, origin=(0, 0))
     return u

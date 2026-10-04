@@ -490,13 +490,19 @@ class ModelPrintPage(QWidget):
         """Tool outlines in the planner (right arm) frame. Right tool points along planner +X
         with flange Y = planner -Y; the left tool points along planner -X with flange Y = -Y."""
         from .. import tool as toolmod
-        from shapely.affinity import scale
+        from shapely.affinity import scale, rotate
         out = []
         for side, sx, sy in (("right", 1.0, -1.0), ("left", -1.0, -1.0)):
             fp = toolmod.footprint(self.app.tool, side)
             if fp is None:
                 return None
-            out.append(scale(fp, xfact=sx, yfact=sy, origin=(0, 0)))
+            a = toolmod.approach(self.app.tool, side)
+            # footprint() already turned the outline by the approach in (approach, tangential);
+            # undo that, mirror into the planner frame, then turn about the vertical there
+            # (a yaw about any arm's base Z is the same CCW turn seen from above)
+            fp = rotate(fp, -a, origin=(0, 0)) if a else fp
+            fp = scale(fp, xfact=sx, yfact=sy, origin=(0, 0))
+            out.append(rotate(fp, a, origin=(0, 0)) if a else fp)
         return out
 
     def _arm_frames(self):

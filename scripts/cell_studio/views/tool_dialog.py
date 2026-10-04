@@ -4,7 +4,15 @@ from PySide6.QtWidgets import QDialog, QVBoxLayout, QMessageBox
 
 from .. import tool as toolmod
 from ..state import DoubleVar, StrVar
-from ..widgets import NumberField, FormGrid, button, label, hrow, divider
+from ..widgets import NumberField, FormGrid, button, label, hrow, divider, Segmented
+
+_APPROACHES = [("disc", "Facing the disc"), ("y_plus", "Sideways +90°"), ("y_minus", "Sideways −90°")]
+_APPROACH_DEG = {"disc": 0.0, "y_plus": 90.0, "y_minus": -90.0}
+
+
+def _approach_name(deg):
+    deg = float(deg or 0.0)
+    return "y_plus" if deg > 45 else "y_minus" if deg < -45 else "disc"
 
 
 class ToolDialog(QDialog):
@@ -17,6 +25,8 @@ class ToolDialog(QDialog):
         self.v = {k: DoubleVar(t[k]) for k in ("nozzle_diameter", "line_width", "layer_height",
                                              "roll_right", "pitch_right", "yaw_right",
                                              "roll_left", "pitch_left", "yaw_left")}
+        self.v["approach_right"] = StrVar(_approach_name(t.get("approach_right", 0.0)))
+        self.v["approach_left"] = StrVar(_approach_name(t.get("approach_left", 0.0)))
         v = QVBoxLayout(self)
         v.setContentsMargins(22, 20, 22, 18)
         v.setSpacing(12)
@@ -39,11 +49,22 @@ class ToolDialog(QDialog):
             fg2.row(f"{S} pitch", NumberField(self.v[f"pitch_{side}"], "°", 1, 1, minimum=-90, maximum=90))
             fg2.row(f"{S} yaw", NumberField(self.v[f"yaw_{side}"], "°", 1, 1, minimum=-360, maximum=360))
         v.addLayout(fg2)
+        v.addWidget(divider())
+        v.addWidget(label("Approach: how the whole tool is turned about the vertical. Facing the disc = the "
+                          "flange points at the turntable. Sideways = the flange points along the arm's Y "
+                          "(mount edge-on to the other arm, extruder able to get in beside tall features). "
+                          "Added to the yaw above; the collision outline turns with it.", "CardHint", wrap=True))
+        fg3 = FormGrid()
+        for side in ("right", "left"):
+            fg3.row(f"{side.capitalize()} approach", Segmented(self.v[f"approach_{side}"], _APPROACHES))
+        v.addLayout(fg3)
         v.addWidget(hrow(None, button("Cancel", "ghost", self.reject), button("Save", "primary", self.accept)))
 
     def data(self):
         d = dict(self.c.tool)
-        d.update({k: var.get() for k, var in self.v.items()})
+        d.update({k: var.get() for k, var in self.v.items() if not k.startswith("approach_")})
+        for side in ("right", "left"):
+            d[f"approach_{side}"] = _APPROACH_DEG[self.v[f"approach_{side}"].get()]
         return d
 
     def accept(self):
