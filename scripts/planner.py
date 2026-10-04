@@ -94,6 +94,10 @@ class PlannerConfig:
     # converted into THEIR frame: cell = Rz(yaw0)(p - C0); arm_i = C_i + Rz(-yaw_i) cell.
     # None = every arm gets arm-0-frame numbers (only right for a single arm).
     arm_frames: Optional[List[Tuple[float, float, float, float]]] = None
+    retreat_clearance: float = 40.0      # mm outside the part's largest radius for an idle arm
+    retreat_lift: float = 25.0           # mm above the current layer for an idle arm
+    cross_angle: float = math.radians(100.0)   # further than this from its azimuth = in the other arm's half
+    min_separation: float = 45.0         # mm between nozzles, never closer (planner collision guard)
     face_limit: float = math.radians(60.0)   # held features further round than this are turned to the arm
 
     def filament_area(self) -> float:
@@ -277,9 +281,12 @@ def _split_loop(path: Path, ox: float, oy: float) -> Optional[Tuple[Path, Path]]
         return None
     pa, pb = Path(path.kind, a, closed=False), Path(path.kind, b, closed=False)
     for q in (pa, pb):
-        for attr in ("_turn", "_anchor"):
-            if hasattr(path, attr):
-                setattr(q, attr, getattr(path, attr))
+        q._turn = getattr(path, "_turn", False)
+        q._anchor = None
+        if not q._turn:                       # held half: face its own centre to its arm
+            cx = sum(p[0] + ox for p in q.points) / len(q.points)
+            cy = sum(p[1] + oy for p in q.points) / len(q.points)
+            q._anchor = math.atan2(cy, cx)
     return pa, pb
 
 
@@ -331,7 +338,9 @@ def assign_slots(ordered: List[Tuple[int, Path]], cfg: PlannerConfig):
                 continue
             if path.kind == TRAVEL:
                 slots.append([(lidx, path), None])
-            elif getattr(path, "_turn", False) and path.closed and getattr(path, "_encloses", False):
+            elif path.closed and getattr(path, "_encloses", False):
+                # a loop round the axis is shared whether the bed turns for it or not: with the
+                # bed held, each half lies on its own arm's side once the disc faces arm 0
                 halves = _split_loop(path, ox, oy)
                 if halves:
                     # alternate which arm takes which half: after half a turn each arm is over
@@ -444,111 +453,202 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
     if n == 2 and cfg.rules is not None and not pinned:
         # slot-based split (both arms on one layer at once); each slot's two vertex lists
         # are padded with None so the arms stay step-aligned
-        streams = [[], []]
+        jobs = []
         for slot in assign_slots(ordered, cfg):
-            parts = [list(_lane_vertices(cfg, [it], slc)) if it is not None else [] for it in slot]
-            m = max(len(q) for q in parts)
-            for i in range(2):
-                streams[i].extend(parts[i] + [None] * (m - len(parts[i])))
+            jobs.append([list(_lane_vertices(cfg, [it], slc)) if it is not None else [] for it in slot])
     else:
         lanes = _assign_paths(ordered, n)
-        streams = [list(_lane_vertices(cfg, lanes[i], slc)) for i in range(n)]
+        jobs = [[list(_lane_vertices(cfg, lanes[i], slc)) for i in range(n)]]
+    streams = [sum((job[i] for job in jobs), []) for i in range(n)]   # for callers that inspect them
 
     fil_area = cfg.filament_area()
     phi = cfg.start_phi
     prev_world: List[Optional[Tuple[float, float, float]]] = [None] * n
 
+    # Retreat pose per arm ("two carpenters on a log"): when an arm has nothing to do, or the
+    # other arm's job takes it across the axis into this arm's half, this arm backs off to its
+    # own side, outside the part and above it. Planner (arm 0) frame, fixed in the cell.
+    ox, oy = cfg.part_offset
+    part_r = max((math.hypot(p[0] + ox, p[1] + oy) for _, path in ordered for p in path.points), default=50.0)
+    top_z = max((ly.z for ly in slc.layers), default=0.0)
+    retreat_r = part_r + cfg.retreat_clearance
+    cur_z = [0.0] * n
+
+    def retreat_pose(i, z):
+        a = cfg.arm_azimuths[i % len(cfg.arm_azimuths)]
+        return (cfg.center[0] + retreat_r * math.cos(a), cfg.center[1] + retreat_r * math.sin(a),
+                cfg.z_base + z + cfg.retreat_lift)
+
+    retreated = [False] * n
+    crossings: List[int] = []
+
     steps: List[MotionStep] = []
-    max_len = max((len(s) for s in streams), default=0)
+    held_for = [0] * n
+    k = -1
+    # Jobs run one after another; inside a job the arms step together (so shared loops stay
+    # in step) unless the collision guard holds one back. Every job starts re-synchronised.
+    for job in jobs:
+        cursor = [0] * n
+        streams = job
+        while any(cursor[i] < len(streams[i]) for i in range(n)):
+          k += 1
+          recs = [streams[i][cursor[i]] if cursor[i] < len(streams[i]) else None for i in range(n)]
+          advance = [True] * n
+          if n > 1:
+              # collision guard: never let two nozzles come within min_separation. Arm 0 (the
+              # primary) always goes; a later arm that would get too close WAITS this step.
+              targets = [None] * n
+              for i, rec in enumerate(recs):
+                  if rec is not None:
+                      targets[i] = _world(cfg, rec[0], phi, rec[1])     # at the current disc angle
+              for i in range(1, n):
+                  if targets[i] is None:
+                      continue
+                  for j in range(i):
+                      # an idle arm never blocks: it is (or is about to be) at its retreat pose,
+                      # outside the part, which is further than the part edge from any target
+                      other = targets[j]
+                      if other is not None and math.dist(targets[i][:2], other[:2]) < cfg.min_separation:
+                          recs[i] = None
+                          advance[i] = False
+                          held_for[i] += 1
+                          if held_for[i] > 20000:
+                              raise RuntimeError("Two-arm plan deadlocked: the left arm cannot get to its "
+                                                 "path without hitting the right arm.")
+                          break
+                  else:
+                      held_for[i] = 0
+          for i in range(n):
+              if advance[i] and cursor[i] < len(streams[i]):
+                  cursor[i] += 1
 
-    for k in range(max_len):
-        recs = [streams[i][k] if k < len(streams[i]) else None for i in range(n)]
+          if cfg.use_turntable:
+              desired = []
+              for i, rec in enumerate(recs):
+                  if rec is None:
+                      continue
+                  coord, anchor = rec[8], rec[9]
+                  alpha = cfg.arm_azimuths[i % len(cfg.arm_azimuths)]
+                  if coord:
+                      plate = rec[0]
+                      theta = math.atan2(plate[1], plate[0])
+                  elif anchor is not None:
+                      # Held path: if its centre is more than face_limit away from this arm,
+                      # turn it to face the arm first; otherwise leave the bed where it is.
+                      off = _wrap_to_pi(anchor + phi - alpha)
+                      if abs(off) <= cfg.face_limit:
+                          continue
+                      theta = anchor
+                  else:
+                      continue
+                  desired.append(phi + _wrap_to_pi((alpha - theta) - phi))
+              if desired:
+                  sx = sum(math.sin(a) for a in desired)
+                  cxx = sum(math.cos(a) for a in desired)
+                  phi_target = phi + _wrap_to_pi(math.atan2(sx, cxx) - phi)
+              else:
+                  phi_target = phi
+          else:
+              phi_target = cfg.start_phi
 
-        if cfg.use_turntable:
-            desired = []
-            for i, rec in enumerate(recs):
-                if rec is None:
-                    continue
-                coord, anchor = rec[8], rec[9]
-                alpha = cfg.arm_azimuths[i % len(cfg.arm_azimuths)]
-                if coord:
-                    plate = rec[0]
-                    theta = math.atan2(plate[1], plate[0])
-                elif anchor is not None:
-                    # Held path: if its centre is more than face_limit away from this arm,
-                    # turn it to face the arm first; otherwise leave the bed where it is.
-                    off = _wrap_to_pi(anchor + phi - alpha)
-                    if abs(off) <= cfg.face_limit:
-                        continue
-                    theta = anchor
-                else:
-                    continue
-                desired.append(phi + _wrap_to_pi((alpha - theta) - phi))
-            if desired:
-                sx = sum(math.sin(a) for a in desired)
-                cxx = sum(math.cos(a) for a in desired)
-                phi_target = phi + _wrap_to_pi(math.atan2(sx, cxx) - phi)
-            else:
-                phi_target = phi
-        else:
-            phi_target = cfg.start_phi
+          dphi = abs(_wrap_to_pi(phi_target - phi))
+          t_tt = dphi / cfg.max_tt_speed if cfg.max_tt_speed > 0 else 0.0
 
-        dphi = abs(_wrap_to_pi(phi_target - phi))
-        t_tt = dphi / cfg.max_tt_speed if cfg.max_tt_speed > 0 else 0.0
+          t_feed = 0.0
+          tmp = []
+          for i, rec in enumerate(recs):
+              if rec is None:
+                  tmp.append(None)
+                  continue
+              plate, z, extrude, seg, layer_idx, kind, w, h = rec[:8]
+              speed = cfg.print_speed if extrude else cfg.travel_speed
+              t_feed = max(t_feed, seg / speed if speed > 0 else 0.0)
+              world = _world(cfg, plate, phi_target, z)
+              tmp.append((world, extrude, seg, layer_idx, kind, z, w, h))
+              cur_z[i] = z
+              retreated[i] = False
+          if n > 1:
+              # which arms are working in the OTHER arm's half (angle from the axis vs its azimuth)?
+              crossing = [False] * n
+              for i, at in enumerate(tmp):
+                  if at is None:
+                      continue
+                  a = cfg.arm_azimuths[i % len(cfg.arm_azimuths)]
+                  ang = math.atan2(at[0][1] - cfg.center[1], at[0][0] - cfg.center[0])
+                  crossing[i] = abs(_wrap_to_pi(ang - a)) > cfg.cross_angle
+              for i in range(n):
+                  if tmp[i] is not None:
+                      continue
+                  other_busy = any(tmp[j] is not None for j in range(n) if j != i)
+                  if retreated[i] or not other_busy:
+                      continue
+                  z = max(cur_z)
+                  tmp[i] = (retreat_pose(i, z), False, 0.0, -1, "RETREAT", z, None, None)
+                  retreated[i] = True
+              # an arm crossing into the other's half must find that arm already retreated;
+              # the planner flags it so the report can say so (the arms are opposite by
+              # construction for shared loops and mirrored pairs; this covers the rest)
+              for i in range(n):
+                  if crossing[i]:
+                      for j in range(n):
+                          if j != i and tmp[j] is not None and not (tmp[j][4] == "RETREAT"):
+                              crossings.append(k)
+                              break
 
-        t_feed = 0.0
-        tmp = []
-        for i, rec in enumerate(recs):
-            if rec is None:
-                tmp.append(None)
-                continue
-            plate, z, extrude, seg, layer_idx, kind, w, h = rec[:8]
-            speed = cfg.print_speed if extrude else cfg.travel_speed
-            t_feed = max(t_feed, seg / speed if speed > 0 else 0.0)
-            world = _world(cfg, plate, phi_target, z)
-            tmp.append((world, extrude, seg, layer_idx, kind, z, w, h))
+          t_arm = 0.0
+          for i, at in enumerate(tmp):
+              if at is None or prev_world[i] is None:
+                  continue
+              t_arm = max(t_arm, math.dist(at[0], prev_world[i]) / cfg.max_arm_speed
+                          if cfg.max_arm_speed > 0 else 0.0)
 
-        t_arm = 0.0
-        for i, at in enumerate(tmp):
-            if at is None or prev_world[i] is None:
-                continue
-            t_arm = max(t_arm, math.dist(at[0], prev_world[i]) / cfg.max_arm_speed
-                        if cfg.max_arm_speed > 0 else 0.0)
+          dt = max(t_feed, t_tt, t_arm, 1e-3)
 
-        dt = max(t_feed, t_tt, t_arm, 1e-3)
+          roll, pitch, yaw = cfg.orientation
+          arms: List[Optional[ArmTarget]] = []
+          step_layer, step_kind = -1, ""
+          for i, at in enumerate(tmp):
+              if at is None:
+                  arms.append(None)
+                  continue
+              world, extrude, seg, layer_idx, kind, z, w, h = at
+              if step_layer < 0:
+                  step_layer, step_kind = layer_idx, kind
+              e = 0.0
+              if extrude and fil_area > 0:
+                  flow = cfg.flow_multiplier
+                  if cfg.first_layer_z is not None:
+                      first = z <= cfg.first_layer_z
+                  else:
+                      first = layer_idx < cfg.first_layer_count
+                  if first:
+                      flow *= cfg.first_layer_flow
+                  lw = cfg.line_width if w is None else w
+                  lh = cfg.layer_height if h is None else h
+                  e = seg * lw * lh / fil_area * flow
+              own = to_arm_frame(cfg, i, world)
+              arms.append(ArmTarget(round(own[0], 3), round(own[1], 3), round(own[2], 3),
+                                    roll, pitch, yaw, extrude, round(e, 4)))
+              prev_world[i] = world
 
-        roll, pitch, yaw = cfg.orientation
-        arms: List[Optional[ArmTarget]] = []
-        step_layer, step_kind = -1, ""
-        for i, at in enumerate(tmp):
-            if at is None:
-                arms.append(None)
-                continue
-            world, extrude, seg, layer_idx, kind, z, w, h = at
-            if step_layer < 0:
-                step_layer, step_kind = layer_idx, kind
-            e = 0.0
-            if extrude and fil_area > 0:
-                flow = cfg.flow_multiplier
-                if cfg.first_layer_z is not None:
-                    first = z <= cfg.first_layer_z
-                else:
-                    first = layer_idx < cfg.first_layer_count
-                if first:
-                    flow *= cfg.first_layer_flow
-                lw = cfg.line_width if w is None else w
-                lh = cfg.layer_height if h is None else h
-                e = seg * lw * lh / fil_area * flow
-            own = to_arm_frame(cfg, i, world)
-            arms.append(ArmTarget(round(own[0], 3), round(own[1], 3), round(own[2], 3),
-                                  roll, pitch, yaw, extrude, round(e, 4)))
-            prev_world[i] = world
+          steps.append(MotionStep(dt=dt, tt_angle_deg=math.degrees(phi_target),
+                                  arms=arms, layer=step_layer, kind=step_kind))
+          phi = phi_target
 
-        steps.append(MotionStep(dt=dt, tt_angle_deg=math.degrees(phi_target),
-                                arms=arms, layer=step_layer, kind=step_kind))
-        phi = phi_target
-
-    return MotionProgram(steps=steps, config=cfg, decisions=decisions)
+    if n > 1 and steps:
+        z = max(cur_z)
+        arms = []
+        for i in range(n):
+            w = retreat_pose(i, z)
+            own = to_arm_frame(cfg, i, w)
+            roll, pitch, yaw = cfg.orientation
+            arms.append(ArmTarget(round(own[0], 3), round(own[1], 3), round(own[2], 3), roll, pitch, yaw, False, 0.0))
+        d = max((math.dist(retreat_pose(i, z), prev_world[i]) for i in range(n) if prev_world[i]), default=50.0)
+        steps.append(MotionStep(dt=max(d / cfg.max_arm_speed, 0.2), tt_angle_deg=math.degrees(phi), arms=arms,
+                                layer=-1, kind="RETREAT"))
+    prog = MotionProgram(steps=steps, config=cfg, decisions=decisions)
+    prog.crossings = crossings
+    return prog
 
 
 # ----------------------------------------------------------------------------

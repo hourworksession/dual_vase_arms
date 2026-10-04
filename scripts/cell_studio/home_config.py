@@ -27,15 +27,20 @@ _ARM_DEFAULT = {
     "safe_z": 250.0,
 }
 
-def _arm_default(rpy):
+def _arm_default(joints, xyz, rpy):
     d = copy.deepcopy(_ARM_DEFAULT)
-    d["pose"] = d["pose"][:3] + list(rpy)        # each arm's own mount orientation (see tool.py)
+    d["joints"] = list(joints)
+    d["pose"] = list(xyz) + list(rpy)            # each arm's own mount orientation (see tool.py)
     return d
 
 
+# Default home: each arm 250 mm back from the turntable axis ON ITS OWN SIDE, 150 mm above the
+# disc, nozzle in its mount orientation. (The old joints 0/-45/-45/0/90/0 put BOTH nozzles over
+# the disc centre, 30 mm apart.) Joints solved for the Oct 2026 calibration; a saved
+# config/home_positions.json takes precedence.
 DEFAULTS = {
-    "left": _arm_default((0.0, 90.0, 0.0)),
-    "right": _arm_default((90.0, -90.0, 90.0)),
+    "left": _arm_default((-2.8, -26.9, -7.0, 177.0, -109.9, -1.0), (262.1, -8.4, 260.2), (0.0, 90.0, 0.0)),
+    "right": _arm_default((-7.7, -27.8, -6.9, -8.3, 110.8, -3.0), (258.2, -22.9, 257.4), (90.0, -90.0, 90.0)),
     "sequence": "simultaneous",   # "simultaneous", "right_first", "left_first"
 }
 

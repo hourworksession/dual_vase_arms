@@ -77,7 +77,11 @@ the log console, and an error that stops the panel opening stays on that window.
   the default): walls around the axis are split in half, one half per arm, printed at the same time
   while the disc turns (halves alternate so the disc never swings back); features mirrored through
   the axis are printed together, one per arm; everything else by the right arm while the left
-  waits. Right arm = tool 0, left = tool 1. Trug: 71 min with one arm, 44 with two. The preview has a **Simulation** tab that
+  waits. Right arm = tool 0, left = tool 1. Trug: 71 min with one arm, 47 with two.
+  Two carpenters on a log: an arm with nothing to do backs off to its own side, outside and above
+  the part; the planner never lets the nozzles come within 45 mm (the left arm waits if it would);
+  default home puts each arm 250 mm back on its own side (the old joints put both nozzles over the
+  disc centre). The preview has a **Simulation** tab that
   replays the plan from above: the disc turns, the nozzle moves and the part builds up layer by
   layer (play / pause, scrub, 1× to 200×). Generators has the same tab. No hardware needed.
 * **Generators**: toolpaths from code. FullControl designs (generate() functions or

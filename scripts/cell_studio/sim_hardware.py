@@ -158,7 +158,11 @@ def _flange_pose(joints):
 class SimArm:
     def __init__(self, ip, name):
         self.ip, self.name = ip, name
-        self._joints = [0.0, -45.0, -45.0, 0.0, 90.0, 0.0]
+        try:                                   # start at that arm's home (its own side of the disc)
+            from .home_config import DEFAULTS as _HOME
+            self._joints = list(_HOME[name]["joints"])
+        except Exception:
+            self._joints = [0.0, -45.0, -45.0, 0.0, 90.0, 0.0]
         self._pose = _flange_pose(self._joints)
         self.arm = None
         self.estopped = False
