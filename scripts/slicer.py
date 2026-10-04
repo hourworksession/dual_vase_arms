@@ -103,6 +103,9 @@ class SliceSettings:
     # become planes, slice flat, transform the paths back.
     strategy: str = "planar"
     cone_angle_deg: float = 15.0
+    # steepest overhang (from vertical) a bead can be laid at on the bead below; the per-layer
+    # step allowed is layer_height * tan(max_overhang_deg)
+    max_overhang_deg: float = 45.0
     # optional: callable(section_stats) -> per-layer style ("planar"/"spiral"/...),
     # from the print rules' non-planar bands; None = spiral everywhere it can.
     layer_style: object = None
@@ -380,8 +383,24 @@ def slice_model(mesh_path: str, settings: SliceSettings, progress=None) -> Slice
     res.narrow = narrow
     res.section_stats = section_stats
     res.thin_filled = thin_filled
+    bed_support = None
+    if cone is not None:
+        # In cone space the bed is a cone too: the part of layer i whose REAL z is within the
+        # first layer rests on the bed (cone_out: outside a radius; cone_in: inside one).
+        angle_, sign_, bed_z_ = cone
+        big = 1e4
+
+        def bed_support(i, _z0=zmin, _lh=lh):
+            from shapely.geometry import Point as _Pt
+            zp = _z0 + _lh * (i + 0.5)
+            r_cone = (zp - bed_z_ - _lh) / math.sin(angle_)      # cone-space radius where real z = bed + lh
+            if sign_ > 0:                                        # apex up: bed material is OUTSIDE r_cone
+                if r_cone <= 0:
+                    return _Pt(0, 0).buffer(big)
+                return _Pt(0, 0).buffer(big).difference(_Pt(0, 0).buffer(r_cone))
+            return None                                          # apex down: handled by the layer below
     try:
-        res.region_features = region_features(all_polys, settings)
+        res.region_features = region_features(all_polys, settings, bed_support)
     except Exception as e:              # features feed reports and the AI only; never block a slice
         res.region_features = []
         failures.append((-1, f"region features: {type(e).__name__}: {e}"))
@@ -586,7 +605,7 @@ def spiral_walls(layers, settings: SliceSettings, styles=None) -> int:
     return n_done
 
 
-def region_features(all_polys, settings: SliceSettings):
+def region_features(all_polys, settings: SliceSettings, bed_support=None):
     """Measurements of every connected region of every layer, for choosing a tactic per
     region (print rules) and for the AI to learn from. Model frame; the turntable axis is
     at the model origin (as placed for printing). Returns [layer][region] dicts."""
@@ -603,7 +622,13 @@ def region_features(all_polys, settings: SliceSettings):
         if i > 0 and polys:
             try:
                 here = unary_union(polys)
-                air = here.area if (below is None or below.is_empty) else here.difference(below.buffer(0.3 * lw)).area
+                step = lh * math.tan(math.radians(settings.max_overhang_deg))   # printable step per layer
+                floating = here if (below is None or below.is_empty) else here.difference(below.buffer(step))
+                if bed_support is not None and not floating.is_empty:
+                    bed = bed_support(i)                   # region of this layer that rests on the bed
+                    if bed is not None:
+                        floating = floating.difference(bed)
+                air = floating.area
                 if air > 2.0 * lw * lw:
                     unsupported.append((i, round(air, 1)))
             except Exception:

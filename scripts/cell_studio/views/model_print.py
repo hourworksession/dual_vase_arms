@@ -386,7 +386,8 @@ class ModelPrintPage(QWidget):
         rs = self._rules() if self.v_use_rules.get() else None
         thin = dict(thin_mode="skip")
         if rs is not None:
-            thin = dict(thin_mode=str(rs.get("lines.thin_features", "centreline")),
+            thin = dict(max_overhang_deg=float(rs.get("lines.max_overhang_deg", 45.0)),
+                        thin_mode=str(rs.get("lines.thin_features", "centreline")),
                         thin_min_width=float(rs.get("lines.min_width", 0.8)) * nozzle,
                         thin_skip_below=float(rs.get("lines.thin_skip_below", 0.4)) * nozzle)
         return SliceSettings(
@@ -517,15 +518,22 @@ class ModelPrintPage(QWidget):
             try:
                 if want == "auto":
                     from dataclasses import replace
-                    from rules import recommend_strategy, RuleSet
-                    post(lambda: self.v_status.set("Looking at the model to choose a layer strategy…"))
-                    coarse = slice_model(path, replace(settings, layer_height=max(2.0, settings.layer_height),
-                                                       wall_count=1, infill_density=0.0, top_layers=0,
-                                                       bottom_layers=0, thin_mode="skip", strategy="planar",
-                                                       layer_style=None))
-                    strat, why = recommend_strategy(coarse.region_features, rs or RuleSet.load())
+                    from rules import choose_strategy_by_trial, RuleSet
+                    post(lambda: self.v_status.set("Trying layer strategies on a coarse slice…"))
+
+                    def coarse(strat, ang):
+                        return slice_model(path, replace(settings, layer_height=max(3.0, 4 * settings.layer_height),
+                                                         wall_count=1, infill_density=0.0, top_layers=0,
+                                                         bottom_layers=0, thin_mode="skip", strategy=strat,
+                                                         cone_angle_deg=ang, layer_style=None))
+                    strat, ang, table = choose_strategy_by_trial(coarse, rs or RuleSet.load())
                     settings.strategy = strat
-                    post(lambda: self._log(f"Layer strategy: {strat} ({why}) [rule strategy.default=auto]", append=True))
+                    if ang:
+                        settings.cone_angle_deg = ang
+                    self._strategy_table = table
+                    rows = "; ".join(f"{t[0]}{f' {t[1]:g}°' if t[1] else ''}: {t[2]:.0f} mm² in the air" for t in table)
+                    post(lambda: self._log(f"Layer strategy: {strat} (tried {rows}) [rule strategy.default=auto]",
+                                           append=True))
                 else:
                     settings.strategy = want
                 post(lambda: self.v_strategy_used.set(settings.strategy))
@@ -573,9 +581,16 @@ class ModelPrintPage(QWidget):
         total = sum(a for _, a in air)
         text = (f"{len(air)} layer(s) start new material in mid-air with nothing below it "
                 f"(first: layer {first[0] + 1}, {res.layers[first[0]].z - zmin:.1f} mm up; worst: layer "
-                f"{worst[0] + 1}, {worst[1]:.0f} mm²; {total:.0f} mm² in all). With flat layers this prints "
-                "into air. Options: the conical strategy (cone_in for domes that open downward), thicker "
-                "bridges in CAD, or supports.")
+                f"{worst[0] + 1}, {worst[1]:.0f} mm²; {total:.0f} mm² in all). Those beads will be laid on air.")
+        table = getattr(self, "_strategy_table", None)
+        if table:
+            text += ("\n\nLayer strategies tried on this model: " +
+                     "; ".join(f"{t[0]}{f' {t[1]:g}°' if t[1] else ''} leaves {t[2]:.0f} mm²" for t in table) +
+                     f". {res.settings.strategy} is the best of them, so no whole-model strategy fixes this.")
+        else:
+            text += f"\n\nSliced with the '{res.settings.strategy}' strategy you chose; 'auto' tries the others."
+        text += ("\n\nWhat would fix it: a bridge or support in CAD, or printing that feature sideways from "
+                 "the wall with a tilted nozzle (the tilted-overhang tactic, not generated yet).")
         self._log("Warning: " + text, append=True)
         self.app.ui.warn("Unsupported material", text)
 

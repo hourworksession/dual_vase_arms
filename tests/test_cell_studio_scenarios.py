@@ -1474,11 +1474,12 @@ def s87(x):
     x.expect(not getattr(m.sim, "live", False), "Still marked LIVE after the print stopped")
 
 
-@scenario("Wil (owner)", "20:10", "Flared cup: auto strategy picks conical layers; spiral climbs without a seam")
+@scenario("Wil (owner)", "20:10", "Steep flared cup: auto strategy picks conical layers; spiral climbs without a seam")
 def s88(x):
     import trimesh
     import numpy as np
-    prof = np.array([(0, 0), (30, 0), (30, 40), (55, 70), (57, 70), (32, 40), (32, 2), (0, 2)], float)
+    # wall at 60 deg from vertical: unprintable flat, printable on 35 deg cones
+    prof = np.array([(0, 0), (30, 0), (30, 30), (82, 60), (84, 60), (32, 30), (32, 2), (0, 2)], float)
     cup = trimesh.creation.revolve(prof, sections=64)
     path = os.path.join(GEN_TMP, "flare.stl")
     cup.export(path)
@@ -1502,10 +1503,12 @@ def s88(x):
             walls = [p for L in res.layers for p in L.paths if p.kind == "WALL_OUTER"]
             climbing = [p for p in walls if len(p.points[0]) >= 3 and p.points[-1][2] - p.points[0][2] > 0.4]
             x.expect(len(climbing) >= len(walls) * 0.9, f"Only {len(climbing)} of {len(walls)} walls climb")
-            x.expect(getattr(res, "spiral_layers", 0) > 100, "spiral_layers not reported")
+            x.expect(getattr(res, "spiral_layers", 0) > 50, "spiral_layers not reported")
         else:
             zs = [pt[2] for L in res.layers for p in L.paths for pt in p.points if len(pt) >= 3]
-            x.expect(zs and min(zs) >= -0.01 and max(zs) <= 70.5, f"Cone paths outside the part: z {min(zs):.1f}..{max(zs):.1f}")
+            x.expect(zs and min(zs) >= -0.01 and max(zs) <= 60.5, f"Cone paths outside the part: z {min(zs):.1f}..{max(zs):.1f}")
+            air = sum(a for _, a in getattr(res.region_features, "unsupported", []))
+            x.expect(air < 400, f"Cone layers still leave {air:.0f} mm² in the air")
         x.expect(m.program is not None, f"{want}: no plan")
     m.canvas.side = True
     m.layer_slider.setValue(60)

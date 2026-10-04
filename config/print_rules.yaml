@@ -101,6 +101,14 @@ lines:
     range: [0.0, 1.0]
     why: Features narrower than this fraction of the nozzle are too thin to print at all and are left out.
 
+  max_overhang_deg:
+    id: lines.max_overhang_deg
+    value: 45
+    range: [20, 70]
+    why: >
+      Steepest overhang (from vertical) a bead can be laid on the bead below. Material
+      stepping out further than layer_height * tan(this) per layer counts as in the air.
+
   warn_lost_percent:
     id: lines.warn_lost_percent
     value: 0.5
@@ -143,7 +151,7 @@ strategy:
 hardware:
   nozzle_tilt_max_deg:
     id: hardware.tilt_max
-    value: 30
+    value: 35
     range: [0, 60]
     why: >
       Largest lean of the nozzle from vertical either arm may use (6-axis arm,

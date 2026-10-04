@@ -40,6 +40,7 @@ DEFAULTS = {
     "lines.min_width": 0.8,
     "lines.max_width": 1.6,
     "lines.warn_lost_percent": 0.5,
+    "lines.max_overhang_deg": 45.0,
     "nonplanar.enabled": False,
     "hardware.min_nozzle_separation": 60.0,
     "hardware.tool_margin": 20.0,
@@ -496,6 +497,34 @@ def cells_summary(cells, limit: int = 12) -> str:
 
 
 # ======================================================================== strategy
+def choose_strategy_by_trial(slice_fn, rs: RuleSet):
+    """Try each layer strategy on a quick coarse slice and keep the one that leaves the least
+    material in the air (ties -> planar). slice_fn(strategy, cone_angle) -> SliceResult.
+    Returns (strategy, cone_angle, table: [(strategy, angle, unsupported mm², layers)])."""
+    tilt_max = float(rs.get("hardware.tilt_max", 30.0))
+    angles = [a for a in (15.0, 25.0, 35.0) if a <= tilt_max + 1e-9] or [tilt_max]
+    table = []
+    trials = [("planar", 0.0)] + [(s_, a) for a in angles for s_ in ("cone_out", "cone_in")]
+    for strat, ang in trials:
+        try:
+            res = slice_fn(strat, ang)
+            air = sum(a for _, a in getattr(res.region_features, "unsupported", []))
+            table.append((strat, ang, air, len(res.layers)))
+        except Exception as e:
+            table.append((strat, ang, float("inf"), 0))
+    # least material in the air wins; among near-equal results prefer planar, then the
+    # shallowest cone (less nozzle tilt, fewer layers)
+    best = min(table, key=lambda r: (round(r[2] / 25.0), 0 if r[0] == "planar" else 1, r[1]))
+    strat, ang = best[0], best[1]
+    if strat == "planar":
+        # nothing in the air to fix: a single loop around the axis prints better as a spiral
+        res = slice_fn("planar", 0.0)
+        s2, _ = recommend_strategy(res.region_features, rs)
+        if s2 == "spiral":
+            strat = "spiral"
+    return strat, ang, table
+
+
 def recommend_strategy(region_features, rs: RuleSet):
     """Pick a layer strategy from a coarse planar slice's region features.
     Returns (strategy, reason)."""
