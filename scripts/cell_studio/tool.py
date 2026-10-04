@@ -41,11 +41,12 @@ DEFAULTS = {
     "pitch_left": 90.0,
     "yaw_left": 0.0,
     # Nozzle tip (TCP) relative to the flange, in the flange frame, mm. ESTIMATED from the
-    # mount model (revo_mount_new.3mf: extruder pattern 76 mm out along the flange axis, hanging
-    # ~65 mm below the flange centre line, ~55 mm to the side). Must match set_tcp_offset on
-    # each controller; measure and correct these.
-    "tcp_right": [-65.0, 55.0, 76.0],
-    "tcp_left": [65.0, -55.0, 76.0],
+    # mount model (revo_mount_new.3mf): the extruder sits INSIDE the bracket, between the
+    # backbone plate and the side bracket, so its nozzle is about on the flange axis sideways,
+    # 76 mm out along the flange axis and ~65 mm below the flange centre line. Must match
+    # set_tcp_offset on each controller; measure and correct these.
+    "tcp_right": [-65.0, 0.0, 76.0],
+    "tcp_left": [65.0, 0.0, 76.0],
 }
 
 SIDES = ("right", "left")
@@ -64,9 +65,10 @@ MOUNT_TO_FLANGE = {
     "right": ((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
     "left": ((0.0, 1.0, 0.0), (-1.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
 }
-# extruder body (box, mm) in MODEL coordinates relative to the flange centre: on the backbone's
-# outer face, hanging down from the mount pattern (centre y 0.5, z 76) to the nozzle
-EXTRUDER_BOX = {"x": (-80.0, -36.0), "y": (-60.0, 12.0), "z": (58.0, 94.0)}
+# extruder body (box, mm) in MODEL coordinates relative to the flange centre: INSIDE the
+# bracket, against the backbone plate's inner face (plate at x -35..-23, side bracket from
+# x +20), hanging down from the mount pattern (z 76) to the nozzle
+EXTRUDER_BOX = {"x": (-23.0, 19.0), "y": (-60.0, 12.0), "z": (58.0, 94.0)}
 
 
 def orientation(data, side):

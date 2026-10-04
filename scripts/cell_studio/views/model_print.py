@@ -402,7 +402,8 @@ class ModelPrintPage(QWidget):
 
     def _planner_config(self):
         from planner import PlannerConfig
-        az = (math.radians(float(self.v_az_left.get())), math.radians(float(self.v_az_right.get())))
+        # arm 0 = right, arm 1 = left (planner frame = right arm's frame)
+        az = (math.radians(float(self.v_az_right.get())), math.radians(float(self.v_az_left.get())))
         return PlannerConfig(
             num_arms=int(self.v_num_arms.get()),
             use_turntable=bool(self.v_use_turntable.get()),

@@ -123,7 +123,7 @@ class _SimXArm:
             return code
         self.o._joints = [float(a) for a in angle]
         j = self.o._joints
-        self.o._pose = _flange_pose(j)
+        self.o._pose = _flange_pose(j, self.o.name)
         record(self.o.name, "joint_move", (tuple(self.o._joints), speed))
         if wait:
             time.sleep(0.01)
@@ -146,11 +146,20 @@ class _SimXArm:
         return 0
 
 
-def _flange_pose(joints):
-    """Where the real UF850 puts its flange for these joints (cell_studio.arm_model)."""
+def _flange_pose(joints, name=None):
+    """Where the real UF850 puts its NOZZLE for these joints: flange from the joint chain
+    (cell_studio.arm_model) plus the tool's TCP offset, as a controller with set_tcp_offset
+    reports it."""
     try:
-        from .arm_model import flange_pose
-        return [round(v, 3) for v in flange_pose(joints)]
+        import numpy as np
+        from .arm_model import fk, matrix_to_pose
+        from . import tool as toolmod
+        T = fk(np.radians(joints))[-1]
+        if name in ("left", "right"):
+            off = np.array(toolmod.tcp(toolmod.load(), name))
+            T = T.copy()
+            T[:3, 3] = T[:3, 3] + T[:3, :3] @ off
+        return [round(v, 3) for v in matrix_to_pose(T)]
     except Exception:
         return [400.0, 174.0, 250.0, 180.0, 45.0, 20.0]
 
@@ -163,7 +172,7 @@ class SimArm:
             self._joints = list(_HOME[name]["joints"])
         except Exception:
             self._joints = [0.0, -45.0, -45.0, 0.0, 90.0, 0.0]
-        self._pose = _flange_pose(self._joints)
+        self._pose = _flange_pose(self._joints, name)
         self.arm = None
         self.estopped = False
         self.online = False
