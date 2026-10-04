@@ -132,15 +132,37 @@ the log console, and an error that stops the panel opening stays on that window.
   lw·tan(cone angle), the right lays the outer on its shoulder with the nozzle leaning outward (the
   build grows from the axis outward); one bead: two interleaved helices at pitch 2·lh. Walls under
   ~35 mm radius cannot take two tools facing each other, so one arm does both beads, alternate laps.
-  Posts and bores are local one-lap helices; only the bottom and top skins are flat. Points carry
-  (x, y, z, width, height, tilt) and the planner turns the tilt into each arm's roll/pitch/yaw.
+  Where the wall is thinner than two full beads (a TinkerCAD 2.2 mm wall at 1.3 mm lines) the beads
+  are squeezed narrower rather than dropped, and short dropouts are bridged, so a 0.1 mm thickness
+  wobble does not break the helix. Posts and bores are local helices: one continuous helix over the
+  run of layers where the feature is unchanged (see Features), a lap per layer elsewhere; only the
+  bottom and top skins are flat. Points carry (x, y, z, width, height, tilt) and the planner turns
+  the tilt into each arm's roll/pitch/yaw.
+* **Features** (`scripts/features.py`, run after every slice, in the report): what in the model is a
+  primitive the toolpath can be built from. Every solid piece and hole of every layer is matched to
+  the layer below; a run of unchanged layers is a prism, classified as the FullControl primitive that
+  draws it (circle → `helixZ`, rectangle → `rectangleXY`, regular polygon → `polygonXY`, else the
+  vertex list) with its centre, size and z range. Then the mesh is cut by half-planes through the
+  turntable axis every 0.6 mm of arc at the largest radius; angle ranges where the (r, z) profile
+  is unchanged are surfaces of revolution (the spiral, both arms), the rest are local features with
+  their angle and height range. `features.FeatureMap.fullcontrol()` prints the primitives as
+  FullControl calls.
+* **Print order** per layer (rule `print.order`): the wall round the axis first (one bed turn),
+  then every circle (one smooth loop each), then straight lines, then skins and infill.
+* **Toolpath** tab: the planned motion itself for a band of layers (slider + how many): plate frame
+  (what lands on the part) or world frame (what the nozzles trace while the disc turns), travels
+  dashed, the print order numbered on the newest layer.
+* **Approach** (Settings ▸ Tool and nozzle, per arm): the tool facing the disc, or turned ±90° about
+  the vertical so the flange points along the arm's Y and the mount lies edge-on to the other arm.
+  Added to the commanded yaw; the tool outline the collision guard uses turns with it.
 * **Other layer strategies**: *planar*; *cone_out* / *cone_in* (conical layers after Wüthrich et al.
   2021; the mesh is transformed so the cones are flat). *auto* falls back to these, chosen by the
   least material in the air (measured per layer against `lines.max_overhang_deg`).
 * **Compare planar vs spiral** (Model print): slices both ways, plans both for two arms, and reports
   time, bead length, arm shares, disc reversals and the plan-view coverage delta per 5 mm band. The
   **Generation** tab replays how each is made: Spiral (bead rings, rays, the two helices growing),
-  Planar (paths in print order), Delta (where only one of them lays material).
+  Planar (paths in print order), Delta (where only one of them lays material). *Use for Print*
+  makes the plan shown the one Print streams; otherwise Print uses the Slice + preview result.
 * **3D cell** page: both 850s (real CAD) on the official joint chain, the disc and the part so
   far, live. Real arms are drawn from their reported joint angles; simulated arms from their
   pose by IK. Drag to orbit, right-drag to pan, scroll to zoom.

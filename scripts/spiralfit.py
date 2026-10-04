@@ -54,6 +54,7 @@ class SpiralReport:
     segments: List[Segment] = field(default_factory=list)
     planar_layers: List[int] = field(default_factory=list)
     local_features: int = 0
+    continuous_features: int = 0      # of those, helices over a run of unchanged layers
     notes: List[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -64,7 +65,8 @@ class SpiralReport:
             by_arm.setdefault(s.arm, []).append(s)
         lines = [f"{len(self.segments)} spiral segments "
                  f"({', '.join(f'arm {a}: {len(v)}' for a, v in sorted(by_arm.items()))}); "
-                 f"{len(self.planar_layers)} flat layers; {self.local_features} local helices"]
+                 f"{len(self.planar_layers)} flat layers; {self.local_features} local helices "
+                 f"({self.continuous_features} continuous over unchanged layers)"]
         ends = {}
         for s in self.segments:
             ends[s.why_end] = ends.get(s.why_end, 0) + 1
@@ -430,9 +432,71 @@ def build(mesh_path: str, settings: SliceSettings, tilt_max_deg: float = 30.0, p
         rep.notes.append("No wall round the axis between the skins: nothing to spiral.")
 
     # 4. everything else that is a closed ring: features off the axis and the bores of
-    #    posts. Each is walked round by arc length as a one-lap helix per layer (right arm,
-    #    disc facing it), so they are spirals too, just local ones.
+    #    posts. Where a feature is unchanged over a run of layers (features.prisms) it is
+    #    walked as ONE helix over the whole run, continuous extrusion, no start/stop per
+    #    layer; the rest is a one-lap helix per layer. Right arm, disc faced to it.
     from shapely.geometry import Polygon as _Poly, Point as _Pt, LineString as _LS
+    import features as _feat
+    zs = [L.z for L in layers]
+    fmap = _feat.classify(mesh, sections, zs, lh, progress=progress)
+    rep.notes.extend(fmap.notes)
+
+    def key_of(i, role, g):
+        c = g.centroid
+        return (i, role, round(c.x), round(c.y))
+
+    def lap_points(ring, z_from, z_to, start_xy):
+        """One lap round `ring` from the point nearest start_xy, climbing z_from -> z_to."""
+        L = _LS(ring.coords)
+        length = L.length
+        s0 = L.project(_Pt(*start_xy)) if start_xy is not None else 0.0
+        n = max(8, int(length / 1.0))
+        out = []
+        for k in range(n + 1):
+            pnt = L.interpolate((s0 + length * k / n) % length)
+            out.append((pnt.x, pnt.y, z_from + (z_to - z_from) * k / n, lw, lh, 0.0))
+        return out
+
+    consumed = set()
+    for f in fmap.prisms:
+        if f.layers[1] <= f.layers[0] or f.layers[1] < i0 or f.layers[0] >= i1:
+            continue
+        if f.encloses_axis():
+            continue                                   # the main wall and its bore: the spiral's job
+        pts, start = [], None
+        for i in range(max(i0, f.layers[0]), min(i1, f.layers[1] + 1)):
+            # the feature's outline at THIS layer (follows any slight change)
+            g = None
+            for q in sections[i]:
+                if q.is_empty:
+                    continue
+                if f.role == "hole":
+                    for ring in q.interiors:
+                        hp = _Poly(ring)
+                        if hp.contains(_Pt(*f.centre)) and not hp.contains(_Pt(0, 0)):
+                            g = hp.buffer(0.5 * lw)
+                            break
+                elif _Poly(q.exterior).contains(_Pt(*f.centre)) and not _Poly(q.exterior).contains(_Pt(0, 0)):
+                    g = q.buffer(-0.5 * lw)
+                if g is not None:
+                    break
+            if g is None or g.is_empty:
+                break
+            g = max(getattr(g, "geoms", [g]), key=lambda a: a.area)
+            if g.exterior.length < 3 * lw:
+                break
+            consumed.add(key_of(i, f.role, g if f.role == "solid" else g.buffer(-0.5 * lw)))
+            lap = lap_points(g.exterior, layers[i].z - lh / 2, layers[i].z + lh / 2, start)
+            if pts:
+                lap = lap[1:]
+            pts.extend(lap)
+            start = (pts[-1][0], pts[-1][1])
+        if len(pts) > 8:
+            p = Path(WALL_OUTER, pts, closed=False)
+            p.arm = 0
+            layers[max(i0, f.layers[0])].paths.append(p)
+            rep.local_features += 1
+            rep.continuous_features += 1
     for i in range(i0, i1):
         main = mains[i]
         rings = []
@@ -446,10 +510,10 @@ def build(mesh_path: str, settings: SliceSettings, tilt_max_deg: float = 30.0, p
             for gq in getattr(g, "geoms", [g]):
                 if gq.is_empty:
                     continue
-                if q is not main:
+                if q is not main and key_of(i, "solid", gq) not in consumed:
                     rings.append(gq.exterior)
                 for ring in gq.interiors:
-                    if not _Poly(ring).contains(_Pt(0, 0)):
+                    if not _Poly(ring).contains(_Pt(0, 0)) and key_of(i, "hole", _Poly(ring)) not in consumed:
                         rings.append(ring)
         for ring in rings:
             L = _LS(ring.coords)
@@ -476,6 +540,7 @@ def build(mesh_path: str, settings: SliceSettings, tilt_max_deg: float = 30.0, p
     from slicer import _RegionFeatures
     res.region_features = _RegionFeatures([], [])
     res.spiral_report = rep
+    res.features = fmap
     res.spiral_trace = {"rings": trace_rings, "n_theta": N_THETA, "lw": lw, "lh": lh}
     res.spiral_layers = len(rep.segments)
     res.section_stats = [{"polys": len(p), "holes": sum(len(q.interiors) for q in p),

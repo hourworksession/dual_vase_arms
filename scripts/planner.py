@@ -149,6 +149,17 @@ def _wrap_to_pi(a: float) -> float:
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
+def _winds_round_origin(pts) -> bool:
+    """Winding number of a closed outline about (0, 0) (the turntable axis in the part frame)."""
+    w = 0.0
+    n = len(pts)
+    for k in range(n):
+        x0, y0 = pts[k][0], pts[k][1]
+        x1, y1 = pts[(k + 1) % n][0], pts[(k + 1) % n][1]
+        w += math.atan2(x0 * y1 - y0 * x1, x0 * x1 + y0 * y1)
+    return abs(w) > math.pi
+
+
 def path_class(path: Path) -> int:
     """Print order within a layer: 0 = wall round the turntable axis (the bed turns, the
     arm hardly moves), 1 = closed round feature off the axis (posts, bores: one smooth
@@ -161,6 +172,9 @@ def path_class(path: Path) -> int:
         c = 3
     elif getattr(path, "_encloses", False) or getattr(path, "_turn", False):
         c = 0
+    elif getattr(path, "_encloses", None) is None and path.closed and len(path.points) >= 3 \
+            and _winds_round_origin(path.points):
+        c = 0                                   # no rules applied: test the axis ourselves
     elif path.closed and len(path.points) >= 8:
         pts = path.points
         cx = sum(q[0] for q in pts) / len(pts)

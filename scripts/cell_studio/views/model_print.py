@@ -599,6 +599,14 @@ class ModelPrintPage(QWidget):
                     settings.strategy = want
                 post(lambda: self.v_strategy_used.set(settings.strategy))
                 res = slice_model(path, settings, progress)
+                if getattr(res, "features", None) is None:
+                    post(lambda: self.v_status.set("Classifying features (prisms in Z, polar profile)…"))
+                    try:
+                        import features as _feat
+                        res.features = _feat.classify_mesh(path, settings.layer_height)
+                    except Exception as e:          # the classification is advisory
+                        res.features = None
+                        post(lambda e=e: self._log(f"Feature classification failed: {e}", append=True))
                 post(lambda: self.v_status.set(f"Planning the motion for {len(res.layers)} layers…"))
                 try:
                     out = self._plan_compute(res, cfg)
@@ -691,6 +699,8 @@ class ModelPrintPage(QWidget):
             self.gen.set_results(spiral=res)
         else:
             self.gen.set_results(planar=res)
+        if getattr(res, "features", None) is not None:
+            self._log(res.features.summary(), append=True)
         self._show_plan(*out)
         self._planned_settings = snapshot
         self._check_narrow(res)

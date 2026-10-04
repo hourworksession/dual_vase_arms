@@ -1684,6 +1684,41 @@ def s93(x):
         m.gen.canvas.repaint()
 
 
+@scenario("Wil (owner)", "18:40", "Feature classification: posts on a tube become continuous helices, the tube is revolved")
+def s94(x):
+    import trimesh
+    tube = trimesh.creation.annulus(r_min=40, r_max=42.4, height=24, sections=96)
+    tube.apply_translation((0, 0, 12))
+    posts = []
+    for px, py in ((30, 0), (-30, 0)):
+        post = trimesh.creation.annulus(r_min=3.0, r_max=5.4, height=24, sections=48)
+        post.apply_translation((px, py, 12))
+        posts.append(post)
+    mesh = trimesh.util.concatenate([tube] + posts)
+    path = os.path.join(GEN_TMP, "tube_posts.stl")
+    mesh.export(path)
+    import features
+    fm = features.classify_mesh(path, 0.6)
+    runs = [f for f in fm.prisms if f.kind in ("circle", "ring") and f.layers[1] - f.layers[0] >= 30]
+    x.expect(len(runs) >= 2, f"Posts not found as circle prisms over the height: {fm.summary()[:400]}")
+    x.expect(any(abs(f.centre[0] - 30) < 1.5 and abs(f.centre[1]) < 1.5 for f in runs), "Post at (30, 0) not located")
+    rev = sum(f.params["span_deg"] for f in fm.revolved)
+    x.expect(rev > 300, f"Tube should be a surface of revolution: {rev:.0f}° revolved")
+    for f in runs[:1]:
+        x.expect("helixZ" in f.primitive, f"Circle prism should map to fc.helixZ: {f.primitive}")
+    from slicer import SliceSettings, slice_model
+    res = slice_model(path, SliceSettings(layer_height=0.6, line_width=1.1, wall_count=2, strategy="spiral"))
+    rep = res.spiral_report
+    x.expect(rep.continuous_features >= 2 and rep.local_features <= 8,
+             f"Posts should be a few continuous helices, not a lap per layer: {rep.summary()}")
+    # the planner keeps the order wall -> circles -> straight lines
+    from planner import order_toolpaths, path_class
+    res_p = slice_model(path, SliceSettings(layer_height=0.6, line_width=1.1, wall_count=2, strategy="planar"))
+    classes = [path_class(p) for _, p in order_toolpaths(res_p) if _ == 20]
+    x.expect(classes == sorted(classes), f"Layer 20 not in wall/circles/straight order: {classes}")
+    x.expect(0 in classes and 1 in classes, f"Layer 20 should have an axis wall and circles: {classes}")
+
+
 # ---------------------------------------------------------------- runner
 def run(selected=None):
     rows = []
