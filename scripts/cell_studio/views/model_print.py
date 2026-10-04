@@ -68,6 +68,7 @@ class LayerView(QWidget):
         p.setPen(QPen(QColor("#1f2731"), 1, Qt.DashLine))
         p.drawRect(QRectF(ox + minx * scale, oy - maxy * scale, (maxx - minx) * scale, (maxy - miny) * scale))
         side = self.side
+        layers = self.result.layers
 
         def xy(pt, lay):
             if not side:
@@ -76,9 +77,34 @@ class LayerView(QWidget):
             r = r if pt[1] >= 0 else -r              # near half to the right, far half to the left
             return r, (pt[2] if len(pt) >= 3 else lay.z)
 
+        lh = float(getattr(self.result.settings, "layer_height", 0.0) or 0.0)
+        helices = getattr(self.result, "_helices", None)
+        if helices is None:
+            # spiral results keep each helix on one host layer: the parts of every helix
+            # within a layer's z band are shown on that layer
+            helices = [path for lay in layers for path in lay.paths
+                       if path.points and len(path.points[0]) >= 3
+                       and max(q[2] for q in path.points) - min(q[2] for q in path.points) > 1.5 * lh]
+            self.result._helices = helices
+
+        def pieces(lay):
+            out = [(path.kind, path.points + ([path.points[0]] if (path.closed and len(path.points) > 1) else []))
+                   for path in lay.paths if path not in helices]
+            zlo, zhi = lay.z - 0.5 * lh, lay.z + 0.5 * lh
+            for path in helices:
+                run = []
+                for q in path.points:
+                    if zlo <= q[2] < zhi:
+                        run.append(q)
+                    elif run:
+                        out.append((path.kind, run))
+                        run = []
+                if run:
+                    out.append((path.kind, run))
+            return out
+
         def draw_layer(lay, colour_of, width):
-            for path in lay.paths:
-                pts = path.points + ([path.points[0]] if (path.closed and len(path.points) > 1) else [])
+            for kind, pts in pieces(lay):
                 if len(pts) < 2:
                     continue
                 x0, y0 = xy(pts[0], lay)
@@ -86,10 +112,9 @@ class LayerView(QWidget):
                 for pt in pts[1:]:                       # (x, y) or (x, y, z, width, height)
                     x1, y1 = xy(pt, lay)
                     qp.lineTo(ox + x1 * scale, oy - y1 * scale)
-                p.setPen(QPen(colour_of(path.kind), width))
+                p.setPen(QPen(colour_of(kind), width))
                 p.drawPath(qp)
 
-        layers = self.result.layers
         # previous layer: darker, under everything
         if self.show_neighbours and self.idx > 0:
             draw_layer(layers[self.idx - 1], lambda k: QColor(theme.KIND_COLOR.get(k, "#888888")).darker(260), 2.2)
@@ -119,7 +144,7 @@ class LayerView(QWidget):
         p.drawText(QPointF(16, 26), f"Layer {self.idx + 1} / {len(self.result.layers)}")
         p.setPen(QColor(theme.MUTED))
         p.setFont(QFont(p.font().family(), 10))
-        zs = [pt[2] for path in layer.paths for pt in path.points if len(pt) >= 3]
+        zs = [pt[2] for _, pts in pieces(layer) for pt in pts if len(pt) >= 3]
         ztxt = f"z = {min(zs):.1f}–{max(zs):.1f} mm" if zs and max(zs) - min(zs) > 0.05 else f"z = {layer.z:.2f} mm"
         p.drawText(QPointF(16, 46), f"{ztxt}   ·   {'solid' if layer.solid else 'sparse'}"
                    + ("   ·   side view (radius vs height)" if side else ""))

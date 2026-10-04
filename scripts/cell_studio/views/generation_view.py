@@ -120,10 +120,14 @@ class _Canvas(QWidget):
             for coords, col in zip(ring[1], ("#34516b", "#4b3b63")):
                 if not coords:
                     continue
-                poly = QPolygonF([QPointF(X(x), Y(y)) for x, y in coords])
+                if coords and isinstance(coords[0][0], (tuple, list)):
+                    parts = coords                        # several rings
+                else:
+                    parts = [coords]
                 p.setPen(QPen(QColor(col), 1.2, Qt.DashLine))
                 p.setBrush(Qt.NoBrush)
-                p.drawPolygon(poly)
+                for part in parts:
+                    p.drawPolygon(QPolygonF([QPointF(X(x), Y(y)) for x, y in part]))
         # helices so far, per arm
         lh = tr.get("lh", 0.6)
         for arm, col in ((0, theme.RIGHT), (1, theme.LEFT)):

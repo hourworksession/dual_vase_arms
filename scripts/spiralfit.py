@@ -108,11 +108,12 @@ def _bead_lines(poly, lw, beads):
         if g is None or g.is_empty:
             out.append((None, False))
             continue
+        from shapely.geometry import MultiLineString
         polys = list(getattr(g, "geoms", [g]))
         main = _main_polygon(polys) or max(polys, key=lambda q: q.area)
+        outers = MultiLineString([list(q.exterior.coords) for q in polys])   # every piece's outside
         if k == 0:
-            g0 = main
-            out.append((LineString(main.exterior.coords), False))
+            out.append((outers, False))
         elif k == 1:
             inner = None
             for ring in main.interiors:
@@ -122,9 +123,9 @@ def _bead_lines(poly, lw, beads):
             if inner is not None:
                 out.append((inner, False))
             else:
-                out.append((LineString(main.exterior.coords), True))
+                out.append((outers, True))
         else:
-            out.append((LineString(main.exterior.coords), False))
+            out.append((outers, False))
     return out
 
 
@@ -164,6 +165,7 @@ def build(mesh_path: str, settings: SliceSettings, tilt_max_deg: float = 30.0, p
     beads_wanted = max(1, settings.wall_count)
     sections, mains, hits = [], [], []
     trace_rings = []                  # (z, [outer bead ring coords, inner bead ring coords]) per layer
+    bands = []                        # per layer, per angle: [(r_in, r_out), ...] of the main wall
     for i in range(n_layers):
         if progress and i % 5 == 0:
             progress(i, n_layers)
@@ -174,11 +176,19 @@ def build(mesh_path: str, settings: SliceSettings, tilt_max_deg: float = 30.0, p
         mains.append(P)
         if P is None:
             hits.append(None)
+            bands.append(None)
             continue
         lines = _bead_lines(P, lw, beads_wanted)
         hits.append([([_ray_hits(lines[k][0], 0.0, 0.0, th) for th in thetas], lines[k][1])
                      for k in range(beads_wanted)])
-        trace_rings.append((z, [list(ln[0].coords) if ln[0] is not None else None for ln in lines[:2]]))
+        raw = [_ray_hits(P.boundary, 0.0, 0.0, th) for th in thetas]
+        bands.append([list(zip(h[0::2], h[1::2])) for h in raw])        # material intervals
+        def _coords(g):
+            if g is None:
+                return None
+            parts = getattr(g, "geoms", [g])
+            return [list(part.coords) for part in parts]          # list of rings
+        trace_rings.append((z, [_coords(ln[0]) for ln in lines[:2]]))
 
     layers = [Layer(index=i, z=zmin + lh * (i + 0.5), solid=False) for i in range(n_layers)]
     bottom = settings.bottom_layers
@@ -220,20 +230,56 @@ def build(mesh_path: str, settings: SliceSettings, tilt_max_deg: float = 30.0, p
             return None
         return r
 
+    MIN_W = settings.thin_min_width or 0.75 * lw      # narrowest bead (lines.min_width of the nozzle)
+    MAX_W = 1.6 * lw                                  # widest a single centreline bead may be
+
+    def thin_band(i, j, prev):
+        """The main wall's material interval at angle j nearest the previous radius:
+        (r_in, r_out) or None."""
+        if bands[i] is None or not bands[i][j]:
+            return None
+        if prev is None:
+            return bands[i][j][-1]
+        return min(bands[i][j], key=lambda ab: abs(0.5 * (ab[0] + ab[1]) - prev))
+
+    def squeezed(i, j, bead, prev):
+        """Bead radius and width where the wall is thinner than two full beads: two beads
+        pushed narrower (each half the wall, never under MIN_W) while the wall is wide
+        enough for that; below that one bead down the wall's centre (bead 0 only) as wide
+        as the wall. None where there is nothing to print."""
+        iv = thin_band(i, j, prev)
+        if iv is None:
+            return None
+        r_in, r_out = iv
+        t = r_out - r_in
+        if t >= 2.0 * MIN_W:
+            w = min(lw, 0.5 * t)
+            return (r_out - 0.5 * w, w) if bead == 0 else (r_in + 0.5 * w, w)
+        if bead == 0 and t >= (settings.thin_skip_below or 0.4 * lw):
+            return 0.5 * (r_in + r_out), min(MAX_W, max(MIN_W, t))
+        return None
+
     def radius(i, frac, j, bead, prev):
-        """Bead radius at angle j between layer i (frac=0) and i+1 (frac=1); None in a gap."""
+        """Bead radius (and width) at angle j between layer i (frac=0) and i+1 (frac=1).
+        Returns (r, dr/dz, width); r None in a gap. Where the wall is too thin for two full
+        beads (a TinkerCAD 2.2 mm wall at 1.3 mm lines), the beads are squeezed narrower
+        rather than dropped, and a wall under two narrow beads is one centreline bead."""
         i2 = min(i + 1, n_layers - 1)
         if hits[i] is None or hits[i2] is None:
-            return None, None
+            return None, None, lw
         ha, sa = hits[i][bead]
         hb, sb = hits[i2][bead]
         ra = pick(ha[j], prev, bead, sa)
         rb = pick(hb[j], ra if ra is not None else prev, bead, sb)
-        if ra is None or rb is None:
-            return None, None
-        r = ra + (rb - ra) * frac
-        drdz = (rb - ra) / lh if i2 != i else 0.0
-        return r, drdz
+        if ra is not None and rb is not None:
+            return ra + (rb - ra) * frac, (rb - ra) / lh if i2 != i else 0.0, lw
+        qa = squeezed(i, j, bead, prev)
+        qb = squeezed(i2, j, bead, qa[0] if qa else prev)
+        if qa and qb:
+            r = qa[0] + (qb[0] - qa[0]) * frac
+            return r, (qb[0] - qa[0]) / lh if i2 != i else 0.0, qa[1] + (qb[1] - qa[1]) * frac
+        return None, None, lw
+
 
     if i1 > i0 and any(h is not None for h in hits[i0:i1]):
         # typical wall radius: the outer bead's median hit
@@ -263,20 +309,52 @@ def build(mesh_path: str, settings: SliceSettings, tilt_max_deg: float = 30.0, p
         cur = {0: None, 1: None}
         seg_start = {0: None, 1: None}
         prev_r = {0: None, 1: None}
+        # pass 1: sample every arm's bead radius along the helix (prev radius sticks through
+        # dropouts so the bead does not re-pick a surface after a one-sample miss)
+        samples = {0: [], 1: []}                  # per arm: (u, th, z, r, drdz, wd)
         for s in range(n_u + 1):
             u = s / N_THETA                        # turns
             for arm, ang_off, z_off in offsets:
                 th = 2 * math.pi * u + ang_off
                 z = z_start + pitch * u + z_off
                 if z > z_end + 1e-9:
-                    r = None
+                    r, drdz, wd = None, None, lw
                 else:
                     fi = (z - layers[0].z) / lh
                     i = int(max(0, min(n_layers - 2, math.floor(fi))))
                     frac = max(0.0, min(1.0, fi - i))
                     j = int(round((th % (2 * math.pi)) / (2 * math.pi) * N_THETA)) % N_THETA
-                    r, drdz = radius(i, frac, j, bead_of[arm], prev_r[arm])
-                prev_r[arm] = r
+                    r, drdz, wd = radius(i, frac, j, bead_of[arm], prev_r[arm])
+                    if r is not None:
+                        prev_r[arm] = r
+                samples[arm].append([u, th, z, r, drdz, wd])
+        # pass 2: bridge short dropouts (a TinkerCAD wall that is 0.1 mm too thin for a few
+        # degrees, a sliver the buffer ate) by interpolating the radius across them; only a
+        # gap longer than MAX_GAP degrees is a real exit from the wall
+        MAX_GAP = 30
+        for arm in (0, 1):
+            sm = samples[arm]
+            k = 0
+            while k < len(sm):
+                if sm[k][3] is not None:
+                    k += 1
+                    continue
+                g = k
+                while g < len(sm) and sm[g][3] is None:
+                    g += 1
+                if k > 0 and g < len(sm) and (g - k) <= MAX_GAP and sm[g][2] <= z_end + 1e-9:
+                    ra, rb = sm[k - 1][3], sm[g][3]
+                    wa, wb = sm[k - 1][5], sm[g][5]
+                    for m in range(k, g):
+                        t = (m - k + 1) / (g - k + 1)
+                        sm[m][3] = ra + (rb - ra) * t
+                        sm[m][4] = 0.0
+                        sm[m][5] = wa + (wb - wa) * t
+                k = g
+        # pass 3: runs of wall / travel per arm, lock-step by sample index
+        for s in range(n_u + 1):
+            for arm, ang_off, z_off in offsets:
+                u, th, z, r, drdz, wd = samples[arm][s]
                 kind = WALL_OUTER if r is not None else TRAVEL
                 if r is None:
                     # gap: hover over the last radius, lifted, no extrusion
@@ -287,7 +365,7 @@ def build(mesh_path: str, settings: SliceSettings, tilt_max_deg: float = 30.0, p
                     # lean with the wall slope, plus the cone angle outward for the outer bead
                     lean = math.degrees(math.atan(drdz)) + (cone_angle_deg if bead_of[arm] == 0 and beads_wanted > 1 else 0.0)
                     tilt = max(-tilt_max_deg, min(tilt_max_deg, lean))
-                    pt = (r * math.cos(th), r * math.sin(th), z, lw, lh, tilt)
+                    pt = (r * math.cos(th), r * math.sin(th), z, wd, lh, tilt)
                 if cur[arm] != kind:
                     if cur[arm] == WALL_OUTER and seg_start[arm] is not None:
                         rep.segments.append(Segment(arm, bead_of[arm], seg_start[arm][0], runs[arm][-1][1][-1][2],
@@ -338,7 +416,7 @@ def build(mesh_path: str, settings: SliceSettings, tilt_max_deg: float = 30.0, p
                 z = z_start + lh * u
                 fi = (z - layers[0].z) / lh
                 i = int(max(0, min(n_layers - 2, math.floor(fi))))
-                r, drdz = radius(i, max(0.0, min(1.0, fi - i)), int(round(u * N_THETA)) % N_THETA, bead, pr)
+                r, drdz, wd = radius(i, max(0.0, min(1.0, fi - i)), int(round(u * N_THETA)) % N_THETA, bead, pr)
                 pr = r
                 if r is None:
                     if len(pts) > 1:
