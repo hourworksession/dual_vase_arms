@@ -1632,9 +1632,12 @@ def s92(x):
         al, ar = math.degrees(math.atan2(wl[1], wl[0])), math.degrees(math.atan2(wr[1], wr[0]))
         diff = abs((al - ar + 180) % 360 - 180)
         pairs += 1
-        if diff < 120 or math.hypot(wl[0] - wr[0], wl[1] - wr[1]) < 40:
+        # each arm must also be on ITS OWN side: right base is at cell +X (0 deg), left at 180
+        own_r = abs((ar + 180) % 360 - 180) <= 90
+        own_l = abs((al - 180 + 180) % 360 - 180) <= 90
+        if diff < 120 or math.hypot(wl[0] - wr[0], wl[1] - wr[1]) < 40 or not (own_r and own_l):
             bad += 1
-    x.expect(pairs and bad == 0, f"Arms on the same side of the disc in {bad} of {pairs} sampled moves")
+    x.expect(pairs and bad == 0, f"Arms crossed over or on the same side in {bad} of {pairs} sampled moves")
     m.stop_print()
     x.wait_for(lambda: not m.printing, 5)
 
