@@ -489,9 +489,10 @@ class CellController:
         self.home_load_error = None
 
     def _run_busy(self, state, fn):
+        self.busy = True                      # before the thread starts: no window for a jog to slip in
+        self.job_state.set(state)
+
         def worker():
-            self.busy = True
-            self.ui.post(lambda: self.job_state.set(state))
             try:
                 fn()
             except Exception as e:

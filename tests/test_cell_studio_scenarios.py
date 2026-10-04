@@ -1255,6 +1255,7 @@ def s79(x):
     ring.export(path)
     m = x.w.model
     x.w.go(2)
+    m.v_strategy.set("planar")
     m.load_model(path)
     m.do_slice()
     statuses = set()
@@ -1283,6 +1284,7 @@ def s80(x):
     m = x.w.model
     x.w.go(2)
     m.v_layer_height.set(0.6)
+    m.v_strategy.set("planar")
     m.load_model(path)
     m.do_slice()
     t = time.time()
@@ -1376,6 +1378,7 @@ def s84(x):
     x.w.go(2)
     m.v_layer_height.set(0.6)
     m.v_line_width.set(1.3)
+    m.v_strategy.set("planar")
     m.load_model(path)
     m.do_slice()
     t = time.time()
@@ -1487,7 +1490,8 @@ def s88(x):
     x.w.go(2)
     m.v_layer_height.set(0.6)
     m.v_line_width.set(1.1)
-    for want, expect in (("auto", "cone_out"), ("spiral", "spiral")):
+    m.v_cone_angle.set(35.0)
+    for want, expect in (("auto", "spiral"), ("cone_out", "cone_out")):
         m.v_strategy.set(want)
         m.load_model(path)
         m.do_slice()
@@ -1500,10 +1504,11 @@ def s88(x):
             x.expect(False, f"{want}: not sliced: {m.v_status.get()}")
             continue
         if expect == "spiral":
-            walls = [p for L in res.layers for p in L.paths if p.kind == "WALL_OUTER"]
-            climbing = [p for p in walls if len(p.points[0]) >= 3 and p.points[-1][2] - p.points[0][2] > 0.4]
-            x.expect(len(climbing) >= len(walls) * 0.9, f"Only {len(climbing)} of {len(walls)} walls climb")
-            x.expect(getattr(res, "spiral_layers", 0) > 50, "spiral_layers not reported")
+            rep = getattr(res, "spiral_report", None)
+            x.expect(rep is not None and sum(s_.turns for s_ in rep.segments) > 20,
+                     "Spiral fit produced no long spiral on the cup")
+            x.expect(rep is not None and all(s_.arm == 0 for s_ in rep.segments),
+                     "A 30 mm wall cannot take two tools: both beads should be the right arm's")
         else:
             zs = [pt[2] for L in res.layers for p in L.paths for pt in p.points if len(pt) >= 3]
             x.expect(zs and min(zs) >= -0.01 and max(zs) <= 60.5, f"Cone paths outside the part: z {min(zs):.1f}..{max(zs):.1f}")
@@ -1591,6 +1596,7 @@ def s91(x):
     m.v_line_width.set(1.1)
     m.v_strategy.set("planar")
     n = len(MSGS)
+    m.v_strategy.set("planar")
     m.load_model(path)
     m.do_slice()
     t = time.time()
@@ -1643,6 +1649,39 @@ def s92(x):
     x.expect(pairs and bad == 0, f"Arms crossed over or on the same side in {bad} of {pairs} sampled moves")
     m.stop_print()
     x.wait_for(lambda: not m.printing, 5)
+
+
+@scenario("Wil (owner)", "16:10", "Compares planar with the spiral fit and watches both generate")
+def s93(x):
+    import trimesh
+    ring = trimesh.creation.annulus(r_min=40, r_max=42.2, height=12, sections=96)
+    ring.apply_translation((0, 0, 6))
+    path = os.path.join(GEN_TMP, "ring_cmp.stl")
+    ring.export(path)
+    m = x.w.model
+    x.w.go(2)
+    m.v_layer_height.set(0.6)
+    m.v_line_width.set(1.1)
+    m.v_num_arms.set(2)
+    m.load_model(path)
+    m.do_compare()
+    t = time.time()
+    while getattr(m, "_slicing", False) and time.time() - t < 240:
+        pump(0.05)
+    x.expect(m.gen.delta is not None, f"No comparison: {m.v_status.get()}")
+    if m.gen.delta is None:
+        return
+    txt = m.gen.delta["text"]
+    x.expect("planar" in txt and "spiral" in txt and "Coverage" in txt or "coverage" in txt, "Report incomplete")
+    rep = getattr(m.gen.spiral, "spiral_report", None)
+    x.expect(rep is not None and len(rep.segments) >= 2 and any(s_.arm == 1 for s_ in rep.segments),
+             "Ring should spiral with both arms")
+    x.expect(m.preview_tabs.currentWidget() is m.gen, "Generation tab not shown after comparing")
+    for mode in ("spiral", "planar", "delta"):
+        m.gen.mode.set(mode)
+        m.gen.slider.setValue(500)
+        pump(0.05)
+        m.gen.canvas.repaint()
 
 
 # ---------------------------------------------------------------- runner

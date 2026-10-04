@@ -39,7 +39,7 @@ def _arm_default(joints, xyz, rpy):
 # the disc centre, 30 mm apart.) Joints solved for the Oct 2026 calibration; a saved
 # config/home_positions.json takes precedence.
 DEFAULTS = {
-    "left": _arm_default((-2.8, -26.9, -7.0, 177.0, -109.9, -1.0), (262.1, -8.4, 260.2), (0.0, 90.0, 0.0)),
+    "left": _arm_default((-2.8, -26.9, -7.0, -3.0, 109.9, 179.0), (262.1, -8.4, 260.2), (0.0, 90.0, 0.0)),
     "right": _arm_default((-7.7, -27.8, -6.9, -8.3, 110.8, -3.0), (258.2, -22.9, 257.4), (90.0, -90.0, 90.0)),
     "sequence": "simultaneous",   # "simultaneous", "right_first", "left_first"
 }

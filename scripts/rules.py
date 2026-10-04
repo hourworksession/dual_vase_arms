@@ -502,6 +502,15 @@ def choose_strategy_by_trial(slice_fn, rs: RuleSet):
     material in the air (ties -> planar). slice_fn(strategy, cone_angle) -> SliceResult.
     Returns (strategy, cone_angle, table: [(strategy, angle, unsupported mm², layers)])."""
     tilt_max = float(rs.get("hardware.tilt_max", 30.0))
+    # Spiral-first: if the model has a wall round the axis, the two-arm spiral is the plan.
+    try:
+        res = slice_fn("spiral", float(rs.get("strategy.cone_angle", 15.0)))
+        segs = getattr(getattr(res, "spiral_report", None), "segments", [])
+        turns = sum(s_.turns for s_ in segs)
+        if segs and turns >= 2.0:
+            return "spiral", float(rs.get("strategy.cone_angle", 15.0)), [("spiral", 0.0, 0.0, len(res.layers))]
+    except Exception:
+        pass
     angles = [a for a in (15.0, 25.0, 35.0) if a <= tilt_max + 1e-9] or [tilt_max]
     table = []
     trials = [("planar", 0.0)] + [(s_, a) for a in angles for s_ in ("cone_out", "cone_in")]

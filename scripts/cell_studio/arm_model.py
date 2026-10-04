@@ -57,6 +57,11 @@ def _origin(xyz, rpy):
 
 _ORIGINS = [_origin(x, r) for x, r, _, _ in CHAIN]
 LIMITS = np.array([(lo, hi) for _, _, lo, hi in CHAIN])
+try:                                   # the real 850 limits (config/arms/xarm850.yaml) win
+    from .home_config import JOINT_LIMITS as _JL
+    LIMITS = np.radians(np.array(_JL, dtype=float))
+except Exception:
+    pass
 
 
 def _rz(q):

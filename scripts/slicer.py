@@ -95,8 +95,9 @@ class SliceSettings:
     thin_skip_below: float = 0.0
     # Layer strategy (see strategies.py):
     #   planar   - flat layers
-    #   spiral   - flat layers, but walls that go around the turntable axis climb
-    #              continuously (one helix, no layer seam), where layer_style allows
+    #   spiral   - spiral-first (spiralfit.py): the wall as continuous helices for both
+    #              arms, segments ending where the wall does, local helices for the rest,
+    #              nozzle leaning with the wall; flat layers only for the skins
     #   cone_out - conical layers, apex up ("Christmas tree"): outward overhangs
     #   cone_in  - conical layers, apex down: inward overhangs
     # Cones follow Wüthrich et al. 2021 (RotBot): transform the mesh so the cones
@@ -106,6 +107,8 @@ class SliceSettings:
     # steepest overhang (from vertical) a bead can be laid at on the bead below; the per-layer
     # step allowed is layer_height * tan(max_overhang_deg)
     max_overhang_deg: float = 45.0
+    tilt_max_deg: float = 30.0          # largest nozzle lean the arms may use (spiral strategy)
+    min_two_arm_radius: float = 35.0    # spiral strategy: smaller walls are printed by one arm
     # optional: callable(section_stats) -> per-layer style ("planar"/"spiral"/...),
     # from the print rules' non-planar bands; None = spiral everywhere it can.
     layer_style: object = None
@@ -301,6 +304,11 @@ def slice_model(mesh_path: str, settings: SliceSettings, progress=None) -> Slice
     if _MESH_IMPORT_ERROR is not None:
         raise ImportError(f"Slicing needs trimesh and shapely ({_MESH_IMPORT_ERROR}). "
                           "pip install trimesh shapely")
+    if settings.strategy == "spiral":
+        import spiralfit
+        return spiralfit.build(mesh_path, settings, tilt_max_deg=settings.tilt_max_deg, progress=progress,
+                               cone_angle_deg=settings.cone_angle_deg,
+                               min_two_arm_radius=settings.min_two_arm_radius)
     mesh = _load_mesh(mesh_path)
     bounds0 = mesh.bounds.copy()
     cone = None
@@ -370,8 +378,8 @@ def slice_model(mesh_path: str, settings: SliceSettings, progress=None) -> Slice
     # conical back-transform. Cones are applied last so spiralled z is bent with them.
     res_spiral = 0
     styles = settings.layer_style(section_stats) if settings.layer_style else None
-    if settings.strategy == "spiral" or (styles and any(st in ("spiral", "spiral_brick") for st in styles)):
-        res_spiral = spiral_walls(layers, settings, styles if settings.strategy != "spiral" else None)
+    if styles and any(st in ("spiral", "spiral_brick") for st in styles):
+        res_spiral = spiral_walls(layers, settings, styles)
     if cone is not None:
         cone_back_transform(layers, *cone)
         if not any(layer.paths for layer in layers):

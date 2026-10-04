@@ -124,13 +124,23 @@ the log console, and an error that stops the panel opening stays on that window.
     (a region carried up through layers); each cell's measurements and chosen tactic are written to
     `scripts/cells_<model>.json` for the AI to learn from.
   - *Non-planar bands*: which layers would be flat, spiral or spiral-brick (reported, not generated yet).
-* **Layer strategies** (Print settings ▸ Layer strategy, rule `strategy.default`): *planar*;
-  *spiral* (walls around the axis climb continuously, no seam); *cone_out* / *cone_in* (conical
-  layers, apex up or down, after Wüthrich et al. 2021: the mesh is transformed so the cones are
-  flat, sliced, and the paths bent back; outward overhangs are built outward like a tree);
-  *auto* measures the model on a quick coarse slice and picks. Per-region choice ("cellular")
-  is the tactics catalogue above; the Layers preview shows the previous layer dark, the current
-  bright and the next faint, with a side view (radius vs height) for non-planar layers.
+* **Spiral first** (`scripts/spiralfit.py`, Layer strategy *spiral*, the default of *auto* whenever
+  the model has a wall round the turntable axis): the wall is not cut into layers. A ray from the
+  axis at every degree and height finds the outside and inside surfaces; each bead follows its own
+  surface as one continuous helix, stopping where the surface stops (slot, top) and restarting
+  where it reappears. Two beads: the left arm runs the inner one ahead by half a layer plus
+  lw·tan(cone angle), the right lays the outer on its shoulder with the nozzle leaning outward (the
+  build grows from the axis outward); one bead: two interleaved helices at pitch 2·lh. Walls under
+  ~35 mm radius cannot take two tools facing each other, so one arm does both beads, alternate laps.
+  Posts and bores are local one-lap helices; only the bottom and top skins are flat. Points carry
+  (x, y, z, width, height, tilt) and the planner turns the tilt into each arm's roll/pitch/yaw.
+* **Other layer strategies**: *planar*; *cone_out* / *cone_in* (conical layers after Wüthrich et al.
+  2021; the mesh is transformed so the cones are flat). *auto* falls back to these, chosen by the
+  least material in the air (measured per layer against `lines.max_overhang_deg`).
+* **Compare planar vs spiral** (Model print): slices both ways, plans both for two arms, and reports
+  time, bead length, arm shares, disc reversals and the plan-view coverage delta per 5 mm band. The
+  **Generation** tab replays how each is made: Spiral (bead rings, rays, the two helices growing),
+  Planar (paths in print order), Delta (where only one of them lays material).
 * **3D cell** page: both 850s (real CAD) on the official joint chain, the disc and the part so
   far, live. Real arms are drawn from their reported joint angles; simulated arms from their
   pose by IK. Drag to orbit, right-drag to pan, scroll to zoom.

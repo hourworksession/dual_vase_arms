@@ -94,6 +94,10 @@ class PlannerConfig:
     # converted into THEIR frame: cell = Rz(yaw0)(p - C0); arm_i = C_i + Rz(-yaw_i) cell.
     # None = every arm gets arm-0-frame numbers (only right for a single arm).
     arm_frames: Optional[List[Tuple[float, float, float, float]]] = None
+    # Each arm's own nozzle orientation (roll, pitch, yaw in ITS frame). When given, the
+    # planner writes per-arm orientations into the targets, leaning the nozzle by each
+    # point's tilt (6-value points) about the path tangent; the streamer sends them as is.
+    arm_orientations: Optional[List[Tuple[float, float, float]]] = None
     retreat_clearance: float = 40.0      # mm outside the part's largest radius for an idle arm
     retreat_lift: float = 25.0           # mm above the current layer for an idle arm
     cross_angle: float = math.radians(100.0)   # further than this from its azimuth = in the other arm's half
@@ -210,6 +214,55 @@ def _world(cfg: PlannerConfig, plate_xy: Tuple[float, float], phi: float,
     return (wx, wy, wz)
 
 
+_RPY_CACHE: Dict[tuple, Tuple[float, float, float]] = {}
+
+
+def arm_rpy(cfg: PlannerConfig, i: int, world, tang, tilt_deg: float) -> Tuple[float, float, float]:
+    """Roll/pitch/yaw for arm i at this point: its base orientation, leaned by tilt_deg about
+    the bead tangent `tang` (planner frame) so the nozzle tip points down-and-inward
+    (positive tilt = tool leans outward, laying the bead on the shoulder of the one
+    inside/below it)."""
+    base = tuple(cfg.arm_orientations[i])
+    if abs(tilt_deg) < 0.05 or tang is None or (abs(tang[0]) + abs(tang[1])) < 1e-9:
+        return base
+    key = (i, round(tilt_deg, 1), round(math.atan2(tang[1], tang[0]), 2),
+           round(math.atan2(world[1] - cfg.center[1], world[0] - cfg.center[0]), 2))
+    hit = _RPY_CACHE.get(key)
+    if hit is not None:
+        return hit
+    try:
+        import numpy as np
+        from cell_studio.arm_model import rpy_matrix, matrix_to_pose
+    except Exception:
+        return base
+    # directions in the planner frame, then into arm i's frame (a yaw)
+    t = np.array([tang[0], tang[1], 0.0])
+    t /= np.linalg.norm(t)
+    rad = np.array([world[0] - cfg.center[0], world[1] - cfg.center[1], 0.0])
+    rad = rad / (np.linalg.norm(rad) or 1.0)
+    if cfg.arm_frames and i < len(cfg.arm_frames):
+        a = math.radians(cfg.arm_frames[0][3] - cfg.arm_frames[i][3])
+        c, s_ = math.cos(a), math.sin(a)
+        R = np.array([[c, -s_, 0], [s_, c, 0], [0, 0, 1.0]])
+        t, rad = R @ t, R @ rad
+    R0 = rpy_matrix(*[math.radians(v) for v in base])
+    down = np.array([0.0, 0.0, -1.0])
+    ang = math.radians(tilt_deg)
+    best = None
+    for sign in (1.0, -1.0):
+        k = t * sign
+        K = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+        Rt = np.eye(3) + math.sin(ang) * K + (1 - math.cos(ang)) * (K @ K)
+        d = Rt @ down                      # new nozzle direction
+        score = float(d @ (-rad))          # should gain an inward component
+        if best is None or score > best[0]:
+            best = (score, Rt)
+    out = tuple(matrix_to_pose(np.block([[best[1] @ R0, np.zeros((3, 1))], [np.zeros((1, 3)), 1.0]]))[3:])
+    out = tuple(round(v, 3) for v in out)
+    _RPY_CACHE[key] = out
+    return out
+
+
 def to_arm_frame(cfg: PlannerConfig, arm_index: int, p: Tuple[float, float, float]) -> Tuple[float, float, float]:
     """Planner-frame (arm 0) point -> arm `arm_index`'s own frame, using cfg.arm_frames."""
     if arm_index == 0 or not cfg.arm_frames or arm_index >= len(cfg.arm_frames):
@@ -241,6 +294,7 @@ def _assign_paths(ordered: List[Tuple[int, Path]], num_arms: int) -> List[List[T
     pending: List[Tuple[int, Path]] = []
     rr = 0
     last = 0
+    pinned_any = any(getattr(p, "arm", None) is not None for _, p in ordered)
     for item in ordered:
         path = item[1]
         if path.kind == TRAVEL:
@@ -248,7 +302,9 @@ def _assign_paths(ordered: List[Tuple[int, Path]], num_arms: int) -> List[List[T
             continue
         arm = getattr(path, "arm", None)
         if arm is None:
-            lane = rr % num_arms
+            # with pinned paths in the mix (spiral fit), unpinned work (skins, local helices)
+            # stays with the right arm; the left is only ever sent where it was planned
+            lane = 0 if pinned_any else rr % num_arms
             rr += 1
         else:
             lane = int(arm) % num_arms
@@ -461,14 +517,15 @@ def _lane_vertices(cfg: PlannerConfig, lane: List[Tuple[int, Path]], slc: SliceR
             else:
                 pz = pt[2]
                 w, h = (pt[3], pt[4]) if len(pt) >= 5 else (None, None)
+            tilt = float(pt[5]) if len(pt) >= 6 else 0.0
             if j == 0:
-                yield (plate, pz, False, 0.0, layer_idx, path.kind, w, h, coord, anchor)
+                yield (plate, pz, False, 0.0, layer_idx, path.kind, w, h, coord, anchor, tilt)
             else:
                 if len(pt) == 2:
                     seg = math.hypot(plate[0] - prev[0][0], plate[1] - prev[0][1])
                 else:
                     seg = math.dist((plate[0], plate[1], pz), (prev[0][0], prev[0][1], prev[1]))
-                yield (plate, pz, not travel, seg, layer_idx, path.kind, w, h, coord, anchor)
+                yield (plate, pz, not travel, seg, layer_idx, path.kind, w, h, coord, anchor, tilt)
             prev = (plate, pz)
 
 
@@ -491,6 +548,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
     fil_area = cfg.filament_area()
     phi = cfg.start_phi
     prev_world: List[Optional[Tuple[float, float, float]]] = [None] * n
+    prev_plate: List[Optional[Tuple[float, float]]] = [None] * n
 
     # Retreat pose per arm ("two carpenters on a log"): when an arm has nothing to do, or the
     # other arm's job takes it across the axis into this arm's half, this arm backs off to its
@@ -507,6 +565,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                 cfg.z_base + z + cfg.retreat_lift)
 
     retreated = [False] * n
+    held_last = [False] * n
     crossings: List[int] = []
     clash = _clash_tester(cfg)
 
@@ -540,6 +599,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                                                 math.dist(targets[i][:2], other[:2]) < cfg.min_separation):
                           recs[i] = None
                           advance[i] = False
+                          held_last[i] = True
                           held_for[i] += 1
                           if held_for[i] > 20000:
                               raise RuntimeError("Two-arm plan deadlocked: the left arm cannot get to its "
@@ -590,10 +650,23 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                   tmp.append(None)
                   continue
               plate, z, extrude, seg, layer_idx, kind, w, h = rec[:8]
+              tilt = rec[10] if len(rec) > 10 else 0.0
+              if retreated[i] or held_last[i]:
+                  extrude, seg = False, 0.0        # coming back from a hold / retreat: a travel, not a bead
               speed = cfg.print_speed if extrude else cfg.travel_speed
               t_feed = max(t_feed, seg / speed if speed > 0 else 0.0)
               world = _world(cfg, plate, phi_target, z)
-              tmp.append((world, extrude, seg, layer_idx, kind, z, w, h))
+              # bead direction on the plate, turned into the planner frame by the disc angle
+              pp = prev_plate[i]
+              if pp is not None:
+                  c_, s__ = math.cos(phi_target), math.sin(phi_target)
+                  tx, ty = plate[0] - pp[0], plate[1] - pp[1]
+                  tang = (tx * c_ - ty * s__, tx * s__ + ty * c_)
+              else:
+                  tang = None
+              prev_plate[i] = plate
+              tmp.append((world, extrude, seg, layer_idx, kind, z, w, h, tilt, tang))
+              held_last[i] = False
               cur_z[i] = z
               retreated[i] = False
           if n > 1:
@@ -612,7 +685,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                   if retreated[i] or not other_busy:
                       continue
                   z = max(cur_z)
-                  tmp[i] = (retreat_pose(i, z), False, 0.0, -1, "RETREAT", z, None, None)
+                  tmp[i] = (retreat_pose(i, z), False, 0.0, -1, "RETREAT", z, None, None, 0.0, None)
                   retreated[i] = True
               # an arm crossing into the other's half must find that arm already retreated;
               # the planner flags it so the report can say so (the arms are opposite by
@@ -640,7 +713,9 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
               if at is None:
                   arms.append(None)
                   continue
-              world, extrude, seg, layer_idx, kind, z, w, h = at
+              world, extrude, seg, layer_idx, kind, z, w, h = at[:8]
+              tilt = at[8] if len(at) > 8 else 0.0
+              tang = at[9] if len(at) > 9 else None
               if step_layer < 0:
                   step_layer, step_kind = layer_idx, kind
               e = 0.0
@@ -656,8 +731,9 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
                   lh = cfg.layer_height if h is None else h
                   e = seg * lw * lh / fil_area * flow
               own = to_arm_frame(cfg, i, world)
+              r_, p_, y_ = arm_rpy(cfg, i, world, tang, tilt) if cfg.arm_orientations else (roll, pitch, yaw)
               arms.append(ArmTarget(round(own[0], 3), round(own[1], 3), round(own[2], 3),
-                                    roll, pitch, yaw, extrude, round(e, 4)))
+                                    r_, p_, y_, extrude, round(e, 4)))
               prev_world[i] = world
 
           steps.append(MotionStep(dt=dt, tt_angle_deg=math.degrees(phi_target),
@@ -670,7 +746,7 @@ def plan(slc: SliceResult, cfg: PlannerConfig) -> MotionProgram:
         for i in range(n):
             w = retreat_pose(i, z)
             own = to_arm_frame(cfg, i, w)
-            roll, pitch, yaw = cfg.orientation
+            roll, pitch, yaw = cfg.arm_orientations[i] if cfg.arm_orientations else cfg.orientation
             arms.append(ArmTarget(round(own[0], 3), round(own[1], 3), round(own[2], 3), roll, pitch, yaw, False, 0.0))
         d = max((math.dist(retreat_pose(i, z), prev_world[i]) for i in range(n) if prev_world[i]), default=50.0)
         steps.append(MotionStep(dt=max(d / cfg.max_arm_speed, 0.2), tt_angle_deg=math.degrees(phi), arms=arms,

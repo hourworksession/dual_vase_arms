@@ -251,6 +251,9 @@ class ModelPrintPage(QWidget):
         self.v_model.changed.connect(model.setText)
         wf.add(model)
         wf.add(self._step(2, "Slice and plan the motion", button("Slice + preview", None, self.do_slice)))
+        wf.add(button("Compare planar vs spiral", "ghost", self.do_compare,
+                      tip="Generate the part both ways, plan both for two arms, and show the delta "
+                          "in the Generation tab"))
         self.print_btn = button("▶  Print", "primary", self.start_print)
         wf.add(self._step(3, "Stream to the machine", self.print_btn))
         wf.add(hrow(button("Dry run", "ghost", self.start_dry_run,
@@ -270,9 +273,10 @@ class ModelPrintPage(QWidget):
         ps.row("Layer height", NumberField(self.v_layer_height, "mm", 2, 0.05, minimum=0.01))
         ps.row("Line width", NumberField(self.v_line_width, "mm", 2, 0.05, minimum=0.05))
         ps.row("Wall count", NumberField(self.v_wall_count, "", 0, 1, integer=True, minimum=0, maximum=20))
-        ps.row("Layer strategy", Combo(self.v_strategy, ["auto", "planar", "spiral", "cone_out", "cone_in"], width=130),
-               "auto picks from the model: cones for overhangs (cone_out grows outward like a tree), "
-               "spiral for one continuous loop, else planar")
+        ps.row("Layer strategy", Combo(self.v_strategy, ["auto", "spiral", "planar", "cone_out", "cone_in"], width=130),
+               "spiral: the wall as continuous helices for both arms (inner bead leads, outer on its shoulder, "
+               "nozzle leaning), segments end where the wall does, local helices for posts, flat skins only. "
+               "auto = spiral when the model has a wall round the axis, else the least-in-the-air of the others.")
         ps.row("Cone angle", NumberField(self.v_cone_angle, "°", 0, 5, minimum=5, maximum=40))
         ps.row("Infill density", NumberField(self.v_infill_density, "%", 0, 5, minimum=0, maximum=100))
         ps.row("Infill pattern", Combo(self.v_infill_pattern, ["grid", "lines"], width=130))
@@ -356,10 +360,13 @@ class ModelPrintPage(QWidget):
         nb_chk.toggled.connect(lambda on: (setattr(self.canvas, "show_neighbours", on), self.canvas.update()))
         lt.addWidget(hrow(self.layer_lbl, self.layer_slider, nb_chk, side_chk, spacing=10))
         from .sim_view import SimulationView
+        from .generation_view import GenerationView
         self.sim = SimulationView()
+        self.gen = GenerationView()
         self.preview_tabs = QTabWidget()
         self.preview_tabs.addTab(layers_tab, "Layers")
         self.preview_tabs.addTab(self.sim, "Simulation")
+        self.preview_tabs.addTab(self.gen, "Generation")
         self.preview_tabs.currentChanged.connect(lambda i: i == 0 and self.sim.stop())
         prev.add(self.preview_tabs, 1)
         vs.addWidget(prev)
@@ -387,6 +394,8 @@ class ModelPrintPage(QWidget):
         thin = dict(thin_mode="skip")
         if rs is not None:
             thin = dict(max_overhang_deg=float(rs.get("lines.max_overhang_deg", 45.0)),
+                        tilt_max_deg=float(rs.get("hardware.tilt_max", 30.0)),
+                        min_two_arm_radius=self._min_two_arm_radius(rs),
                         thin_mode=str(rs.get("lines.thin_features", "centreline")),
                         thin_min_width=float(rs.get("lines.min_width", 0.8)) * nozzle,
                         thin_skip_below=float(rs.get("lines.thin_skip_below", 0.4)) * nozzle)
@@ -429,7 +438,21 @@ class ModelPrintPage(QWidget):
             orientation=self.app.orientation("right"),   # arm 0 = right (primary)
             arm_frames=self._arm_frames(),
             tool_footprints=self._tool_footprints(),
+            arm_orientations=[self.app.orientation("right"), self.app.orientation("left")],
         )
+
+    def _min_two_arm_radius(self, rs):
+        """Smallest wall radius at which the two tools can face each other: half of (both tools'
+        reach ahead of the nozzle + the margin). ~35 mm with the Revo mounts."""
+        try:
+            fps = self._tool_footprints()
+            ahead = 0.0
+            for fp, sgn in zip(fps, (1.0, -1.0)):
+                xs = [x for x, _ in fp.exterior.coords]
+                ahead += max(sgn * x for x in xs)
+            return 0.5 * (ahead + float(rs.get("hardware.tool_margin", 20.0)))
+        except Exception:
+            return 35.0
 
     def _tool_footprints(self):
         """Tool outlines in the planner (right arm) frame. Right tool points along planner +X
@@ -539,11 +562,55 @@ class ModelPrintPage(QWidget):
                 post(lambda: self.v_strategy_used.set(settings.strategy))
                 res = slice_model(path, settings, progress)
                 post(lambda: self.v_status.set(f"Planning the motion for {len(res.layers)} layers…"))
-                out = self._plan_compute(res, cfg)
+                try:
+                    out = self._plan_compute(res, cfg)
+                except RuntimeError as e:
+                    if "deadlocked" not in str(e):
+                        raise
+                    from dataclasses import replace as _rep
+                    post(lambda e=e: self._log(f"{e} Planning for the right arm alone instead.", append=True))
+                    out = self._plan_compute(res, _rep(cfg, num_arms=1))
                 post(lambda: self._sliced(res, out, snapshot, None))
             except Exception as e:
                 post(lambda e=e: self._sliced(None, None, snapshot, e))
         threading.Thread(target=work, daemon=True).start()
+
+    def do_compare(self):
+        """Slice planar and spiral, plan both, report the delta; the Generation tab shows both."""
+        if not self.model_path:
+            QMessageBox.warning(self, "Compare", "Import a model first.")
+            return
+        if getattr(self, "_slicing", False):
+            return
+        from compare_strategies import compare
+        settings, cfg, path = self._settings(), self._planner_config(), self.model_path
+        settings.cone_angle_deg = float(self.v_cone_angle.get())
+        self._slicing = True
+        self.v_status.set("Comparing planar and spiral…")
+        post = self.app.ui.post
+
+        def work():
+            try:
+                out = compare(path, settings, cfg, progress=lambda t: post(lambda t=t: self.v_status.set(t)))
+                post(lambda: self._compared(out, None))
+            except Exception as e:
+                post(lambda e=e: self._compared(None, e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _compared(self, out, err):
+        self._slicing = False
+        if err is not None:
+            self.v_status.set("Comparison failed.")
+            self._log(f"Comparison failed: {type(err).__name__}: {err}")
+            QMessageBox.critical(self, "Compare", str(err))
+            return
+        self.gen.set_results(spiral=out["spiral"], planar=out["planar"], delta=out)
+        self._log("Planar vs spiral:\n" + out["text"], append=True)
+        rep = getattr(out["spiral"], "spiral_report", None)
+        if rep is not None:
+            self._log("Spiral fit: " + rep.summary(), append=True)
+        self.preview_tabs.setCurrentWidget(self.gen)
+        self.v_status.set("Compared. See the Generation tab (Spiral / Planar / Delta) and the report.")
 
     def _sliced(self, res, out, snapshot, err):
         self._slicing = False
@@ -560,6 +627,11 @@ class ModelPrintPage(QWidget):
         self.canvas.show_layer(res, n // 2)
         self._log("Sliced: " + res.summary() + f" | strategy {res.settings.strategy}"
                   + (f", {res.spiral_layers} spiral layers" if getattr(res, "spiral_layers", 0) else ""))
+        if getattr(res, "spiral_report", None) is not None:
+            self._log("Spiral fit: " + res.spiral_report.summary(), append=True)
+            self.gen.set_results(spiral=res)
+        else:
+            self.gen.set_results(planar=res)
         self._show_plan(*out)
         self._planned_settings = snapshot
         self._check_narrow(res)
@@ -708,7 +780,16 @@ class ModelPrintPage(QWidget):
         """Re-plan the current slice (synchronous; used after settings change and by tests)."""
         if not self.slice_result:
             return
-        self._show_plan(*self._plan_compute(self.slice_result, self._planner_config()))
+        cfg = self._planner_config()
+        try:
+            out = self._plan_compute(self.slice_result, cfg)
+        except RuntimeError as e:
+            if "deadlocked" not in str(e):
+                raise
+            from dataclasses import replace as _rep
+            self._log(f"{e} Planning for the right arm alone instead.", append=True)
+            out = self._plan_compute(self.slice_result, _rep(cfg, num_arms=1))
+        self._show_plan(*out)
         self._planned_settings = self._settings_snapshot()
 
     def start_print(self):
@@ -886,11 +967,12 @@ class ModelPrintPage(QWidget):
         # Each arm has its own mount orientation; use the one for the arm actually moving
         # (the plan carries the right arm's, but the left may be the one streaming).
         side = "left" if arm is getattr(self.app, "left", None) else "right"
-        try:
-            r, p, y = self.app.orientation(side)
-            at = type(at)(**{**vars(at), "roll": r, "pitch": p, "yaw": y})
-        except Exception:
-            pass
+        if not getattr(self.program.config, "arm_orientations", None):
+            try:                      # old plans carry one orientation for both arms
+                r, p, y = self.app.orientation(side)
+                at = type(at)(**{**vars(at), "roll": r, "pitch": p, "yaw": y})
+            except Exception:
+                pass
         try:
             if blend and blend > 0:
                 arm.arm.set_position(x=at.x, y=at.y, z=at.z, roll=at.roll, pitch=at.pitch,
