@@ -1,0 +1,427 @@
+<title>Cell Job Runner</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: job executor — phase strip, schematic viewport with tags, job + override rails, progress, console */
+:root{
+  --bg:#10141b; --panel:#171d27; --panel2:#1d2431; --ink:#e8ecf2; --mut:#8b95a5;
+  --acc:#f0a63c; --a0:#f0a63c; --a1:#e07bb4; --teal:#45c0a7; --bad:#e06060; --ok:#5cb46d; --line:#2a3240;
+  --disp:"Chakra Petch","IBM Plex Sans",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#eef0f3; --panel:#ffffff; --panel2:#f3f5f8; --ink:#1c2430; --mut:#5c6675;
+    --acc:#b87410; --a0:#b87410; --a1:#b74a8b; --teal:#0d8a72; --bad:#c04545; --ok:#2f8b4e; --line:#d4d9e1;
+    color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#eef0f3; --panel:#ffffff; --panel2:#f3f5f8; --ink:#1c2430; --mut:#5c6675;
+  --acc:#b87410; --a0:#b87410; --a1:#b74a8b; --teal:#0d8a72; --bad:#c04545; --ok:#2f8b4e; --line:#d4d9e1;
+  color-scheme:light;
+}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:14px;margin:0;padding-block:14px;padding-inline:16px;line-height:1.45}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.top{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:8px;padding:9px 14px;display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+.top h1{font-family:var(--disp);font-weight:700;font-size:18px;margin:0}
+.phases{display:flex;gap:6px;flex-wrap:wrap}
+.ph{font-family:var(--disp);font-size:11px;font-weight:600;letter-spacing:.05em;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--mut)}
+.ph.on{color:#141414;background:var(--acc);border-color:var(--acc)}
+.ph.done{color:var(--ok);border-color:var(--ok)}
+.ph.bad{color:#fff;background:var(--bad);border-color:var(--bad)}
+button{font-family:var(--disp);font-weight:600;font-size:13px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 11px;cursor:pointer}
+button:hover{border-color:var(--mut)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+button.stop{background:var(--bad);border-color:var(--bad);color:#fff;font-size:15px;padding:9px 18px;border-radius:8px}
+button.go{background:var(--ok);border-color:var(--ok);color:#10141b}
+button[disabled]{opacity:.4;cursor:default}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px}
+@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;min-width:0}
+#cv{display:block;width:100%;height:500px;background:var(--panel2)}
+.rail{display:flex;flex-direction:column;gap:12px;min-width:0}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:8px}
+.pane h2{font-family:var(--disp);font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--mut);margin:0}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.row label{font-size:12px;color:var(--mut)}
+.row input[type=range]{accent-color:var(--acc);flex:1;min-width:90px}
+.row .v{font-family:var(--mono);font-size:12px;color:var(--acc);min-width:46px;text-align:right}
+.row select,.row input[type=number]{font-family:var(--mono);font-size:13px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:4px 6px;width:70px}
+.file{font-size:11px;color:var(--mut);max-width:100%}
+.jobmeta{font-family:var(--mono);font-size:11px;color:var(--mut)}
+.jog{display:grid;grid-template-columns:repeat(3,42px);grid-auto-rows:34px;gap:5px}
+.jog .blank{visibility:hidden}
+.jwrap{display:flex;gap:10px;align-items:flex-start}
+.zcol{display:flex;flex-direction:column;gap:5px}
+.seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{border:0;border-radius:0}
+.seg button.on{background:var(--acc);color:#141414}
+.railbar{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.pb{flex:1 1 220px;height:14px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;overflow:hidden;min-width:0}
+.pb .f{height:100%;width:0%;background:var(--ok)}
+.ro{font-family:var(--mono);font-size:12px;color:var(--mut)}
+.console{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:6px}
+#clog{font-family:var(--mono);font-size:11px;color:var(--mut);height:110px;overflow-y:auto;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;white-space:pre-wrap;overflow-wrap:anywhere}
+#clog b{color:var(--ink);font-weight:500} #clog .er{color:var(--bad)} #clog .okk{color:var(--ok)} #clog .hl{color:var(--acc)}
+.note{font-size:11.5px;color:var(--mut)}
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <h1>Cell Job Runner</h1>
+    <div class="phases">
+      <span class="ph" id="phH">HOME</span><span class="ph" id="phP">PRIME</span>
+      <span class="ph" id="phR">PRINT</span><span class="ph" id="phT">RETRACT</span><span class="ph" id="phD">DONE</span>
+    </div>
+    <span style="flex:1"></span>
+    <button class="stop" id="btnEstop">E-STOP</button>
+  </div>
+
+  <div class="grid">
+    <div class="stage"><canvas id="cv"></canvas></div>
+    <div class="rail">
+      <div class="pane">
+        <h2>Job</h2>
+        <input class="file" type="file" id="jobFile" accept=".csv">
+        <span class="jobmeta" id="jobMeta">loaded: sample_D (built-in) · dual · 2,520 rows · 126 s</span>
+        <div class="row">
+          <button class="go" id="btnStart">Start job</button>
+          <button id="btnPause" disabled>Pause</button>
+          <button id="btnCancel" disabled>Cancel</button>
+        </div>
+      </div>
+
+      <div class="pane">
+        <h2>Overrides — live, job keeps running</h2>
+        <div class="row"><label>speed</label><input type="range" id="ovS" min="25" max="200" value="100"><span class="v" id="ovSv">100%</span></div>
+        <div class="row"><label>flow</label><input type="range" id="ovF" min="50" max="150" value="100"><span class="v" id="ovFv">100%</span></div>
+        <div class="row"><label>temp +</label><input type="number" id="ovT" value="0" step="5" min="-30" max="30"><span class="note">&deg;C both</span></div>
+      </div>
+
+      <div class="pane">
+        <h2>Manual — pauses the job first</h2>
+        <div class="row">
+          <div class="seg" id="armSel"><button data-a="0" class="on">Arm 0</button><button data-a="1">Arm 1</button></div>
+          <label>step</label>
+          <select id="step"><option>0.1</option><option selected>1</option><option>10</option></select>
+        </div>
+        <div class="jwrap">
+          <div class="jog">
+            <span class="blank"></span><button data-j="y+">Y+</button><span class="blank"></span>
+            <button data-j="x-">X&minus;</button><span class="blank"></span><button data-j="x+">X+</button>
+            <span class="blank"></span><button data-j="y-">Y&minus;</button><span class="blank"></span>
+          </div>
+          <div class="zcol"><button data-j="z+">Z+</button><button data-j="z-">Z&minus;</button></div>
+          <div class="zcol"><button id="rJm">&#8634;15&deg;</button><button id="rJp">&#8635;15&deg;</button></div>
+        </div>
+        <span class="note">Resume re-approaches the held toolpath point before printing continues.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="railbar">
+    <span class="ro" id="roPh">IDLE</span>
+    <div class="pb"><div class="f" id="pbar"></div></div>
+    <span class="ro" id="roJ">row 0 / 0 · 0% · ETA —</span>
+  </div>
+
+  <div class="console">
+    <div id="clog"></div>
+    <input id="cin" placeholder="PAUSE · RESUME · CANCEL · ROT S0.1 · M104 T0 S215 · HELP" autocomplete="off"
+      style="font-family:var(--mono);font-size:13px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%;box-sizing:border-box">
+  </div>
+</div>
+
+<script>
+"use strict";
+(function(){
+var $=function(id){return document.getElementById(id)};
+var TAU=Math.PI*2;
+
+// ---------- job data ----------
+var JOB=null; // {kind:"D"|"C", rows:flat, stride, n, dur, r, name}
+function sampleJob(){
+  var r=30,h=6,p=0.3,v=30,om=v/(TAU*r),f=20,dur=(h/p)/om,n=Math.floor(dur*f),rows=[];
+  for(var i=0;i<n;i++){var t=i/f,z=Math.min(h,p*om*t* (TAU/TAU)*1*om*0+ p*(om*t)), e=2.99;
+    z=Math.min(h,p*om*t); // z = pitch * revs
+    rows.push(t,r,0,z,-r,0,Math.min(h,z+p/2),om,e,e);}
+  JOB={kind:"D",rows:rows,stride:10,n:n,dur:dur,r:r,name:"sample_D (built-in)"};
+  $("jobMeta").textContent="loaded: sample_D (built-in) · dual · "+n.toLocaleString()+" rows · "+dur.toFixed(0)+" s";
+}
+sampleJob();
+$("jobFile").addEventListener("change",function(ev){
+  var f=ev.target.files&&ev.target.files[0]; if(!f)return;
+  var rd=new FileReader();
+  rd.onload=function(){try{parse(rd.result,f.name);}catch(e){clog("<span class='er'>!! CSV parse failed: "+(e&&e.message)+"</span>");}};
+  rd.readAsText(f);
+});
+function parse(txt,name){
+  var L=txt.split(/\r?\n/).filter(function(l){return l.trim().length});
+  var head=L[0].trim(), rows=[], kind=null, stride=0;
+  function nums(l){return l.split(",").map(Number);}
+  if(head.indexOf("t,x0,y0,z0")===0){kind="D";stride=10;
+    for(var i=1;i<L.length;i++){var v=nums(L[i]);if(v.length>=10)rows.push(v[0],v[1],v[2],v[3],v[4],v[5],v[6],v[7],v[8],v[9]);}}
+  else if(head.indexOf("t,x,y,z,extruder_0")===0){kind="C";stride=6;
+    for(var j=1;j<L.length;j++){var w=nums(L[j]);if(w.length>=6)rows.push(w[0],w[1],w[2],w[3],w[4],w[5]);}}
+  else{clog("<span class='er'>?? not a C or D dataset — header: "+head.slice(0,40).replace(/</g,"&lt;")+"</span>");return;}
+  var n=rows.length/stride, dur=n?rows[(n-1)*stride]:0, r=n?Math.abs(rows[1]):30;
+  JOB={kind:kind,rows:rows,stride:stride,n:n,dur:dur,r:r,name:name};
+  $("jobMeta").textContent="loaded: "+name+" · "+(kind==="D"?"dual":"single")+" · "+n.toLocaleString()+" rows · "+dur.toFixed(0)+" s";
+  clog("job loaded: <b>"+name+"</b> ("+kind+" · "+n.toLocaleString()+" rows) <span class='okk'>ok</span>");
+  if(S.ph!=="IDLE")cancelJob("new file loaded");
+}
+
+// ---------- machine state ----------
+var HOME=[[55,0,8],[-55,0,8]], PURGE=[[72,-55,5],[-72,55,5]], PARK=[[55,0,16],[-55,0,16]];
+var S={ph:"IDLE", est:false, sel:0,
+  arm:[{tcp:HOME[0].slice(),tgt:HOME[0].slice(),e:0,temp:24,tt:210},
+       {tcp:HOME[1].slice(),tgt:HOME[1].slice(),e:0,temp:24,tt:210}],
+  rot:{ang:0,om:0,omT:0},
+  jobT:0, row:0, held:null, primeT:0, retrT:0, dep:0, estFrom:null};
+var OV={s:1,f:1,t:0};
+
+function clog(h){var el=$("clog");el.innerHTML+=h+"\n";el.scrollTop=el.scrollHeight;}
+clog("<b>job runner ready</b> · sample job loaded · Start runs HOME → PRIME → PRINT → RETRACT");
+
+function setPh(p){S.ph=p;$("roPh").textContent=p;
+  var map={HOMING:"phH",PRIMING:"phP",PRINTING:"phR",APPROACH:"phR",PAUSED:"phR",RETRACTING:"phT",DONE:"phD",ESTOP:null};
+  ["phH","phP","phR","phT","phD"].forEach(function(id){$(id).classList.remove("on","bad");});
+  var order=["phH","phP","phR","phT","phD"], cur=map[p];
+  var reached=true;
+  order.forEach(function(id){
+    if(id===cur){$(id).classList.add("on");reached=false;}
+    else $(id).classList.toggle("done",reached&&p!=="IDLE"&&p!=="ESTOP");
+  });
+  if(p==="ESTOP")["phH","phP","phR","phT","phD"].forEach(function(id){$(id).classList.remove("on","done");});
+  if(p==="DONE"){$("phD").classList.add("on");}
+  $("btnStart").disabled=!(p==="IDLE"||p==="DONE");
+  $("btnStart").textContent=(p==="PAUSED"||p==="ESTOP")?"Start job":"Start job";
+  $("btnPause").disabled=!(p==="PRINTING"||p==="APPROACH"||p==="PAUSED");
+  $("btnPause").textContent=(p==="PAUSED")?"Resume":"Pause";
+  $("btnCancel").disabled=(p==="IDLE"||p==="DONE");
+}
+setPh("IDLE");
+
+function near(a,b){return Math.abs(a[0]-b[0])<0.3&&Math.abs(a[1]-b[1])<0.3&&Math.abs(a[2]-b[2])<0.3;}
+function rowPos(i){var R=JOB.rows,st=JOB.stride,o=i*st;
+  if(JOB.kind==="D")return {a0:[R[o+1],R[o+2],R[o+3]],a1:[R[o+4],R[o+5],R[o+6]],om:R[o+7],e0:R[o+8],e1:R[o+9],t:R[o]};
+  return {a0:[R[o+1],R[o+2],R[o+3]],a1:null,om:R[o+5],e0:R[o+4],e1:0,t:R[o]};}
+
+// ---------- phase machine ----------
+function startJob(){
+  if(!JOB)return;
+  S.jobT=0;S.row=0;S.dep=0;S.held=null;
+  setPh("HOMING");
+  S.arm[0].tgt=HOME[0].slice();S.arm[1].tgt=HOME[1].slice();S.rot.omT=0;
+  clog("<span class='hl'>HOME</span>: custom joint-angle home, plate to rest");
+}
+function cancelJob(why){
+  setPh("IDLE");S.rot.omT=0;S.arm[0].e=0;S.arm[1].e=0;
+  S.arm[0].tgt=PARK[0].slice();S.arm[1].tgt=PARK[1].slice();
+  clog("job cancelled"+(why?" ("+why+")":"")+" · parking");
+}
+$("btnStart").onclick=function(){if(S.est)return;startJob();};
+$("btnCancel").onclick=function(){cancelJob("operator");};
+$("btnPause").onclick=function(){
+  if(S.ph==="PRINTING"||S.ph==="APPROACH"){S.held=rowPos(Math.min(S.row,JOB.n-1));setPh("PAUSED");
+    S.arm[0].e=0;S.arm[1].e=0;S.rot.omT=0;
+    clog("<span class='hl'>PAUSE</span> at row "+S.row+" · manual control released, job state held");}
+  else if(S.ph==="PAUSED"){setPh("APPROACH");
+    clog("resume: re-approaching held toolpath point (row "+S.row+")");}
+};
+
+// ---------- tick ----------
+var last=0;
+function tick(ts){
+  if(!last)last=ts;var dt=Math.min(0.1,(ts-last)/1000);last=ts;
+  if(!S.est){
+    S.rot.om+=Math.max(-0.4*dt,Math.min(0.4*dt,S.rot.omT-S.rot.om));
+    S.rot.ang=((S.rot.ang+S.rot.om*360*dt)%360+360)%360;
+    for(var i=0;i<2;i++){var a=S.arm[i];
+      for(var k=0;k<3;k++){var d=a.tgt[k]-a.tcp[k],mv=45*dt;a.tcp[k]+=Math.max(-mv,Math.min(mv,d));}
+      a.temp+=((a.tt+OV.t)-a.temp)*dt/7;}
+    phase(dt);
+  } else {S.rot.om=0;S.arm[0].e=0;S.arm[1].e=0;}
+  draw();requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+function phase(dt){
+  var A=S.arm;
+  switch(S.ph){
+    case "HOMING":
+      if(near(A[0].tcp,HOME[0])&&near(A[1].tcp,HOME[1])&&Math.abs(S.rot.om)<1e-3){
+        setPh("PRIMING");S.primeT=0;A[0].tgt=PURGE[0].slice();if(JOB.kind==="D")A[1].tgt=PURGE[1].slice();
+        clog("<span class='hl'>PRIME</span>: to purge station · heating to target");}
+      break;
+    case "PRIMING":
+      var hot=A[0].temp>200&&(JOB.kind!=="D"||A[1].temp>200);
+      var there=near(A[0].tcp,PURGE[0])&&(JOB.kind!=="D"||near(A[1].tcp,PURGE[1]));
+      if(hot&&there){S.primeT+=dt;A[0].e=2.5;if(JOB.kind==="D")A[1].e=2.5;
+        if(S.primeT>2.5){A[0].e=0;A[1].e=0;
+          var p0=rowPos(0);A[0].tgt=p0.a0.slice();if(p0.a1)A[1].tgt=p0.a1.slice();
+          setPh("APPROACH");clog("primed 5 mm · moving to first toolpath point");}}
+      break;
+    case "APPROACH":
+      var tgtRow=rowPos(Math.min(S.row,JOB.n-1));
+      A[0].tgt=tgtRow.a0.slice();if(tgtRow.a1)A[1].tgt=tgtRow.a1.slice();
+      if(near(A[0].tcp,tgtRow.a0)&&(!tgtRow.a1||near(A[1].tcp,tgtRow.a1))){
+        setPh("PRINTING");clog("<span class='okk'>PRINT</span>: streaming rows from "+S.row);}
+      break;
+    case "PRINTING":
+      S.jobT+=dt*OV.s;
+      while(S.row<JOB.n&&rowPos(S.row).t<=S.jobT){
+        var r=rowPos(S.row);
+        A[0].tgt=r.a0.slice();if(r.a1)A[1].tgt=r.a1.slice();
+        S.rot.omT=r.om*OV.s;
+        A[0].e=r.e0*OV.f;A[1].e=r.e1*OV.f;
+        S.dep=Math.max(S.dep,r.a0[2]);
+        S.row++;
+      }
+      if(S.row>=JOB.n){setPh("RETRACTING");S.retrT=0;S.rot.omT=0;
+        clog("<span class='hl'>RETRACT</span>: 2 mm pullback · z lift · park");}
+      break;
+    case "PAUSED": break;
+    case "RETRACTING":
+      S.retrT+=dt;
+      if(S.retrT<1.2){A[0].e=-2;A[1].e=JOB.kind==="D"?-2:0;}
+      else if(S.retrT<1.4){A[0].e=0;A[1].e=0;A[0].tgt[2]+=5*dt;A[1].tgt[2]+=5*dt;}
+      else {A[0].tgt=PARK[0].slice();A[1].tgt=PARK[1].slice();
+        if(near(A[0].tcp,PARK[0])&&near(A[1].tcp,PARK[1])){setPh("DONE");
+          clog("<span class='okk'>DONE</span> · part complete at z "+S.dep.toFixed(2)+" mm · nozzles parked");}}
+      break;
+  }
+  // progress rail
+  var pc=JOB&&JOB.n?100*S.row/JOB.n:0;
+  $("pbar").style.width=pc.toFixed(1)+"%";
+  var eta=(S.ph==="PRINTING"&&JOB)?((JOB.dur-S.jobT)/Math.max(0.01,OV.s)):null;
+  $("roJ").textContent="row "+S.row+" / "+(JOB?JOB.n:0)+" · "+pc.toFixed(0)+"% · ETA "+(eta!==null&&eta>0?eta.toFixed(0)+" s":"—");
+}
+
+// ---------- estop ----------
+$("btnEstop").onclick=function(){
+  if(!S.est){S.est=true;S.estFrom=S.ph;S.rot.omT=0;setPh("ESTOP");$("roPh").textContent="ESTOP";
+    $("btnEstop").textContent="RESET";clog("<span class='er'>EMERGENCY STOP — all drives inhibited</span>");
+  } else {S.est=false;$("btnEstop").textContent="E-STOP";
+    if(S.estFrom==="PRINTING"||S.estFrom==="APPROACH"||S.estFrom==="PAUSED"){
+      S.held=rowPos(Math.min(S.row,Math.max(0,JOB.n-1)));setPh("PAUSED");
+      clog("<span class='okk'>reset</span> · job held at row "+S.row+" — Resume to re-home approach, Cancel to abandon");
+    } else {setPh("IDLE");clog("<span class='okk'>reset</span> · idle");}
+  }
+};
+
+// ---------- manual ----------
+$("armSel").addEventListener("click",function(e){var b=e.target.closest("button");if(!b)return;
+  S.sel=+b.dataset.a;var bs=$("armSel").querySelectorAll("button");
+  bs[0].classList.toggle("on",S.sel===0);bs[1].classList.toggle("on",S.sel===1);});
+document.querySelectorAll(".jog button,[data-j]").forEach(function(b){if(!b.dataset.j)return;
+  b.addEventListener("click",function(){
+    if(S.est)return clog("<span class='er'>!! estop active</span>");
+    if(S.ph==="PRINTING"||S.ph==="APPROACH")return clog("<span class='er'>!! job running — Pause first, or use the live overrides</span>");
+    var st=+$("step").value,a=S.arm[S.sel],j=b.dataset.j;
+    if(j==="x+")a.tgt[0]+=st; if(j==="x-")a.tgt[0]-=st;
+    if(j==="y+")a.tgt[1]+=st; if(j==="y-")a.tgt[1]-=st;
+    if(j==="z+")a.tgt[2]+=st; if(j==="z-")a.tgt[2]=Math.max(0,a.tgt[2]-st);
+    clog("jog A"+S.sel+" "+j+st+" <span class='okk'>ok</span>");});});
+$("rJp").onclick=function(){if(!S.est&&S.ph!=="PRINTING"){S.rot.ang=(S.rot.ang+15)%360;clog("plate +15° ok");}else clog("<span class='er'>!! pause first</span>");};
+$("rJm").onclick=function(){if(!S.est&&S.ph!=="PRINTING"){S.rot.ang=(S.rot.ang+345)%360;clog("plate −15° ok");}else clog("<span class='er'>!! pause first</span>");};
+
+// overrides
+$("ovS").addEventListener("input",function(){OV.s=$("ovS").value/100;$("ovSv").textContent=$("ovS").value+"%";});
+$("ovF").addEventListener("input",function(){OV.f=$("ovF").value/100;$("ovFv").textContent=$("ovF").value+"%";});
+$("ovT").addEventListener("change",function(){OV.t=+$("ovT").value||0;clog("temp offset "+(OV.t>=0?"+":"")+OV.t+"°C <span class='okk'>ok</span>");});
+
+// console
+$("cin").addEventListener("keydown",function(e){
+  if(e.key!=="Enter")return;var c=$("cin").value.trim();$("cin").value="";
+  if(!c)return;clog("&gt; <b>"+c.replace(/</g,"&lt;")+"</b>");exec(c.toUpperCase());});
+function exec(c){
+  if(c==="HELP")return clog("START · PAUSE · RESUME · CANCEL · ESTOP · RESET\nROT S&lt;rev/s&gt; (paused) · M104 T0|T1 S&lt;temp&gt; · SPEED &lt;%&gt; · FLOW &lt;%&gt;");
+  if(c==="ESTOP"&&!S.est)return $("btnEstop").onclick();
+  if(c==="RESET"&&S.est)return $("btnEstop").onclick();
+  if(S.est)return clog("<span class='er'>!! estop active — RESET first</span>");
+  if(c==="START")return startJob();
+  if(c==="PAUSE"&&(S.ph==="PRINTING"||S.ph==="APPROACH"))return $("btnPause").onclick();
+  if(c==="RESUME"&&S.ph==="PAUSED")return $("btnPause").onclick();
+  if(c==="CANCEL")return cancelJob("console");
+  var m;
+  if((m=c.match(/^SPEED\s+(\d+)/))){$("ovS").value=m[1];OV.s=m[1]/100;$("ovSv").textContent=m[1]+"%";return clog("ok");}
+  if((m=c.match(/^FLOW\s+(\d+)/))){$("ovF").value=m[1];OV.f=m[1]/100;$("ovFv").textContent=m[1]+"%";return clog("ok");}
+  if((m=c.match(/^M104\s+T([01])\s+S([\d.]+)/))){S.arm[+m[1]].tt=+m[2];return clog("ok");}
+  if((m=c.match(/^ROT\s+S(-?[\d.]+)/))){if(S.ph==="PRINTING")return clog("<span class='er'>!! job owns the plate — pause first or use SPEED</span>");S.rot.omT=+m[1];return clog("ok");}
+  clog("<span class='er'>?? unknown — HELP lists the grammar</span>");
+}
+
+// ---------- drawing ----------
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+function fit(cv){var w=cv.clientWidth,h=cv.clientHeight,dpr=window.devicePixelRatio||1;
+  if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
+  var c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);return c;}
+function rrect(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+function tag(c,px,py,tx,ty,lines,col,C){
+  var fw=0;c.font="10.5px "+css("--mono");
+  for(var i=0;i<lines.length;i++)fw=Math.max(fw,c.measureText(lines[i]).width);
+  var w=fw+14,h=lines.length*14+8;
+  c.strokeStyle=C.line;c.beginPath();c.moveTo(px,py);c.lineTo(tx+(tx>px?0:w),ty+h/2);c.stroke();
+  c.fillStyle=C.panel;rrect(c,tx,ty,w,h,4);c.fill();c.strokeStyle=col;c.stroke();
+  c.fillStyle=C.ink;
+  for(var j=0;j<lines.length;j++)c.fillText(lines[j],tx+7,ty+15+j*14);
+}
+function draw(){
+  var cv=$("cv"),c=fit(cv),W=cv.clientWidth,H=cv.clientHeight;c.clearRect(0,0,W,H);
+  var C={line:css("--line"),mut:css("--mut"),ink:css("--ink"),a0:css("--a0"),a1:css("--a1"),teal:css("--teal"),bad:css("--bad"),ok:css("--ok"),panel:css("--panel"),p2:css("--panel2")};
+  var insetH=100,topH=H-insetH,s=Math.min(W/1150,topH/760),ox=W/2,oy=topH/2+6;
+  function P(x,y){return [ox+x*s,oy+y*s];}
+  var t0=P(-540,-330);c.strokeStyle=C.line;rrect(c,t0[0],t0[1],1080*s,660*s,8*s);c.stroke();
+  var Rd=170;c.beginPath();c.arc(ox,oy,Rd*s,0,TAU);c.stroke();
+  // deposited progress ring
+  if(JOB&&S.row>0){var frac=S.row/JOB.n;
+    c.strokeStyle=C.ok;c.lineWidth=5;c.beginPath();c.arc(ox,oy,JOB.r*s*2.4,-Math.PI/2,-Math.PI/2+frac*TAU);c.stroke();c.lineWidth=1;}
+  c.setLineDash([3,4]);c.strokeStyle=C.line;c.beginPath();c.arc(ox,oy,(JOB?JOB.r:30)*s*2.4,0,TAU);c.stroke();c.setLineDash([]);
+  var ang=-S.rot.ang*Math.PI/180;
+  c.strokeStyle=S.rot.om<-1e-4?C.bad:(Math.abs(S.rot.om)<1e-4?C.mut:C.teal);c.lineWidth=2;
+  c.beginPath();c.moveTo(ox,oy);c.lineTo(ox+Math.cos(ang)*Rd*s,oy+Math.sin(ang)*Rd*s);c.stroke();c.lineWidth=1;
+  // purge stations
+  [PURGE[0],PURGE[1]].forEach(function(p,i){var q=P(p[0]*2.4,-p[1]*2.4);
+    c.strokeStyle=C.line;rrect(c,q[0]-8,q[1]-8,16,16,3);c.stroke();});
+  var L1=300,L2=260,bases=[[-520,150],[520,-150]];
+  for(var i=0;i<2;i++){
+    var a=S.arm[i],col=i?C.a1:C.a0,bx=bases[i][0],by=bases[i][1];
+    var tx=a.tcp[0]*2.4,ty=-a.tcp[1]*2.4;
+    var dx=tx-bx,dy=ty-by,d=Math.min(Math.hypot(dx,dy),L1+L2-2);
+    var base=Math.atan2(dy,dx),cosE=Math.max(-1,Math.min(1,(d*d-L1*L1-L2*L2)/(2*L1*L2)));
+    var elb=Math.acos(cosE)*(i?-1:1),alpha=Math.atan2(L2*Math.sin(elb),L1+L2*Math.cos(elb)),j1=base-alpha;
+    var pB=P(bx,by),pE=P(bx+Math.cos(j1)*L1,by+Math.sin(j1)*L1),
+        pT=P(bx+Math.cos(j1)*L1+Math.cos(j1+elb)*L2,by+Math.sin(j1)*L1+Math.sin(j1+elb)*L2);
+    c.strokeStyle=col;c.lineWidth=7*s+2;c.lineCap="round";
+    c.beginPath();c.moveTo(pB[0],pB[1]);c.lineTo(pE[0],pE[1]);c.lineTo(pT[0],pT[1]);c.stroke();
+    c.lineWidth=1;c.lineCap="butt";
+    c.fillStyle=C.p2;c.strokeStyle=col;rrect(c,pB[0]-10,pB[1]-10,20,20,4);c.fill();c.stroke();
+    c.beginPath();c.arc(pE[0],pE[1],5,0,TAU);c.fillStyle=col;c.fill();
+    c.beginPath();c.arc(pT[0],pT[1],6,0,TAU);c.fillStyle=a.e>1e-3?col:(a.e<-1e-3?C.bad:C.mut);c.fill();
+    var deg=function(r2){return (r2*180/Math.PI).toFixed(1);};
+    tag(c,pB[0],pB[1],pB[0]+(i?-168:24),pB[1]-56,
+      ["ARM "+i+"  J1 "+deg(j1)+"°  J2 "+deg(elb)+"°",
+       "TCP "+a.tcp[0].toFixed(1)+", "+a.tcp[1].toFixed(1)+", "+a.tcp[2].toFixed(2)],col,C);
+    tag(c,pT[0],pT[1],pT[0]+(i?-182:16),pT[1]+(i?26:-62),
+      ["N"+i+" "+a.temp.toFixed(0)+"°C→"+(a.tt+OV.t).toFixed(0)+"  e "+a.e.toFixed(2)],col,C);
+  }
+  tag(c,ox,oy,ox+30,oy+Rd*s+8,
+    ["ROTARY θ "+S.rot.ang.toFixed(1)+"°  ω "+S.rot.om.toFixed(3)],C.teal,C);
+  // elevation
+  var iy=topH+6;c.strokeStyle=C.line;c.beginPath();c.moveTo(12,iy);c.lineTo(W-12,iy);c.stroke();
+  c.fillStyle=C.mut;c.font="10px "+css("--mono");c.fillText("front elevation",16,iy+13);
+  var py=H-12,zs=(insetH-30)/18;
+  c.strokeStyle=C.line;c.beginPath();c.moveTo(W*0.25,py);c.lineTo(W*0.75,py);c.stroke();
+  if(JOB&&S.dep>0){c.strokeStyle=C.ok;c.lineWidth=3;
+    c.beginPath();c.moveTo(W*0.44,py);c.lineTo(W*0.44,py-S.dep*zs);c.moveTo(W*0.56,py);c.lineTo(W*0.56,py-S.dep*zs);c.stroke();c.lineWidth=1;}
+  for(var n=0;n<2;n++){var a2=S.arm[n],nx=W*(n?0.62:0.38),col2=n?C.a1:C.a0,nzY=py-a2.tcp[2]*zs;
+    c.strokeStyle=col2;c.beginPath();c.moveTo(nx,py-insetH+26);c.lineTo(nx,nzY);c.stroke();
+    c.fillStyle=a2.e>1e-3?col2:C.mut;c.beginPath();c.moveTo(nx-4,nzY-7);c.lineTo(nx+4,nzY-7);c.lineTo(nx,nzY);c.closePath();c.fill();
+    c.fillStyle=C.ink;c.font="10.5px "+css("--mono");c.fillText("z"+n+" "+a2.tcp[2].toFixed(2),nx+8,nzY-2);}
+  if(S.est){c.fillStyle=C.bad;c.font="700 15px "+css("--disp");c.fillText("EMERGENCY STOP — motion inhibited · RESET to recover the job",16,32);}
+}
+})();
+</script>
