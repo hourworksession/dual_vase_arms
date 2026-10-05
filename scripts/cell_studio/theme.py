@@ -29,6 +29,9 @@ KIND_COLOR = {            # slicer path kinds, tuned for a dark canvas
 FONT_UI = '"Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif'
 FONT_MONO = '"Cascadia Mono", "Consolas", "JetBrains Mono", "DejaVu Sans Mono", monospace'
 
+import os as _os
+_ASSETS = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "assets").replace("\\", "/")
+
 QSS = f"""
 * {{ font-family: {FONT_UI}; font-size: 13px; color: {TEXT}; }}
 QMainWindow, QWidget#Root {{ background: {BG}; }}
@@ -119,7 +122,13 @@ QDoubleSpinBox, QSpinBox, QLineEdit, QComboBox {{
 QDoubleSpinBox:focus, QSpinBox:focus, QLineEdit:focus, QComboBox:focus {{ border-color: {ACCENT}; }}
 QDoubleSpinBox:disabled, QSpinBox:disabled, QLineEdit:disabled {{ color: {FAINT}; }}
 QLineEdit[readOnly="true"] {{ color: {ACCENT}; }}
-QDoubleSpinBox::up-button, QSpinBox::up-button, QDoubleSpinBox::down-button, QSpinBox::down-button {{ width: 16px; border: none; }}
+QDoubleSpinBox::up-button, QSpinBox::up-button, QDoubleSpinBox::down-button, QSpinBox::down-button {{
+    width: 18px; border: none; border-left: 1px solid {BORDER}; background: {RAISED}; subcontrol-origin: border; }}
+QDoubleSpinBox::up-button, QSpinBox::up-button {{ subcontrol-position: top right; border-top-right-radius: 6px; }}
+QDoubleSpinBox::down-button, QSpinBox::down-button {{ subcontrol-position: bottom right; border-bottom-right-radius: 6px; }}
+QDoubleSpinBox::up-button:hover, QSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover, QSpinBox::down-button:hover {{ background: {BORDER_STRONG}; }}
+QDoubleSpinBox::up-arrow, QSpinBox::up-arrow {{ image: url({_ASSETS}/arrow_up.svg); width: 10px; height: 6px; }}
+QDoubleSpinBox::down-arrow, QSpinBox::down-arrow {{ image: url({_ASSETS}/arrow_down.svg); width: 10px; height: 6px; }}
 QComboBox::drop-down {{ border: none; width: 20px; }}
 QComboBox QAbstractItemView {{ background: {RAISED}; border: 1px solid {BORDER_STRONG}; selection-background-color: {ACCENT_DIM}; }}
 

@@ -42,8 +42,11 @@ class PlanView(QWidget):
         self.travels.setChecked(True)
         self.travels.toggled.connect(lambda _: self.canvas.update())
         self.lbl = label("", "Muted")
-        v.addWidget(hrow(label("to layer"), self.slider, label("show"), self.span, label("layers"),
-                         self.world, self.travels, self.lbl, spacing=10))
+        row = hrow(label("to layer"), self.slider, label("show"), self.span, label("layers"),
+                   self.world, self.travels, self.lbl, spacing=10)
+        row.layout().setStretch(1, 1)                     # the slider takes the spare width
+        self.slider.setMinimumWidth(160)
+        v.addWidget(row)
 
     def set_program(self, prog):
         self.prog = prog
@@ -159,6 +162,7 @@ class _Canvas(QWidget):
                 tcol = QColor("#9aa4b1")
                 tcol.setAlpha(max(40, alpha // 2))
                 x, y, ext, ok, z = xs[a], ys[a], d["ext"][a], d["ok"][a], d["z"][a]
+                wx, wy = d["wx"][a], d["wy"][a]
                 path_e, path_t = QPainterPath(), QPainterPath()
                 for i in idx:
                     i = int(i)
@@ -171,6 +175,7 @@ class _Canvas(QWidget):
                         counts[a] = counts.get(a, 0) + 1
                         zlo, zhi = min(zlo, z[i]), max(zhi, z[i])
                     elif (v.travels.isChecked() and abs(z[i] - z[i - 1]) < 50
+                          and math.hypot(wx[i] - wx[i - 1], wy[i] - wy[i - 1]) > 0.05      # the nozzle moved
                           and math.hypot(x[i], y[i]) <= d["r"] + 5 and math.hypot(x[i - 1], y[i - 1]) <= d["r"] + 5):
                         path_t.moveTo(a0)
                         path_t.lineTo(a1)
@@ -183,6 +188,7 @@ class _Canvas(QWidget):
         L = shown[-1]
         idx = np.nonzero(lay == L)[0]
         p.setFont(QFont(p.font().family(), 8))
+        placed = []
         for a in range(d["arms"]):
             x, y, ext, ok = xs[a], ys[a], d["ext"][a], d["ok"][a]
             num, last_end = 0, -10
@@ -190,9 +196,11 @@ class _Canvas(QWidget):
                 i = int(i)
                 if ext[i] and ok[i] and (i - last_end > 1) and (not ext[i - 1] if i > 0 else True):
                     num += 1
-                    if num <= 40:
+                    px, py = X(x[i]) + 4, Y(y[i]) - 4
+                    if num <= 60 and all(abs(px - qx) > 14 or abs(py - qy) > 12 for qx, qy in placed):
                         p.setPen(QColor(theme.RIGHT if a == 0 else theme.LEFT))
-                        p.drawText(QPointF(X(x[i]) + 4, Y(y[i]) - 4), str(num))
+                        p.drawText(QPointF(px, py), str(num))
+                        placed.append((px, py))
                 if ext[i]:
                     last_end = i
             # nozzle now
@@ -211,5 +219,5 @@ class _Canvas(QWidget):
         p.drawText(QPointF(16, 46), ("world frame (what the nozzles trace while the disc turns)" if world
                                      else "plate frame (what lands on the part)")
                    + f" · right {counts.get(0, 0)} moves · left {counts.get(1, 0)} moves"
-                   + " · numbers = print order on the newest layer · dashed = travel (parking moves hidden)")
+                   + " · numbers = print order on the newest layer · dashed = travel (disc turns and parking hidden)")
         v.lbl.setText(f"layer {last}")
