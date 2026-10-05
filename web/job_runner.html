@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Cell Job Runner</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -364,18 +365,33 @@ function fit(cv){var w=cv.clientWidth,h=cv.clientHeight,dpr=window.devicePixelRa
   if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
   var c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);return c;}
 function rrect(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
-var TAGR=[],TW=0,TH=0;
+var TAGR=[],OBS=[],TW=0,TH=0;
+function segHit(x,y,w,h,s){
+  var pad=4,rx=x-pad,ry=y-pad,rw=w+2*pad,rh=h+2*pad;
+  if(Math.max(s.x1,s.x2)<rx||Math.min(s.x1,s.x2)>rx+rw||Math.max(s.y1,s.y2)<ry||Math.min(s.y1,s.y2)>ry+rh)return false;
+  function inside(px,py){return px>=rx&&px<=rx+rw&&py>=ry&&py<=ry+rh;}
+  if(inside(s.x1,s.y1)||inside(s.x2,s.y2))return true;
+  function inter(ax,ay,bx,by,cx,cy,dx,dy){
+    var d=(bx-ax)*(dy-cy)-(by-ay)*(dx-cx); if(!d)return false;
+    var t=((cx-ax)*(dy-cy)-(cy-ay)*(dx-cx))/d,u=((cx-ax)*(by-ay)-(cy-ay)*(bx-ax))/d;
+    return t>=0&&t<=1&&u>=0&&u<=1;}
+  return inter(s.x1,s.y1,s.x2,s.y2,rx,ry,rx+rw,ry)||inter(s.x1,s.y1,s.x2,s.y2,rx+rw,ry,rx+rw,ry+rh)||
+         inter(s.x1,s.y1,s.x2,s.y2,rx,ry+rh,rx+rw,ry+rh)||inter(s.x1,s.y1,s.x2,s.y2,rx,ry,rx,ry+rh);
+}
 function tag(c,px,py,tx,ty,lines,col,C){
   var fw=0;c.font="10.5px "+css("--mono");
   for(var i=0;i<lines.length;i++)fw=Math.max(fw,c.measureText(lines[i]).width);
   var w=fw+14,h=lines.length*14+8;
   tx=Math.max(4,Math.min(TW-w-4,tx)); ty=Math.max(4,Math.min(TH-h-4,ty));
-  for(var tr=0;tr<12;tr++){var hit=null;
-    for(var q=0;q<TAGR.length;q++){var r2=TAGR[q];
-      if(tx<r2.x+r2.w+4&&tx+w+4>r2.x&&ty<r2.y+r2.h+4&&ty+h+4>r2.y){hit=r2;break;}}
-    if(!hit)break;
-    ty=hit.y+hit.h+6;
-    if(ty+h+4>TH)ty=Math.max(4,hit.y-h-6);}
+  for(var tr=0;tr<16;tr++){
+    var bad=false;
+    for(var q=0;q<TAGR.length&&!bad;q++){var r2=TAGR[q];
+      if(tx<r2.x+r2.w+4&&tx+w+4>r2.x&&ty<r2.y+r2.h+4&&ty+h+4>r2.y)bad=true;}
+    for(var q2=0;q2<OBS.length&&!bad;q2++)if(segHit(tx,ty,w,h,OBS[q2]))bad=true;
+    if(!bad)break;
+    ty+=22;
+    if(ty+h+4>TH){ty=4+((tr*17)%44);tx=Math.max(4,Math.min(TW-w-4,tx+(tr%2?-70:70)));}
+  }
   TAGR.push({x:tx,y:ty,w:w,h:h});
   c.strokeStyle=C.line;c.beginPath();c.moveTo(px,py);c.lineTo(tx+(tx>px?0:w),ty+h/2);c.stroke();
   c.fillStyle=C.panel;rrect(c,tx,ty,w,h,4);c.fill();c.strokeStyle=col;c.stroke();
@@ -386,7 +402,7 @@ function draw(){
   var cv=$("cv"),c=fit(cv),W=cv.clientWidth,H=cv.clientHeight;c.clearRect(0,0,W,H);
   var C={line:css("--line"),mut:css("--mut"),ink:css("--ink"),a0:css("--a0"),a1:css("--a1"),teal:css("--teal"),bad:css("--bad"),ok:css("--ok"),panel:css("--panel"),p2:css("--panel2")};
   var insetH=100,topH=H-insetH,s=Math.min(W/1150,topH/760),ox=W/2,oy=topH/2+6;
-  TAGR.length=0;TW=W;TH=topH-4;
+  TAGR.length=0;OBS.length=0;TW=W;TH=topH-4;
   function P(x,y){return [ox+x*s,oy+y*s];}
   var t0=P(-540,-330);c.strokeStyle=C.line;rrect(c,t0[0],t0[1],1080*s,660*s,8*s);c.stroke();
   var Rd=170;c.beginPath();c.arc(ox,oy,Rd*s,0,TAU);c.stroke();
@@ -400,7 +416,7 @@ function draw(){
   // purge stations
   [PURGE[0],PURGE[1]].forEach(function(p,i){var q=P(p[0]*2.4,-p[1]*2.4);
     c.strokeStyle=C.line;rrect(c,q[0]-8,q[1]-8,16,16,3);c.stroke();});
-  var L1=300,L2=260,bases=[[-520,150],[520,-150]];
+  var L1=300,L2=260,bases=[[-520,150],[520,-150]],AR=[];
   for(var i=0;i<2;i++){
     var a=S.arm[i],col=i?C.a1:C.a0,bx=bases[i][0],by=bases[i][1];
     var tx=a.tcp[0]*2.4,ty=-a.tcp[1]*2.4;
@@ -415,12 +431,16 @@ function draw(){
     c.fillStyle=C.p2;c.strokeStyle=col;rrect(c,pB[0]-10,pB[1]-10,20,20,4);c.fill();c.stroke();
     c.beginPath();c.arc(pE[0],pE[1],5,0,TAU);c.fillStyle=col;c.fill();
     c.beginPath();c.arc(pT[0],pT[1],6,0,TAU);c.fillStyle=a.e>1e-3?col:(a.e<-1e-3?C.bad:C.mut);c.fill();
-    var deg=function(r2){return (r2*180/Math.PI).toFixed(1);};
-    tag(c,pB[0],pB[1],pB[0]+(i?-168:24),pB[1]-56,
-      ["ARM "+i+"  J1 "+deg(j1)+"°  J2 "+deg(elb)+"°",
-       "TCP "+a.tcp[0].toFixed(1)+", "+a.tcp[1].toFixed(1)+", "+a.tcp[2].toFixed(2)],col,C);
-    tag(c,pT[0],pT[1],pT[0]+(i?-182:16),pT[1]+(i?26:-62),
-      ["N"+i+" "+a.temp.toFixed(0)+"°C→"+(a.tt+OV.t).toFixed(0)+"  e "+a.e.toFixed(2)],col,C);
+    OBS.push({x1:pB[0],y1:pB[1],x2:pE[0],y2:pE[1]},{x1:pE[0],y1:pE[1],x2:pT[0],y2:pT[1]});
+    AR.push({a:a,col:col,pB:pB,pT:pT,j1:j1,elb:elb,ix:i});
+  }
+  var deg=function(r2){return (r2*180/Math.PI).toFixed(1);};
+  for(var i2=0;i2<2;i2++){var G=AR[i2],ga=G.a,gi=G.ix;
+    tag(c,G.pB[0],G.pB[1],G.pB[0]+(gi?-168:24),G.pB[1]-56,
+      ["ARM "+gi+"  J1 "+deg(G.j1)+"°  J2 "+deg(G.elb)+"°",
+       "TCP "+ga.tcp[0].toFixed(1)+", "+ga.tcp[1].toFixed(1)+", "+ga.tcp[2].toFixed(2)],G.col,C);
+    tag(c,G.pT[0],G.pT[1],G.pT[0]+(gi?-182:16),G.pT[1]+(gi?26:-62),
+      ["N"+gi+" "+ga.temp.toFixed(0)+"°C→"+(ga.tt+OV.t).toFixed(0)+"  e "+ga.e.toFixed(2)],G.col,C);
   }
   tag(c,ox,oy,ox+30,oy+Rd*s+8,
     ["ROTARY θ "+S.rot.ang.toFixed(1)+"°  ω "+S.rot.om.toFixed(3)],C.teal,C);
