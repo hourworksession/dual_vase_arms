@@ -143,10 +143,14 @@ var TAU=Math.PI*2;
 // ---------- job data ----------
 var JOB=null; // {kind:"D"|"C", rows:flat, stride, n, dur, r, name}
 function sampleJob(){
-  var r=30,h=6,p=0.3,v=30,om=v/(TAU*r),f=20,dur=(h/p)/om,n=Math.floor(dur*f),rows=[];
-  for(var i=0;i<n;i++){var t=i/f,z=Math.min(h,p*om*t* (TAU/TAU)*1*om*0+ p*(om*t)), e=2.99;
-    z=Math.min(h,p*om*t); // z = pitch * revs
-    rows.push(t,r,0,z,-r,0,Math.min(h,z+p/2),om,e,e);}
+  // structure matches dual_spiral_demo: half circle flat, dual start helix (z0 = z1), half circle flat
+  var r=30,h=6,p=0.3,v=30,om=v/(TAU*r),f=20,e=2.99,rows=[];
+  var thTotal=Math.PI + TAU*(h-p)/(2*p) + Math.PI;
+  var dur=thTotal/(om*TAU), n=Math.floor(dur*f);
+  for(var i=0;i<n;i++){var t=i/f,th=om*TAU*t,z;
+    if(th<Math.PI)z=p;
+    else{z=Math.min(h,p+2*p*(th-Math.PI)/TAU);}
+    rows.push(t,r,0,z,-r,0,z,om,e,e);}
   JOB={kind:"D",rows:rows,stride:10,n:n,dur:dur,r:r,name:"sample_D (built-in)"};
   $("jobMeta").textContent="loaded: sample_D (built-in) · dual · "+n.toLocaleString()+" rows · "+dur.toFixed(0)+" s";
 }
@@ -360,10 +364,19 @@ function fit(cv){var w=cv.clientWidth,h=cv.clientHeight,dpr=window.devicePixelRa
   if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
   var c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);return c;}
 function rrect(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+var TAGR=[],TW=0,TH=0;
 function tag(c,px,py,tx,ty,lines,col,C){
   var fw=0;c.font="10.5px "+css("--mono");
   for(var i=0;i<lines.length;i++)fw=Math.max(fw,c.measureText(lines[i]).width);
   var w=fw+14,h=lines.length*14+8;
+  tx=Math.max(4,Math.min(TW-w-4,tx)); ty=Math.max(4,Math.min(TH-h-4,ty));
+  for(var tr=0;tr<12;tr++){var hit=null;
+    for(var q=0;q<TAGR.length;q++){var r2=TAGR[q];
+      if(tx<r2.x+r2.w+4&&tx+w+4>r2.x&&ty<r2.y+r2.h+4&&ty+h+4>r2.y){hit=r2;break;}}
+    if(!hit)break;
+    ty=hit.y+hit.h+6;
+    if(ty+h+4>TH)ty=Math.max(4,hit.y-h-6);}
+  TAGR.push({x:tx,y:ty,w:w,h:h});
   c.strokeStyle=C.line;c.beginPath();c.moveTo(px,py);c.lineTo(tx+(tx>px?0:w),ty+h/2);c.stroke();
   c.fillStyle=C.panel;rrect(c,tx,ty,w,h,4);c.fill();c.strokeStyle=col;c.stroke();
   c.fillStyle=C.ink;
@@ -373,6 +386,7 @@ function draw(){
   var cv=$("cv"),c=fit(cv),W=cv.clientWidth,H=cv.clientHeight;c.clearRect(0,0,W,H);
   var C={line:css("--line"),mut:css("--mut"),ink:css("--ink"),a0:css("--a0"),a1:css("--a1"),teal:css("--teal"),bad:css("--bad"),ok:css("--ok"),panel:css("--panel"),p2:css("--panel2")};
   var insetH=100,topH=H-insetH,s=Math.min(W/1150,topH/760),ox=W/2,oy=topH/2+6;
+  TAGR.length=0;TW=W;TH=topH-4;
   function P(x,y){return [ox+x*s,oy+y*s];}
   var t0=P(-540,-330);c.strokeStyle=C.line;rrect(c,t0[0],t0[1],1080*s,660*s,8*s);c.stroke();
   var Rd=170;c.beginPath();c.arc(ox,oy,Rd*s,0,TAU);c.stroke();

@@ -179,6 +179,7 @@ var spd=10;
 var S;
 function freshState(){
   return {t:0,st:"PRINT",om:0,omT:0,th:0,thDep:0,z:0,started:false,done:false,
+    bphase:"LEADIN",thTop:0,
     revDone:false,thStop:0,revTarget:0,dwell:0,ticks:0,
     A:[],B:[],C:[],D:[],refines:[],omTrace:[],lastDrawFeed:0,aSince:0,soloLog:{}};
 }
@@ -194,12 +195,12 @@ function seedFeeds(){
   log("fd1","mesh ok · translate centre (−"+model.off[0]+", −"+model.off[1]+") → origin · axis z");
   log("fd1","profile: r_out "+model.rOut.toFixed(3)+" · r_in "+model.rIn.toFixed(3)+" · wall "+model.wall.toFixed(3)+" mm");
   log("fd1","basis vote: <span class='hl'>polar</span> (1 rectangle beats "+Math.round(P.h/P.p)+" circle pairs)");
-  log("fd1","helix: r "+P.r.toFixed(1)+" · pitch "+P.p+" · "+(P.h/P.p).toFixed(0)+" rev");
+  log("fd1","plan: ½ circle flat (2 extruders) → dual start helix, z0 = z1, "+(2*P.p).toFixed(1)+" mm/rev → ½ circle flat · "+(1+(P.h-P.p)/(2*P.p)).toFixed(1)+" rev");
   log("fd2","&omega; cruise = v / 2&pi;r = <b>"+omCruise().toFixed(4)+"</b> rev/s");
   log("fd2","accel limit "+P.a+" rev/s² · revisit "+(P.rev?"armed at z="+(0.4*P.h).toFixed(1)+" mm":"off"));
   log("fd3","bead 1.2 × 0.2 · e = "+KE.toFixed(4)+" × v_s = <b>"+(KE*P.v).toFixed(2)+"</b> mm/s");
   log("fd3","intersection tolerance ±0.005 mm · refine gain 0.6");
-  log("fd4","nozzle 0 @ 0° · nozzle 1 @ 180°, z + p/2 interweave");
+  log("fd4","nozzle 0 @ 0° · nozzle 1 @ 180°, same z (dual start helix, as dual_spiral_demo)");
   log("fd4","line format: x0, y0, z0, x1, y1, z1, rotary(rev/s), e0, e1");
 }
 function omCruise(){return P.v/(TAU*P.r);}
@@ -210,7 +211,7 @@ function readParams(){
   P.rev=$("pRev").value==="1"; P.ho=$("pHo").value==="1";
 }
 function estimate(){
-  var revs=P.h/P.p, dur=revs/omCruise()+(P.rev?20:0);
+  var revs=1+(P.h-P.p)/(2*P.p), dur=revs/omCruise()+(P.rev?20:0);
   $("estNote").textContent="≈ "+revs.toFixed(0)+" rev · "+dur.toFixed(0)+" s print · ≈ "+Math.round(dur*P.f).toLocaleString()+" points at "+P.f+" pts/s";
   $("fVal").textContent=P.f+" pts/s";
 }
@@ -228,7 +229,7 @@ function step(){
   switch(S.st){
     case "PRINT":
       S.omT=omCruise(); depositing=S.om>1e-5;
-      if(P.rev&&!S.revDone&&S.z>=0.4*P.h){S.st="DECEL";S.omT=0;log("fd2","<span class='hl'>revisit</span>: decelerating for patch-point return");}
+      if(P.rev&&!S.revDone&&S.bphase==="HELIX"&&S.z>=0.4*P.h){S.st="DECEL";S.omT=0;log("fd2","<span class='hl'>revisit</span>: decelerating for patch-point return");}
       break;
     case "DECEL":
       S.omT=0; depositing=S.om>1e-5;
@@ -256,8 +257,20 @@ function step(){
   }
 
   if(depositing){
-    S.thDep=S.th; S.z=P.p*S.thDep/TAU;
-    if(S.z>=P.h){S.z=P.h;S.st="ENDSTOP";S.omT=0;}
+    S.thDep=S.th;
+    if(S.bphase==="LEADIN"){
+      S.z=P.p;
+      if(S.thDep>=Math.PI){S.bphase="HELIX";
+        log("fd1","<span class='hl'>lead-in done</span>: base ring closed by both halves · helix begins");}
+    } else if(S.bphase==="HELIX"){
+      S.z=P.p+2*P.p*(S.thDep-Math.PI)/TAU;
+      if(S.z>=P.h){S.z=P.h;S.thTop=S.thDep;S.bphase="LEADOUT";
+        log("fd1","<span class='hl'>z target</span> "+P.h.toFixed(1)+" mm · closing half circle, both extruders");}
+    } else if(S.bphase==="LEADOUT"){
+      S.z=P.h;
+      if(S.thDep>=S.thTop+Math.PI){S.st="ENDSTOP";S.omT=0;
+        log("fd1","<span class='okk'>khalas</span> · seam level at base and top");}
+    }
     // dataset A — unmolested geometry
     var x=P.r*Math.cos(S.thDep), y=P.r*Math.sin(S.thDep);
     S.A.push(S.A.length,x,y,S.z);
@@ -272,12 +285,11 @@ function step(){
   var rev=S.thDep/TAU;
   // dual handover schedule (interchangeable demo)
   var e0=eSingle,e1=eSingle;
-  if(P.ho){
-    var z1=Math.min(P.h,S.z+P.p/2);
-    if(rev>=10&&rev<13){e1=0;soloMsg(0);}
-    else if(rev>=25&&rev<28){e0=0;soloMsg(1);}
+  if(P.ho&&S.bphase==="HELIX"){
+    if(rev>=6&&rev<8){e1=0;soloMsg(0);}
+    else if(rev>=14&&rev<16){e0=0;soloMsg(1);}
   }
-  var z1c=Math.min(P.h,S.z+P.p/2);
+  var z1c=S.z;
 
   // dataset B — rotary resolved
   S.B.push(S.t,(S.th/TAU%1)*360,S.om,ST[S.st]||0);
