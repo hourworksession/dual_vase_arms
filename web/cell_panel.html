@@ -191,104 +191,110 @@ function fit(cv){var w=cv.clientWidth,h=cv.clientHeight,dpr=window.devicePixelRa
   if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
   var c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);return c;}
 function rrect(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
-var TAGR=[],OBS=[],TW=0,TH=0;
-function segHit(x,y,w,h,s){
-  var pad=4,rx=x-pad,ry=y-pad,rw=w+2*pad,rh=h+2*pad;
-  if(Math.max(s.x1,s.x2)<rx||Math.min(s.x1,s.x2)>rx+rw||Math.max(s.y1,s.y2)<ry||Math.min(s.y1,s.y2)>ry+rh)return false;
-  function inside(px,py){return px>=rx&&px<=rx+rw&&py>=ry&&py<=ry+rh;}
-  if(inside(s.x1,s.y1)||inside(s.x2,s.y2))return true;
-  function inter(ax,ay,bx,by,cx,cy,dx,dy){
-    var d=(bx-ax)*(dy-cy)-(by-ay)*(dx-cx); if(!d)return false;
-    var t=((cx-ax)*(dy-cy)-(cy-ay)*(dx-cx))/d,u=((cx-ax)*(by-ay)-(cy-ay)*(bx-ax))/d;
-    return t>=0&&t<=1&&u>=0&&u<=1;}
-  return inter(s.x1,s.y1,s.x2,s.y2,rx,ry,rx+rw,ry)||inter(s.x1,s.y1,s.x2,s.y2,rx+rw,ry,rx+rw,ry+rh)||
-         inter(s.x1,s.y1,s.x2,s.y2,rx,ry+rh,rx+rw,ry+rh)||inter(s.x1,s.y1,s.x2,s.y2,rx,ry,rx,ry+rh);
-}
-function tag(c,px,py,tx,ty,lines,col,C){
-  var fw=0;c.font="10.5px "+css("--mono");
-  for(var i=0;i<lines.length;i++)fw=Math.max(fw,c.measureText(lines[i]).width);
-  var w=fw+14,h=lines.length*14+8;
-  tx=Math.max(4,Math.min(TW-w-4,tx)); ty=Math.max(4,Math.min(TH-h-4,ty));
-  for(var tr=0;tr<16;tr++){
-    var bad=false;
-    for(var q=0;q<TAGR.length&&!bad;q++){var r2=TAGR[q];
-      if(tx<r2.x+r2.w+4&&tx+w+4>r2.x&&ty<r2.y+r2.h+4&&ty+h+4>r2.y)bad=true;}
-    for(var q2=0;q2<OBS.length&&!bad;q2++)if(segHit(tx,ty,w,h,OBS[q2]))bad=true;
-    if(!bad)break;
-    ty+=22;
-    if(ty+h+4>TH){ty=4+((tr*17)%44);tx=Math.max(4,Math.min(TW-w-4,tx+(tr%2?-70:70)));}
-  }
-  TAGR.push({x:tx,y:ty,w:w,h:h});
-  c.strokeStyle=C.line;c.beginPath();c.moveTo(px,py);c.lineTo(tx+ (tx>px? 0 : w), ty+h/2);c.stroke();
-  c.fillStyle=C.panel; rrect(c,tx,ty,w,h,4); c.fill(); c.strokeStyle=col; c.stroke();
-  c.fillStyle=C.ink;
-  for(var j=0;j<lines.length;j++)c.fillText(lines[j],tx+7,ty+15+j*14);
+// Static side-elevation scene: detailed machines drawn once, only values change.
+function box(c,C,px,py,ax,ay,title,lines,col){
+  c.font="700 11px "+css("--mono");
+  var w=c.measureText(title).width;
+  c.font="10.5px "+css("--mono");
+  for(var i=0;i<lines.length;i++)w=Math.max(w,c.measureText(lines[i]).width);
+  w+=18; var h=20+lines.length*14;
+  var bx=px-(ax<px?0:0), by=py;
+  // leader from nearest box edge to anchor
+  var ex=ax<bx?bx:(ax>bx+w?bx+w:ax), ey=ay<by?by:(ay>by+h?by+h:ay);
+  c.strokeStyle=C.mut;c.lineWidth=1;c.beginPath();c.moveTo(ex,ey);c.lineTo(ax,ay);c.stroke();
+  c.fillStyle=C.mut;c.beginPath();c.arc(ax,ay,2,0,TAU);c.fill();
+  c.fillStyle=C.panel;rrect(c,bx,by,w,h,3);c.fill();
+  c.strokeStyle=col;c.lineWidth=2;c.stroke();c.lineWidth=1;
+  c.fillStyle=C.ink;c.font="700 11px "+css("--mono");c.fillText(title,bx+9,by+14);
+  c.font="10.5px "+css("--mono");
+  for(var j=0;j<lines.length;j++)c.fillText(lines[j],bx+9,by+28+j*14);
 }
 function draw(){
   var cv=$("cv"),c=fit(cv),W=cv.clientWidth,H=cv.clientHeight;c.clearRect(0,0,W,H);
-  var C={line:css("--line"),mut:css("--mut"),ink:css("--ink"),a0:css("--a0"),a1:css("--a1"),teal:css("--teal"),bad:css("--bad"),panel:css("--panel"),p2:css("--panel2")};
-  var insetH=108, topH=H-insetH;
-  TAGR.length=0;OBS.length=0;TW=W;TH=topH-4;
-  var s=Math.min(W/1150,topH/760), ox=W/2, oy=topH/2+8;
-  function P(x,y){return [ox+x*s, oy+y*s];}
-  // table + disc
-  c.strokeStyle=C.line; var t0=P(-540,-330); rrect(c,t0[0],t0[1],1080*s,660*s,8*s); c.stroke();
-  var Rd=170;
-  c.beginPath();c.arc(ox,oy,Rd*s,0,TAU);c.stroke();
-  c.setLineDash([3,4]);c.beginPath();c.arc(ox,oy,49.4*s*2.4,0,TAU);c.stroke();c.setLineDash([]); // part circle (display scale)
-  var ang=-S.rot.ang*Math.PI/180;
-  c.strokeStyle=S.rot.om<-1e-4?C.bad:(Math.abs(S.rot.om)<1e-4?C.mut:C.teal);c.lineWidth=2;
-  c.beginPath();c.moveTo(ox,oy);c.lineTo(ox+Math.cos(ang)*Rd*s,oy+Math.sin(ang)*Rd*s);c.stroke();c.lineWidth=1;
-  // arms: planar 2-link outline per side
-  var L1=300,L2=260, bases=[[-520,150],[520,-150]],AR=[];
-  for(var i=0;i<2;i++){
-    var a=S.arm[i], col=i?C.a1:C.a0, bx=bases[i][0],by=bases[i][1];
-    var tx=a.tcp[0]*2.4, ty=-a.tcp[1]*2.4; // display scale for visibility
-    var dx=tx-bx,dy=ty-by,d=Math.min(Math.hypot(dx,dy),L1+L2-2);
-    var base=Math.atan2(dy,dx);
-    var cosE=(d*d-L1*L1-L2*L2)/(2*L1*L2); cosE=Math.max(-1,Math.min(1,cosE));
-    var elb=Math.acos(cosE)*(i?-1:1);
-    var alpha=Math.atan2(L2*Math.sin(elb),L1+L2*Math.cos(elb));
-    var j1=base-alpha;
-    var e1=[bx+Math.cos(j1)*L1, by+Math.sin(j1)*L1];
-    var pB=P(bx,by),pE=P(e1[0],e1[1]),pT=P(bx+Math.cos(j1)*L1+Math.cos(j1+elb)*L2, by+Math.sin(j1)*L1+Math.sin(j1+elb)*L2);
-    c.strokeStyle=col;c.lineWidth=7*s+2;c.lineCap="round";
-    c.beginPath();c.moveTo(pB[0],pB[1]);c.lineTo(pE[0],pE[1]);c.lineTo(pT[0],pT[1]);c.stroke();
-    c.lineWidth=1;c.lineCap="butt";
-    c.fillStyle=C.p2;c.strokeStyle=col;
-    rrect(c,pB[0]-10,pB[1]-10,20,20,4);c.fill();c.stroke();
-    c.beginPath();c.arc(pE[0],pE[1],5,0,TAU);c.fillStyle=col;c.fill();
-    c.beginPath();c.arc(pT[0],pT[1],6,0,TAU);c.fillStyle=a.e>1e-3?col:C.mut;c.fill();
-    if(S.sel===i){c.strokeStyle=C.ink;c.setLineDash([2,3]);c.beginPath();c.arc(pT[0],pT[1],10,0,TAU);c.stroke();c.setLineDash([]);}
-    OBS.push({x1:pB[0],y1:pB[1],x2:pE[0],y2:pE[1]},{x1:pE[0],y1:pE[1],x2:pT[0],y2:pT[1]});
-    AR.push({a:a,col:col,pB:pB,pT:pT,j1:j1,elb:elb,ix:i});
+  var C={line:css("--line"),mut:css("--mut"),ink:css("--ink"),a0:css("--a0"),a1:css("--a1"),teal:css("--teal"),bad:css("--bad"),ok:css("--ok"),panel:css("--panel"),p2:css("--panel2")};
+  var s=Math.min(W/1200,H/640), ox=(W-1200*s)/2, oy=(H-640*s)/2;
+  function X(x){return ox+x*s;} function Y(y){return oy+y*s;}
+  function LN(x1,y1,x2,y2){c.beginPath();c.moveTo(X(x1),Y(y1));c.lineTo(X(x2),Y(y2));c.stroke();}
+  function RR(x,y,w,h,r){rrect(c,X(x),Y(y),w*s,h*s,r*s);}
+  c.lineWidth=1;
+  // floor with hatching
+  c.strokeStyle=C.line;LN(40,560,1160,560);
+  for(var hx=60;hx<1160;hx+=46){c.beginPath();c.moveTo(X(hx),Y(560));c.lineTo(X(hx-14),Y(574));c.stroke();}
+  // ---- rotary stage: pedestal, disc, part ----
+  c.strokeStyle=C.teal;
+  RR(572,505,56,53,4);c.stroke();                                 // pedestal
+  LN(560,558,640,558);
+  c.beginPath();c.ellipse(X(600),Y(502),136*s,17*s,0,0,TAU);c.stroke();  // disc
+  // rotation index dot on disc rim (the one live motion in the scene)
+  var ra=S.rot.ang*Math.PI/180;
+  var rdx=X(600)+Math.cos(ra)*130*s, rdy=Y(502)+Math.sin(ra)*14*s;
+  c.fillStyle=Math.abs(S.rot.om)<1e-4?C.mut:(S.rot.om<0?C.bad:C.teal);
+  c.beginPath();c.arc(rdx,rdy,3.2,0,TAU);c.fill();
+  // part: cylinder on the disc
+  c.strokeStyle=C.ink;
+  LN(540,425,540,492);LN(660,425,660,492);
+  c.beginPath();c.ellipse(X(600),Y(492),60*s,9*s,0,0,Math.PI);c.stroke();
+  c.beginPath();c.ellipse(X(600),Y(425),60*s,9*s,0,0,TAU);c.stroke();
+  // ---- one detailed arm, mirrored for the right side ----
+  function arm(side){ // side 0 = left, 1 = right
+    var M=function(x){return side?1200-x:x;};
+    var col=side?C.a1:C.a0, a=S.arm[side];
+    // base plinth with vents + control console
+    c.strokeStyle=col;c.fillStyle=C.p2;
+    rrect(c,X(Math.min(M(120),M(280))),Y(470),160*s,90*s,6*s);c.fill();c.stroke();
+    for(var v2=0;v2<3;v2++){var vx=(side?1050:150)+v2*22;
+      c.beginPath();c.ellipse(X(vx),Y(515),5*s,14*s,0,0,TAU);c.stroke();}
+    // console with screen
+    var cx0=side?905:225;
+    rrect(c,X(cx0),Y(483),72*s,52*s,4*s);c.fill();c.stroke();
+    c.strokeStyle=C.mut;rrect(c,X(cx0+10),Y(491),32*s,22*s,2*s);c.stroke();
+    rrect(c,X(cx0+48),Y(491),14*s,10*s,2*s);c.stroke();
+    // pedestal column
+    c.strokeStyle=col;rrect(c,X(Math.min(M(195),M(265))),Y(360),70*s,110*s,5*s);c.stroke();
+    // links: shoulder -> elbow -> wrist, drawn as outlined bars with joint hubs
+    var P1=[M(230),352],P2=[M(390),212],P3=[M(530),298];
+    function link(pA,pB,w){
+      var dx=X(pB[0])-X(pA[0]),dy=Y(pB[1])-Y(pA[1]),L=Math.hypot(dx,dy),nx=-dy/L*w*s,ny=dx/L*w*s;
+      c.beginPath();c.moveTo(X(pA[0])+nx,Y(pA[1])+ny);c.lineTo(X(pB[0])+nx,Y(pB[1])+ny);
+      c.lineTo(X(pB[0])-nx,Y(pB[1])-ny);c.lineTo(X(pA[0])-nx,Y(pA[1])-ny);c.closePath();
+      c.fillStyle=C.p2;c.fill();c.strokeStyle=col;c.stroke();
+      c.strokeStyle=C.mut;c.beginPath();c.moveTo(X(pA[0]),Y(pA[1]));c.lineTo(X(pB[0]),Y(pB[1]));c.stroke();c.strokeStyle=col;
+    }
+    link(P1,P2,13);link(P2,P3,10);
+    function hub(p,r){c.beginPath();c.arc(X(p[0]),Y(p[1]),r*s,0,TAU);c.fillStyle=C.p2;c.fill();c.strokeStyle=col;c.stroke();
+      c.beginPath();c.arc(X(p[0]),Y(p[1]),3*s+1,0,TAU);c.fillStyle=col;c.fill();}
+    hub(P1,20);hub(P2,14);hub(P3,10);
+    // extruder: body with heatsink fins + nozzle cone over the part rim
+    var exc=side?650:550;
+    rrect(c,X(exc-24),Y(302),48*s,74*s,5*s);c.fillStyle=C.p2;c.fill();c.strokeStyle=col;c.stroke();
+    for(var f=0;f<4;f++)LN(exc-20,318+f*12,exc+20,318+f*12);
+    c.beginPath();c.moveTo(X(exc-11),Y(386));c.lineTo(X(exc+11),Y(386));c.lineTo(X(exc),Y(412));c.closePath();
+    c.fillStyle=a.e>1e-3?col:(a.e<-1e-3?C.bad:C.mut);c.fill();
+    // bowden tube arc from elbow to extruder top
+    c.strokeStyle=C.mut;c.beginPath();
+    c.moveTo(X(M(390)),Y(200));c.quadraticCurveTo(X(exc),Y(140),X(exc),Y(300));c.stroke();
+    // selected-arm marker
+    if(S.sel===side){c.strokeStyle=C.ink;c.setLineDash([3,3]);
+      rrect(c,X(Math.min(M(120),M(280)))-4,Y(470)-4,160*s+8,90*s+8,6*s);c.stroke();c.setLineDash([]);}
   }
-  var deg=function(r){return (r*180/Math.PI).toFixed(1);};
-  for(var i2=0;i2<2;i2++){var G=AR[i2],ga=G.a,gi=G.ix;
-    tag(c,G.pB[0],G.pB[1],G.pB[0]+(gi?-168:24),G.pB[1]-56,
-      ["ARM "+gi+"  J1 "+deg(G.j1)+"°  J2 "+deg(G.elb)+"°",
-       "TCP "+ga.tcp[0].toFixed(1)+", "+ga.tcp[1].toFixed(1)+", "+ga.tcp[2].toFixed(2)], G.col,C);
-    tag(c,G.pT[0],G.pT[1],G.pT[0]+(gi?-178:16),G.pT[1]+(gi?26:-62),
-      ["N"+gi+" "+ga.temp.toFixed(0)+"°C→"+ga.tt.toFixed(0),
-       "e "+ga.e.toFixed(2)+" mm/s"], G.col,C);
-  }
-  // rotary tag
-  tag(c,ox,oy,ox+30,oy+Rd*s+10,
-    ["ROTARY  θ "+S.rot.ang.toFixed(1)+"°","ω "+S.rot.om.toFixed(3)+" rev/s"],C.teal,C);
-  // front elevation inset
-  var iy=topH+8;
-  c.strokeStyle=C.line;c.beginPath();c.moveTo(12,iy);c.lineTo(W-12,iy);c.stroke();
-  c.fillStyle=C.mut;c.font="10px "+css("--mono");c.fillText("front elevation — nozzle z over plate",16,iy+14);
-  var py=H-14, zs=(insetH-34)/12;
-  c.strokeStyle=C.line;c.beginPath();c.moveTo(W*0.25,py);c.lineTo(W*0.75,py);c.stroke(); // plate line
-  for(var n=0;n<2;n++){var a2=S.arm[n],nx=W*(n?0.62:0.38),col2=n?C.a1:C.a0;
-    var nzY=py-a2.tcp[2]*zs;
-    c.strokeStyle=col2;c.beginPath();c.moveTo(nx,py-insetH+30);c.lineTo(nx,nzY);c.stroke();
-    c.fillStyle=a2.e>1e-3?col2:C.mut;c.beginPath();c.moveTo(nx-4,nzY-7);c.lineTo(nx+4,nzY-7);c.lineTo(nx,nzY);c.closePath();c.fill();
-    c.fillStyle=C.ink;c.font="10.5px "+css("--mono");c.fillText("z"+n+" "+a2.tcp[2].toFixed(2),nx+8,nzY-2);}
-  if(S.estop){c.fillStyle=C.bad;c.font="700 15px "+css("--disp");c.fillText("EMERGENCY STOP — motion inhibited",16,34);}
+  arm(0);arm(1);
+  // ---- fixed label boxes (mockup layout) ----
+  var A0=S.arm[0],A1=S.arm[1];
+  box(c,C,X(60),Y(238),X(230),Y(352),"L:ARM",
+    ["TCP "+A0.tcp[0].toFixed(1)+", "+A0.tcp[1].toFixed(1)+", "+A0.tcp[2].toFixed(2)],C.a0);
+  box(c,C,X(300),Y(58),X(550),Y(330),"L:EXTRUDE",
+    [A0.temp.toFixed(0)+"°C → "+A0.tt.toFixed(0)+"°C","e "+A0.e.toFixed(2)+" mm/s"],C.a0);
+  box(c,C,X(742),Y(58),X(650),Y(330),"R:EXTRUDE",
+    [A1.temp.toFixed(0)+"°C → "+A1.tt.toFixed(0)+"°C","e "+A1.e.toFixed(2)+" mm/s"],C.a1);
+  box(c,C,X(958),Y(238),X(970),Y(352),"R:ARM",
+    ["TCP "+A1.tcp[0].toFixed(1)+", "+A1.tcp[1].toFixed(1)+", "+A1.tcp[2].toFixed(2)],C.a1);
+  var pct=Math.max(0,Math.min(100,S.z0/10*100));
+  box(c,C,X(540),Y(120),X(600),Y(416),"PRINT %",
+    [(S.demo?pct.toFixed(0):"—")+" %   z "+A0.tcp[2].toFixed(2)+" mm"],C.ok);
+  box(c,C,X(300),Y(555),X(470),Y(502),"RT:REV/S",
+    ["θ "+S.rot.ang.toFixed(1)+"°   ω "+S.rot.om.toFixed(3)],C.teal);
+  if(S.estop){c.fillStyle=C.bad;c.font="700 15px "+css("--disp");c.fillText("EMERGENCY STOP — motion inhibited",X(60),Y(40));}
 }
-
 // ---------- controls ----------
 $("armSel").addEventListener("click",function(e){var b=e.target.closest("button");if(!b)return;
   S.sel=+b.dataset.a;
