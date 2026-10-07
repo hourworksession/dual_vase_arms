@@ -152,10 +152,12 @@ def go_home(arm, cfg, wait=True):
     spd = float(cfg["pose_speed"])
     if cfg.get("lift_first", True):
         cur = arm.get_pose()
-        if cur:
+        if cur and len(cur) >= 6:
             safe_z = max(float(cfg.get("safe_z", 250.0)), float(cur[2]))
             _check(arm.arm.set_position(cur[0], cur[1], safe_z, cur[3], cur[4], cur[5],
                                         speed=spd, wait=True), f"{arm.name} lift")
+        else:
+            logger.warning("%s: no current pose readable, skipping lift-first", arm.name)
     _check(arm.arm.set_position(x, y, z, r, p, yw, speed=spd, wait=wait), f"{arm.name} pose home")
     logger.info("%s -> pose home %s", arm.name, [x, y, z, r, p, yw])
 
