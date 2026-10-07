@@ -47,6 +47,7 @@ PARAM_META = {
     'z_start':                ("Z start", "mm", 2, 0.1, "geometry", "Height of the first layer above the turntable centre Z", False, None),
     'pitch':                  ("Pitch", "mm", 3, 0.05, "geometry", "Z rise per turntable revolution (layer height in vase mode)", False, 0.0),
     'total_revs':             ("Total revolutions", "rev", 1, 1.0, "geometry", None, False, 0.0),
+    'flat_revs':              ("Flat base revs", "rev", 1, 0.5, "geometry", "Full circles laid at the first layer before the helix starts climbing (counted inside total revolutions)", False, 0.0),
     'line_width':             ("Line width", "mm", 2, 0.05, "geometry", None, False, 0.0),
     'filament_diameter':      ("Filament diameter", "mm", 2, 0.05, "extrusion", None, False, 0.0),
     'feed_rate_left':         ("Feed rate · left", "mm/s", 2, 0.1, "extrusion", "Filament speed. Set at start in one move mode", False, 0.0),
@@ -106,6 +107,7 @@ class CellController:
             'z_start':            DoubleVar(107.0),   # first layer Z for the new extruder mounts (Oct 2026)
             'pitch':              DoubleVar(self._tool_default('layer_height', 0.4)),
             'total_revs':         DoubleVar(20.0),
+            'flat_revs':          DoubleVar(1.0),
             'start_angle_deg':    DoubleVar(135.0),
             'line_width':         DoubleVar(self._tool_default('line_width', 0.4)),
             'filament_diameter':  DoubleVar(1.75),
@@ -671,7 +673,7 @@ class CellController:
         lines = [{"both": "Arms: both", "left": "Arms: LEFT only (right stays parked)",
                   "right": "Arms: RIGHT only (left stays parked)"}.get(_sel, _sel),
                  f"{p['total_revs']:g} rev at radius {p['radius']:g} mm, pitch {p['pitch']:g} mm "
-                 f"→ wall {p['total_revs'] * p['pitch']:.1f} mm tall",
+                 f"→ {p['flat_revs']:g} flat rev then wall {max(0.0, p['total_revs'] - p['flat_revs']) * p['pitch']:.1f} mm tall",
                  f"Turntable {self.turntable_speed_var.get():g} rad/s → about {_mmss(rot_t)} (mm:ss)",
                  f"Filament L {self.calc_left_len.get():.1f} mm · R {self.calc_right_len.get():.1f} mm",
                  "Wave pattern " + ("on" if self.pattern_enabled.get() else "off"),
@@ -769,6 +771,7 @@ class CellController:
             radius = safe('radius', self.param_vars['radius'])
             pitch = safe('pitch', self.param_vars['pitch'])
             z_start = safe('z_start', self.param_vars['z_start'])
+            flat_revs = max(0.0, safe('flat_revs', self.param_vars['flat_revs']))
             start_angle_deg = safe('start_angle_deg', self.param_vars['start_angle_deg'])
             angular_off_deg = safe('angular_offset_deg', self.param_vars['angular_offset_deg'])
             tt_cx_l = safe('tt_cx_left', self.param_vars['tt_cx_left'])
@@ -887,7 +890,7 @@ class CellController:
                     break
                 act_rad = math.radians(act_deg)
                 rev = (act_rad - start_angle_rad_tt) / (2 * math.pi)
-                z_now = z_start + rev * pitch
+                z_now = z_start + max(0.0, rev - flat_revs) * pitch
 
                 if streamed and last_speed_rad > 0:
                     # queue filament for the next few degrees only, at the rate the turntable is turning
