@@ -35,13 +35,17 @@ def _arm_default(joints, xyz, rpy):
 
 
 # Default home (Oct 2026 lab calibration): both arms at the same TCP pose,
-# X 298.3, Y 0, Z 298.9, pitch 90, yaw 180, roll +90 left / -90 right — nozzle down the mount
+# X 298.3, Y 0, Z 298.9, facing +X — per-arm wrist orientation for the mirrored mounts
 # axis, 150 mm proud of the disc. Pose mode drives straight to this; the
 # joint lists remain as a fallback for "joint" mode. A saved
 # config/home_positions.json takes precedence over these defaults.
 _HOME_POSE_XYZ = (298.3, 0.0, 298.9)
-_HOME_POSE_RPY_LEFT = (90.0, 90.0, 180.0)
-_HOME_POSE_RPY_RIGHT = (-90.0, 90.0, 180.0)   # mirrored extruder mount: opposite roll
+# At pitch +/-90 the wrist is gimbal locked: facing direction = yaw - roll
+# (pitch +90) or yaw + roll (pitch -90). Facing +X nozzle-down needs
+# yaw - roll = 0 on the left; the mirrored right mount needs pitch -90
+# (anything at pitch +90 leaves its nozzle upside down) with yaw + roll = 180.
+_HOME_POSE_RPY_LEFT = (0.0, 90.0, 0.0)
+_HOME_POSE_RPY_RIGHT = (90.0, -90.0, 90.0)
 
 def _pose_default(joints, rpy):
     d = _arm_default(joints, _HOME_POSE_XYZ, rpy)
@@ -167,6 +171,20 @@ def go_home(arm, cfg, wait=True):
         [x, y, z, r, p, yw], input_is_radian=False, return_is_radian=False)
     _check(code, f"{arm.name} home IK (pose unreachable)")
     angles = list(angles)[:6]
+    # IK can return a wrap-around joint the long way round (J1 +270 instead
+    # of -90), which sends the arm the wrong way about the cell. Snap the
+    # continuous joints to the representation nearest where they are now.
+    try:
+        cur_code, cur_j = arm.arm.get_servo_angle(is_radian=False)
+        if cur_code == 0 and cur_j:
+            cur_j = list(cur_j)
+            for i in (0, 3, 5):
+                while angles[i] - cur_j[i] > 180.0:
+                    angles[i] -= 360.0
+                while angles[i] - cur_j[i] < -180.0:
+                    angles[i] += 360.0
+    except Exception:
+        logger.warning("%s: could not read joints to shorten home travel", arm.name)
     _check(arm.arm.set_servo_angle(angle=angles,
                                    speed=float(cfg.get("joint_speed", 20.0)),
                                    is_radian=False, wait=wait),
