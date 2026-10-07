@@ -49,7 +49,14 @@ class ArmController:
         try:
             code, pose = self.arm.get_position()
             if code == 0:
-                return pose[1:]  # ignore error code
+                # SDK returns the code separately; pose is already
+                # [x, y, z, roll, pitch, yaw]. Take the last six so a
+                # build that prepends the code still parses correctly.
+                pose = list(pose)[-6:]
+                if len(pose) < 6:
+                    logger.error("Pose from %s too short: %s", self.name, pose)
+                    return None
+                return pose
             else:
                 logger.error("Failed to get pose: %s", code)
                 return None
