@@ -517,24 +517,26 @@ class CellController:
         self._run_busy("preparing", self._prepare_thread)
 
     def _prepare_thread(self):
-        temp = self.cfg['defaults']['temperature']['tool0']
+        # Panel temperature targets govern Prepare (left = tool 1, right = tool 0).
+        temp0 = float(self.temp_right.get())
+        temp1 = float(self.temp_left.get())
         left, right, ext = self.left, self.right, self.extruder
         RL, PL, YL = self.orientation("left")
         RR, PR, YR = self.orientation("right")
         if ext is not None:
-            ext.set_temperature(0, temp, wait=False)
-            ext.set_temperature(1, temp, wait=False)
+            ext.set_temperature(0, temp0, wait=False)
+            ext.set_temperature(1, temp1, wait=False)
         if left is not None:
-            left.arm.set_position(442.5, 225, 160, RL, PL, YL, speed=100, wait=False)
+            left.arm.set_position(392.5, 175, 160, RL, PL, YL, speed=100, wait=False)
         if right is not None:
-            right.arm.set_position(442.5, 230, 172, RR, PR, YR, speed=100, wait=False)
+            right.arm.set_position(392.5, 180, 172, RR, PR, YR, speed=100, wait=False)
         if ext is not None:
-            ext.heat_and_wait(0, temp)
-            ext.heat_and_wait(1, temp)
+            ext.heat_and_wait(0, temp0)
+            ext.heat_and_wait(1, temp1)
         if left is not None:
-            left.arm.set_position(400, 174.4, 155, RL, PL, YL, speed=100, wait=False)
+            left.arm.set_position(350, 124.4, 155, RL, PL, YL, speed=100, wait=False)
         if right is not None:
-            right.arm.set_position(400, 174.4, 155, RR, PR, YR, speed=100, wait=False)
+            right.arm.set_position(350, 124.4, 155, RR, PR, YR, speed=100, wait=False)
         time.sleep(5)
         if self.estopped:
             return
@@ -542,7 +544,7 @@ class CellController:
             self.ui.warn("Prepare to print", "Arms are at the pre-print pose, but the extruder is not "
                                              "connected so nothing was heated.")
         else:
-            self.ui.info("Prepare to print", f"Ready to print. Both tools at {temp} °C.")
+            self.ui.info("Prepare to print", f"Ready to print. Tool 0 at {temp0:.0f} \u00b0C, tool 1 at {temp1:.0f} \u00b0C.")
 
     def calculate_extrusion_lengths(self):
         try:
