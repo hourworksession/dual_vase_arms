@@ -103,7 +103,7 @@ class CellController:
         # ---------- Cylinder parameters ----------
         self.param_vars = {
             'radius':             DoubleVar(100.0),
-            'z_start':            DoubleVar(151.8),
+            'z_start':            DoubleVar(107.0),   # first layer Z for the new extruder mounts (Oct 2026)
             'pitch':              DoubleVar(self._tool_default('layer_height', 0.4)),
             'total_revs':         DoubleVar(20.0),
             'start_angle_deg':    DoubleVar(135.0),
