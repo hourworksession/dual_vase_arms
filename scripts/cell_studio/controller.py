@@ -841,7 +841,7 @@ class CellController:
 
             aborted_early = self.stop_requested
             if not aborted_early and not streamed:
-                ext.extrude_sync(fil_left, feed_l, fil_right, feed_r, wait=False)
+                ext.extrude_sync(fil_right, feed_r, fil_left, feed_l, wait=False)   # t0 = E = right, t1 = X = left
                 logger.info("Extrusion started")
 
             last_speed_rad = safe('turntable_speed', self.turntable_speed_var)
@@ -896,7 +896,7 @@ class CellController:
                         d = target_rev - rev_extruded
                         secs = d * 2 * math.pi / last_speed_rad
                         l_amt, r_amt = fil_left * d / total_revs, fil_right * d / total_revs
-                        ext.extrude_sync(l_amt, max(l_amt / secs, 1e-3), r_amt, max(r_amt / secs, 1e-3), wait=False)
+                        ext.extrude_sync(r_amt, max(r_amt / secs, 1e-3), l_amt, max(l_amt / secs, 1e-3), wait=False)   # t0 = E = right, t1 = X = left
                         rev_extruded = target_rev
 
                 rad_off_l = safe('radial_offset_left', self.param_vars['radial_offset_left'])

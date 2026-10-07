@@ -151,11 +151,18 @@ class ExtruderController:
         time_t0 = abs(length_t0) / speed_t0
         time_t1 = abs(length_t1) / speed_t1
         duration = max(time_t0, time_t1)
-        L = (length_t0**2 + length_t1**2) ** 0.5
-        F = (L / duration) * 60.0
-
+        # Klipper applies F to the kinematic (X) distance of the move; E just
+        # follows over the same duration. For an E-only move F applies to E.
+        # A side below 10 um is idle: leave its axis out of the move entirely.
+        use_x = abs(length_t1) >= 0.01
+        use_e = abs(length_t0) >= 0.01
+        if not (use_x or use_e):
+            return
+        basis = abs(length_t1) if use_x else abs(length_t0)
+        F = (basis / duration) * 60.0
+        axes = (f" X{length_t1:.3f}" if use_x else "") + (f" E{length_t0:.3f}" if use_e else "")
         self.set_relative_extrusion()
-        script = f"G91\nG1 F{F:.1f} X{length_t1:.3f} E{length_t0:.3f} \nG90"
+        script = f"G91\nG1 F{F:.1f}{axes} \nG90"
 
         if wait:
             self.send_gcode(script)
