@@ -159,8 +159,20 @@ def go_home(arm, cfg, wait=True):
                                         speed=spd, wait=True), f"{arm.name} lift")
         else:
             logger.warning("%s: no current pose readable, skipping lift-first", arm.name)
-    _check(arm.arm.set_position(x, y, z, r, p, yw, speed=spd, wait=wait), f"{arm.name} pose home")
-    logger.info("%s -> pose home %s", arm.name, [x, y, z, r, p, yw])
+    # Travel in JOINT space: solve the pose on the controller and drive the
+    # joints there. A straight-line Cartesian move to a reoriented home drags
+    # the wrist through singular configurations and joint limit excursions
+    # (J5 end stop); joint interpolation to the IK solution cannot.
+    code, angles = arm.arm.get_inverse_kinematics(
+        [x, y, z, r, p, yw], input_is_radian=False, return_is_radian=False)
+    _check(code, f"{arm.name} home IK (pose unreachable)")
+    angles = list(angles)[:6]
+    _check(arm.arm.set_servo_angle(angle=angles,
+                                   speed=float(cfg.get("joint_speed", 20.0)),
+                                   is_radian=False, wait=wait),
+           f"{arm.name} pose home (joint travel)")
+    logger.info("%s -> pose home %s via joints %s", arm.name,
+                [x, y, z, r, p, yw], [round(a, 1) for a in angles])
 
 
 def home_arms(arms_by_side, data):

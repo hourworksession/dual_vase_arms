@@ -88,9 +88,9 @@ class CellController:
         self.estopped = False
         self.model_job_active = lambda: False   # set by the Model print page
 
-        # Which devices to connect / drive. The left arm has no extruder on the
-        # current machine, so it can be left disconnected entirely.
-        self.conn_left = BoolVar(False)
+        # Which devices to connect / drive. Both arms carry extruders on the
+        # current machine, so both connect by default.
+        self.conn_left = BoolVar(True)
         self.conn_right = BoolVar(True)
         self.conn_turntable = BoolVar(True)
         self.conn_extruder = BoolVar(True)
