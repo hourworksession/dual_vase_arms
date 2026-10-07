@@ -1,0 +1,503 @@
+<meta charset="utf-8">
+<title>Toolpath Stage Monitor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: HMI bench — toolbar, banner, 4 stage cards (canvas + status feed), flow strip, progress rail */
+:root{
+  --bg:#10141b; --panel:#171d27; --panel2:#1d2431; --ink:#e8ecf2; --mut:#8b95a5;
+  --acc:#f0a63c; --acc2:#45c0a7; --bad:#e06060; --ok:#5cb46d; --line:#2a3240;
+  --disp:"Chakra Petch","IBM Plex Sans",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#eef0f3; --panel:#ffffff; --panel2:#f3f5f8; --ink:#1c2430; --mut:#5c6675;
+    --acc:#b87410; --acc2:#0d8a72; --bad:#c04545; --ok:#2f8b4e; --line:#d4d9e1;
+    color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#eef0f3; --panel:#ffffff; --panel2:#f3f5f8; --ink:#1c2430; --mut:#5c6675;
+  --acc:#b87410; --acc2:#0d8a72; --bad:#c04545; --ok:#2f8b4e; --line:#d4d9e1;
+  color-scheme:light;
+}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:14px;line-height:1.45;margin:0;padding-block:14px;padding-inline:16px}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.toolbar .grow{flex:1 1 auto}
+button{font-family:var(--disp);font-weight:600;font-size:13px;letter-spacing:.02em;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--mut)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+button.primary{background:var(--acc);border-color:var(--acc);color:#141414}
+button[disabled]{opacity:.45;cursor:default}
+.banner{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:8px;padding:10px 14px;display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline}
+.banner h1{font-family:var(--disp);font-weight:700;font-size:19px;margin:0;letter-spacing:.02em}
+.banner .model{font-family:var(--mono);font-size:12px;color:var(--mut)}
+.banner .state{font-family:var(--disp);font-weight:600;font-size:13px;color:var(--acc2);margin-left:auto}
+.params{display:flex;flex-wrap:wrap;gap:10px 16px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;align-items:flex-end}
+.param{display:flex;flex-direction:column;gap:3px;min-width:0}
+.param label{font-family:var(--disp);font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+.param input[type=number],.param select{font-family:var(--mono);font-size:13px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:4px 6px;width:86px}
+.param.slider{flex:1 1 220px}
+.param input[type=range]{width:100%;accent-color:var(--acc)}
+.ticks{display:flex;justify-content:space-between;font-size:10px;color:var(--mut);font-family:var(--mono)}
+.param .val{font-family:var(--mono);font-size:12px;color:var(--acc)}
+.note{font-size:12px;color:var(--mut)}
+.stages{display:grid;grid-template-columns:repeat(auto-fit,minmax(265px,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;display:flex;flex-direction:column;min-width:0;overflow:hidden}
+.card h2{font-family:var(--disp);font-size:13px;font-weight:600;letter-spacing:.04em;margin:0;padding:8px 10px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:baseline}
+.card h2 .n{color:var(--acc);font-weight:700}
+.card h2 .sub{color:var(--mut);font-weight:500;font-size:11px;margin-left:auto}
+.card canvas{width:100%;height:190px;display:block;background:var(--panel2)}
+.feed{font-family:var(--mono);font-size:10.5px;line-height:1.5;color:var(--mut);height:128px;overflow-y:auto;padding:6px 9px;border-top:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere}
+.feed b{color:var(--ink);font-weight:500}
+.feed .hl{color:var(--acc)} .feed .er{color:var(--bad)} .feed .okk{color:var(--ok)}
+.dline{font-family:var(--mono);font-size:10.5px;color:var(--acc2);padding:4px 9px;border-top:1px solid var(--line);white-space:nowrap;overflow-x:auto}
+.ebars{display:flex;gap:10px;padding:4px 9px 7px;border-top:1px solid var(--line);font-family:var(--mono);font-size:10px;color:var(--mut)}
+.ebar{flex:1;display:flex;align-items:center;gap:6px;min-width:0}
+.ebar .tr{flex:1;height:6px;background:var(--panel2);border:1px solid var(--line);border-radius:3px;overflow:hidden}
+.ebar .fl{height:100%;width:0%;background:var(--acc2)}
+.flow{display:flex;align-items:center;gap:8px;font-family:var(--disp);font-size:12px;font-weight:600;color:var(--mut);padding:0 4px;flex-wrap:wrap}
+.flow .arr{flex:1;height:2px;background:var(--line);position:relative;min-width:26px}
+.flow .arr::after{content:"";position:absolute;right:-1px;top:-4px;border:5px solid transparent;border-left-color:var(--line)}
+.rail{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.bar{flex:1 1 220px;height:14px;background:var(--panel2);border:1px solid var(--line);border-radius:7px;overflow:hidden;min-width:0}
+.bar .fill{height:100%;width:0%;background:var(--ok);transition:width .2s linear}
+.rail .ro{font-family:var(--mono);font-size:12px;color:var(--mut)}
+.saves{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.saves .cnt{font-family:var(--mono);font-size:11px;color:var(--mut)}
+@media (max-width:620px){ .card canvas{height:170px} }
+@media (prefers-reduced-motion: reduce){ .bar .fill{transition:none} }
+</style>
+
+<div class="wrap">
+  <div class="banner">
+    <h1>Toolpath Stage Monitor</h1>
+    <span class="model" id="modelTag">Loaded: Cylinder.stl (measured) — r_out 50.000, r_in 48.800, wall 1.200, h 10.0 mm, centre offset (12, 208)</span>
+    <span class="state" id="runState">READY</span>
+  </div>
+
+  <div class="toolbar">
+    <button class="primary" id="btnRun">Run</button>
+    <button id="btnStep">Step</button>
+    <button id="btnReset">Reset</button>
+    <label class="note" style="display:flex;align-items:center;gap:6px">
+      <input type="file" id="stlFile" accept=".stl" style="font-size:11px;max-width:210px">
+    </label>
+    <span class="grow"></span>
+    <span class="note" id="estNote"></span>
+  </div>
+
+  <div class="params" id="paramBox">
+    <div class="param"><label for="pR">Centreline r (mm)</label><input type="number" id="pR" value="49.4" step="0.1" min="5"></div>
+    <div class="param"><label for="pH">Height (mm)</label><input type="number" id="pH" value="10" step="1" min="2"></div>
+    <div class="param"><label for="pP">Pitch (mm)</label><input type="number" id="pP" value="0.2" step="0.05" min="0.05"></div>
+    <div class="param"><label for="pV">Surface speed (mm/s)</label><input type="number" id="pV" value="30" step="5" min="5"></div>
+    <div class="param"><label for="pA">Rotary accel (rev/s&sup2;)</label><input type="number" id="pA" value="0.3" step="0.1" min="0.05"></div>
+    <div class="param slider">
+      <label for="pF">Point frequency — <span class="val" id="fVal">30 pts/s</span></label>
+      <input type="range" id="pF" min="5" max="120" value="30" step="1">
+      <div class="ticks"><span>5 minimum</span><span>30 optimal</span><span>120 overkill</span></div>
+    </div>
+    <div class="param"><label for="pSpd">Sim speed</label>
+      <select id="pSpd"><option value="1">1&times;</option><option value="10" selected>10&times;</option><option value="40">40&times;</option></select>
+    </div>
+    <div class="param"><label for="pRev">Revisit event</label>
+      <select id="pRev"><option value="1" selected>On (reverse at 40% z)</option><option value="0">Off</option></select>
+    </div>
+    <div class="param"><label for="pHo">Dual handover</label>
+      <select id="pHo"><option value="1" selected>On</option><option value="0">Off</option></select>
+    </div>
+  </div>
+
+  <div class="stages">
+    <div class="card">
+      <h2><span class="n">1</span> Unmolested points <span class="sub">pure geometry</span></h2>
+      <canvas id="cv1"></canvas>
+      <div class="feed" id="fd1"></div>
+    </div>
+    <div class="card">
+      <h2><span class="n">2</span> Rotary resolved <span class="sub">&theta; &rarr; build plate</span></h2>
+      <canvas id="cv2"></canvas>
+      <div class="feed" id="fd2"></div>
+    </div>
+    <div class="card">
+      <h2><span class="n">3</span> Single extruder <span class="sub">FullControl refine</span></h2>
+      <canvas id="cv3"></canvas>
+      <div class="feed" id="fd3"></div>
+    </div>
+    <div class="card">
+      <h2><span class="n">4</span> Dual cooperative <span class="sub">molested output</span></h2>
+      <canvas id="cv4"></canvas>
+      <div class="dline" id="dLine">x0, y0, z0, x1, y1, z1, rotary(rev/s), e0(mm/s), e1(mm/s)</div>
+      <div class="ebars">
+        <div class="ebar"><span>e0</span><div class="tr"><div class="fl" id="eb0"></div></div></div>
+        <div class="ebar"><span>e1</span><div class="tr"><div class="fl" id="eb1"></div></div></div>
+      </div>
+      <div class="feed" id="fd4"></div>
+    </div>
+  </div>
+
+  <div class="flow">
+    <span>A geometry</span><span class="arr"></span>
+    <span>B rotary</span><span class="arr"></span>
+    <span>C extruder</span><span class="arr"></span>
+    <span>D dual stream</span>
+  </div>
+
+  <div class="rail">
+    <span class="ro" id="roZ">z 0.00 / 10.0 mm</span>
+    <div class="bar"><div class="fill" id="pbar"></div></div>
+    <span class="ro" id="roT">t 0.0 s &middot; rev 0.0 &middot; &omega; 0.000</span>
+  </div>
+
+  <div class="saves">
+    <span style="font-family:var(--disp);font-weight:600;font-size:12px">Save datasets</span>
+    <button id="svA" disabled>A points.csv</button>
+    <button id="svB" disabled>B rotary.csv</button>
+    <button id="svC" disabled>C single.csv</button>
+    <button id="svD" disabled>D dual.csv</button>
+    <span class="cnt" id="rowCnt">rows — A 0 · B 0 · C 0 · D 0</span>
+    <span class="note" id="svNote"></span>
+  </div>
+</div>
+
+<script>
+"use strict";
+(function(){
+var $=function(id){return document.getElementById(id)};
+var TAU=Math.PI*2;
+var KE=(1.2*0.2)/(Math.PI*1.75*1.75/4); // extruder mm/s per mm/s surface speed (0.2 x 1.2 bead, 1.75 filament)
+
+// ---------- model + parameters ----------
+var model={name:"Cylinder.stl (measured)",rOut:50.0,rIn:48.8,wall:1.2,h:10,off:[12,208]};
+var P={r:49.4,h:10,p:0.2,v:30,a:0.3,f:30,rev:true,ho:true};
+var spd=10;
+
+// ---------- sim state ----------
+var S;
+function freshState(){
+  return {t:0,st:"PRINT",om:0,omT:0,th:0,thDep:0,z:0,started:false,done:false,
+    bphase:"LEADIN",thTop:0,
+    revDone:false,thStop:0,revTarget:0,dwell:0,ticks:0,
+    A:[],B:[],C:[],D:[],refines:[],omTrace:[],lastDrawFeed:0,aSince:0,soloLog:{}};
+}
+S=freshState();
+
+var feeds={fd1:[],fd2:[],fd3:[],fd4:[]};
+var feedsDirty=false;
+function log(id,html){feeds[id].unshift(html);if(feeds[id].length>46)feeds[id].pop();feedsDirty=true;}
+
+function seedFeeds(){
+  feeds.fd1=[];feeds.fd2=[];feeds.fd3=[];feeds.fd4=[];
+  log("fd1","<b>intake</b> "+model.name);
+  log("fd1","mesh ok · translate centre (−"+model.off[0]+", −"+model.off[1]+") → origin · axis z");
+  log("fd1","profile: r_out "+model.rOut.toFixed(3)+" · r_in "+model.rIn.toFixed(3)+" · wall "+model.wall.toFixed(3)+" mm");
+  log("fd1","basis vote: <span class='hl'>polar</span> (1 rectangle beats "+Math.round(P.h/P.p)+" circle pairs)");
+  log("fd1","plan: ½ circle flat (2 extruders) → dual start helix, z0 = z1, "+(2*P.p).toFixed(1)+" mm/rev → ½ circle flat · "+(1+(P.h-P.p)/(2*P.p)).toFixed(1)+" rev");
+  log("fd2","&omega; cruise = v / 2&pi;r = <b>"+omCruise().toFixed(4)+"</b> rev/s");
+  log("fd2","accel limit "+P.a+" rev/s² · revisit "+(P.rev?"armed at z="+(0.4*P.h).toFixed(1)+" mm":"off"));
+  log("fd3","bead 1.2 × 0.2 · e = "+KE.toFixed(4)+" × v_s = <b>"+(KE*P.v).toFixed(2)+"</b> mm/s");
+  log("fd3","intersection tolerance ±0.005 mm · refine gain 0.6");
+  log("fd4","nozzle 0 @ 0° · nozzle 1 @ 180°, same z (dual start helix, as dual_spiral_demo)");
+  log("fd4","line format: x0, y0, z0, x1, y1, z1, rotary(rev/s), e0, e1");
+}
+function omCruise(){return P.v/(TAU*P.r);}
+
+function readParams(){
+  P.r=+$("pR").value||49.4; P.h=+$("pH").value||10; P.p=+$("pP").value||0.2;
+  P.v=+$("pV").value||30; P.a=+$("pA").value||0.3; P.f=+$("pF").value||30;
+  P.rev=$("pRev").value==="1"; P.ho=$("pHo").value==="1";
+}
+function estimate(){
+  var revs=1+(P.h-P.p)/(2*P.p), dur=revs/omCruise()+(P.rev?20:0);
+  $("estNote").textContent="≈ "+revs.toFixed(0)+" rev · "+dur.toFixed(0)+" s print · ≈ "+Math.round(dur*P.f).toLocaleString()+" points at "+P.f+" pts/s";
+  $("fVal").textContent=P.f+" pts/s";
+}
+
+// ---------- the four generators, one tick ----------
+function step(){
+  if(S.done)return;
+  var dt=1/P.f;
+  // rotary speed toward target under accel limit (dataset B physics)
+  var d=S.omT-S.om, m=P.a*dt;
+  S.om+=Math.max(-m,Math.min(m,d));
+  S.th+=S.om*TAU*dt;
+  var depositing=false;
+
+  switch(S.st){
+    case "PRINT":
+      S.omT=omCruise(); depositing=S.om>1e-5;
+      if(P.rev&&!S.revDone&&S.bphase==="HELIX"&&S.z>=0.4*P.h){S.st="DECEL";S.omT=0;log("fd2","<span class='hl'>revisit</span>: decelerating for patch-point return");}
+      break;
+    case "DECEL":
+      S.omT=0; depositing=S.om>1e-5;
+      if(Math.abs(S.om)<1e-4){S.om=0;S.thStop=S.th;S.revTarget=S.th-0.25*TAU;S.st="REV";S.omT=-0.6*omCruise();
+        log("fd2","&omega; = <b>0.000</b> rev/s (stopped) · reversing 90° to &theta; "+(S.revTarget/TAU%1*360).toFixed(0)+"°");
+        log("fd3","extruder 0.00 mm/s during reverse");}
+      break;
+    case "REV":
+      if(S.th<=S.revTarget+0.02*TAU){S.omT=0;}
+      if(S.omT===0&&Math.abs(S.om)<1e-4){S.om=0;S.st="DWELL";S.dwell=2;log("fd2","at patch point · dwell 2.0 s (0 rev/s)");}
+      break;
+    case "DWELL":
+      S.dwell-=dt;
+      if(S.dwell<=0){S.st="CATCHUP";S.omT=omCruise();log("fd2","restart: ramping +&omega; · travel over printed arc, e = 0");}
+      break;
+    case "CATCHUP":
+      S.omT=omCruise();
+      if(S.th>=S.thStop){S.st="PRINT";S.revDone=true;
+        log("fd2","<span class='okk'>re-engage</span> extruder at &theta; "+((S.thStop/TAU%1)*360).toFixed(1)+"° · deposition resumes");}
+      break;
+    case "ENDSTOP":
+      S.omT=0; if(Math.abs(S.om)<1e-4){S.om=0;S.st="DONE";S.done=true;$("runState").textContent="DONE";
+        log("fd1","<span class='okk'>complete</span> · "+S.A.length+" points · z "+S.z.toFixed(2)+" mm");}
+      break;
+  }
+
+  if(depositing){
+    S.thDep=S.th;
+    if(S.bphase==="LEADIN"){
+      S.z=P.p;
+      if(S.thDep>=Math.PI){S.bphase="HELIX";
+        log("fd1","<span class='hl'>lead-in done</span>: base ring closed by both halves · helix begins");}
+    } else if(S.bphase==="HELIX"){
+      S.z=P.p+2*P.p*(S.thDep-Math.PI)/TAU;
+      if(S.z>=P.h){S.z=P.h;S.thTop=S.thDep;S.bphase="LEADOUT";
+        log("fd1","<span class='hl'>z target</span> "+P.h.toFixed(1)+" mm · closing half circle, both extruders");}
+    } else if(S.bphase==="LEADOUT"){
+      S.z=P.h;
+      if(S.thDep>=S.thTop+Math.PI){S.st="ENDSTOP";S.omT=0;
+        log("fd1","<span class='okk'>khalas</span> · seam level at base and top");}
+    }
+    // dataset A — unmolested geometry
+    var x=P.r*Math.cos(S.thDep), y=P.r*Math.sin(S.thDep);
+    S.A.push(S.A.length,x,y,S.z);
+    S.aSince++;
+    if(S.aSince>=30){S.aSince=0;refine();}
+    if((S.A.length/4)%Math.max(1,Math.round(P.f/2))===0)
+      log("fd1","P"+(S.A.length/4)+"  x "+x.toFixed(2)+"  y "+y.toFixed(2)+"  z "+S.z.toFixed(3));
+  }
+
+  var vS=Math.max(0,S.om)*TAU*P.r;                 // surface speed from plate
+  var eSingle=depositing?KE*vS:0;                  // e tracks omega through ramps -> constant bead
+  var rev=S.thDep/TAU;
+  // dual handover schedule (interchangeable demo)
+  var e0=eSingle,e1=eSingle;
+  if(P.ho&&S.bphase==="HELIX"){
+    if(rev>=6&&rev<8){e1=0;soloMsg(0);}
+    else if(rev>=14&&rev<16){e0=0;soloMsg(1);}
+  }
+  var z1c=S.z;
+
+  // dataset B — rotary resolved
+  S.B.push(S.t,(S.th/TAU%1)*360,S.om,ST[S.st]||0);
+  // dataset C — single extruder, nozzle fixed azimuth
+  S.C.push(S.t,P.r,0,S.z,eSingle,S.om);
+  // dataset D — molested dual line
+  S.D.push(S.t,P.r,0,S.z,-P.r,0,z1c,S.om,e0,e1);
+
+  S.omTrace.push(S.om); if(S.omTrace.length>220)S.omTrace.shift();
+  S.t+=dt; S.ticks++;
+  if(S.ticks>200000){S.done=true;$("runState").textContent="CAPPED";log("fd1","<span class='er'>tick cap reached (200k)</span>");}
+}
+var ST={PRINT:1,DECEL:2,REV:3,DWELL:4,CATCHUP:5,ENDSTOP:6,DONE:7};
+function soloMsg(n){var k="s"+n+Math.floor(S.thDep/TAU/5);if(S.soloLog[k])return;S.soloLog[k]=1;
+  log("fd4","<span class='hl'>handover</span>: nozzle "+n+" solo, nozzle "+(1-n)+" e = 0");}
+
+// FullControl candidate test-and-refine (panel 3)
+function refine(){
+  var zT=S.z, err=(Math.random()-0.5)*0.12, zC=zT+err, it=0, d0=err;
+  if(Math.abs(err)<=0.005){log("fd3","FC segment z "+zT.toFixed(3)+" · &Delta; "+(err>=0?"+":"")+err.toFixed(4)+" <span class='okk'>PASS</span>");}
+  else{
+    log("fd3","FC candidate z "+zC.toFixed(4)+" · &Delta; "+(err>=0?"+":"")+err.toFixed(4)+" <span class='er'>FAIL intersection</span>");
+    while(Math.abs(zC-zT)>0.005&&it<12){zC-=0.6*(zC-zT);it++;}
+    log("fd3","refined &rarr; z "+zC.toFixed(4)+" <span class='okk'>PASS</span> ("+it+" iter)");
+  }
+  S.refines.push({z:zT,d:d0,t:S.t}); if(S.refines.length>24)S.refines.shift();
+}
+
+// ---------- run loop ----------
+var running=false,lastT=0;
+function frame(ts){
+  if(running&&!S.done){
+    if(!lastT)lastT=ts;
+    var el=Math.min(0.1,(ts-lastT)/1000); lastT=ts;
+    var n=Math.min(2500,Math.floor(el*spd*P.f+0.5));
+    for(var i=0;i<n;i++){if(S.done)break;step();}
+  } else lastT=ts;
+  draw(); requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+function setRunning(r){
+  running=r; $("btnRun").textContent=r?"Pause":"Run";
+  $("runState").textContent=S.done?"DONE":(r?"RUNNING":(S.started?"PAUSED":"READY"));
+  var lock=S.started;
+  ["pR","pH","pP","pV","pA","pF","pRev","pHo","stlFile"].forEach(function(id){$(id).disabled=lock;});
+}
+$("btnRun").onclick=function(){
+  if(S.done)return;
+  if(!S.started){S.started=true;log("fd1","<b>run</b> start · f "+P.f+" pts/s · sim "+spd+"×");}
+  setRunning(!running);
+};
+$("btnStep").onclick=function(){if(S.done)return;if(!S.started){S.started=true;setRunning(false);}step();feedsDirty=true;};
+$("btnReset").onclick=function(){readParams();S=freshState();seedFeeds();setRunning(false);estimate();updSaves();};
+["pR","pH","pP","pV","pA","pRev","pHo"].forEach(function(id){$(id).addEventListener("change",function(){readParams();estimate();if(!S.started){S=freshState();seedFeeds();}});});
+$("pF").addEventListener("input",function(){readParams();estimate();});
+$("pSpd").addEventListener("change",function(){spd=+$("pSpd").value;});
+
+// ---------- STL intake (binary + ascii) ----------
+$("stlFile").addEventListener("change",function(ev){
+  var f=ev.target.files&&ev.target.files[0]; if(!f)return;
+  var rd=new FileReader();
+  rd.onload=function(){try{parseSTL(rd.result,f.name);}catch(e){log("fd1","<span class='er'>STL parse failed: "+(e&&e.message)+"</span>");feedsDirty=true;}};
+  rd.readAsArrayBuffer(f);
+});
+function parseSTL(buf,name){
+  var dv=new DataView(buf),xs=[],ys=[],zs=[];
+  var isBin=false;
+  if(buf.byteLength>84){var n=dv.getUint32(80,true); if(84+n*50===buf.byteLength)isBin=true;}
+  if(isBin){
+    var n2=dv.getUint32(80,true);
+    for(var i=0;i<n2;i++){var o=84+i*50+12;
+      for(var v=0;v<3;v++){xs.push(dv.getFloat32(o+v*12,true));ys.push(dv.getFloat32(o+v*12+4,true));zs.push(dv.getFloat32(o+v*12+8,true));}}
+  }else{
+    var txt=new TextDecoder().decode(buf), re=/vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)/g,m;
+    while((m=re.exec(txt))){xs.push(+m[1]);ys.push(+m[2]);zs.push(+m[3]);}
+  }
+  if(xs.length<3)throw new Error("no vertices");
+  function mm(a){var lo=a[0],hi=a[0];for(var i=1;i<a.length;i++){if(a[i]<lo)lo=a[i];if(a[i]>hi)hi=a[i];}return[lo,hi];}
+  var bx=mm(xs),by=mm(ys),bz=mm(zs);
+  var cx=(bx[0]+bx[1])/2, cy=(by[0]+by[1])/2, h=bz[1]-bz[0];
+  var hist={};
+  for(var j=0;j<xs.length;j++){var r=Math.hypot(xs[j]-cx,ys[j]-cy),k=r.toFixed(1);hist[k]=(hist[k]||0)+1;}
+  var ks=Object.keys(hist).sort(function(a,b){return hist[b]-hist[a];});
+  var rO=+ks[0], rI=ks.length>1?+ks[1]:null;
+  if(rI!==null&&rI>rO){var t=rO;rO=rI;rI=t;}
+  var wall=(rI!==null&&rO-rI<6)?+(rO-rI).toFixed(3):1.2;
+  var rC=(rI!==null&&rO-rI<6)?(rO+rI)/2:rO-0.6;
+  model={name:name,rOut:rO,rIn:(rI!==null?rI:rO-1.2),wall:wall,h:+h.toFixed(3),off:[+cx.toFixed(1),+cy.toFixed(1)]};
+  $("pR").value=rC.toFixed(1); $("pH").value=h.toFixed(1);
+  $("modelTag").textContent="Loaded: "+name+" — r_out "+rO.toFixed(3)+", r_in "+(rI!==null?rI.toFixed(3):"—")+", wall "+wall.toFixed(3)+", h "+h.toFixed(1)+" mm, centre offset ("+cx.toFixed(0)+", "+cy.toFixed(0)+")";
+  readParams(); S=freshState(); seedFeeds(); estimate(); setRunning(false); updSaves();
+  if(rI===null||rO-rI>=6)log("fd1","<span class='hl'>profile is not a simple tube</span>: using outer radius, single bead assumed");
+}
+
+// ---------- drawing ----------
+function fit(cv){var w=cv.clientWidth,h=cv.clientHeight,dpr=window.devicePixelRatio||1;
+  if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
+  var c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);return c;}
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+
+function draw(){
+  var C={line:css("--line"),mut:css("--mut"),ink:css("--ink"),acc:css("--acc"),acc2:css("--acc2"),bad:css("--bad"),ok:css("--ok")};
+  d1(C);d2(C);d3(C);d4(C);
+  // rail + counters
+  $("pbar").style.width=(100*S.z/P.h).toFixed(1)+"%";
+  $("roZ").textContent="z "+S.z.toFixed(2)+" / "+P.h.toFixed(1)+" mm";
+  $("roT").innerHTML="t "+S.t.toFixed(1)+" s · rev "+(S.thDep/TAU).toFixed(1)+" · &omega; "+S.om.toFixed(3);
+  var nA=S.A.length/4,nB=S.B.length/4,nC=S.C.length/6,nD=S.D.length/10;
+  $("rowCnt").textContent="rows — A "+nA+" · B "+nB+" · C "+nC+" · D "+nD;
+  if(feedsDirty&&performance.now()-S.lastDrawFeed>120){S.lastDrawFeed=performance.now();feedsDirty=false;
+    for(var k in feeds)$(k).innerHTML=feeds[k].join("\n");}
+  var dis=nA===0;["svA","svB","svC","svD"].forEach(function(id){$(id).disabled=dis||(!dl&&!blobOK);});
+}
+function d1(C){var cv=$("cv1"),c=fit(cv),w=cv.clientWidth,h=cv.clientHeight;c.clearRect(0,0,w,h);
+  var s=Math.min(w/(P.r*3.4),h/(P.h*1.5+P.r*1.2)),ox=w/2,oy=h*0.84;
+  function pr(x,y,z){return [ox+(x-y)*0.707*s, oy-((x+y)*0.33*s)-z*s*1.15];}
+  // base + top guide ellipses
+  c.strokeStyle=C.line;c.lineWidth=1;
+  [0,P.h].forEach(function(zz){c.beginPath();for(var i=0;i<=48;i++){var a=i/48*TAU,p=pr(P.r*Math.cos(a),P.r*Math.sin(a),zz);if(i)c.lineTo(p[0],p[1]);else c.moveTo(p[0],p[1]);}c.stroke();});
+  var n=S.A.length/4;
+  if(n>1){var stp=Math.max(1,Math.floor(n/1200));
+    c.strokeStyle=C.acc2;c.lineWidth=1.2;c.beginPath();
+    for(var i=0;i<n;i+=stp){var p=pr(S.A[i*4+1],S.A[i*4+2],S.A[i*4+3]);if(i)c.lineTo(p[0],p[1]);else c.moveTo(p[0],p[1]);}
+    c.stroke();
+    var hd=pr(S.A[(n-1)*4+1],S.A[(n-1)*4+2],S.A[(n-1)*4+3]);
+    c.fillStyle=C.acc;c.beginPath();c.arc(hd[0],hd[1],3,0,TAU);c.fill();}
+  c.fillStyle=C.mut;c.font="10px "+css("--mono");c.fillText("helix r "+P.r.toFixed(1)+" · pitch "+P.p,8,14);}
+function d2(C){var cv=$("cv2"),c=fit(cv),w=cv.clientWidth,h=cv.clientHeight;c.clearRect(0,0,w,h);
+  var R=Math.min(w*0.5,h)*0.33,cx=w*0.3,cy=h*0.44;
+  c.strokeStyle=C.line;c.lineWidth=1.5;c.beginPath();c.arc(cx,cy,R,0,TAU);c.stroke();
+  for(var i=0;i<12;i++){var a=i/12*TAU;c.beginPath();c.moveTo(cx+Math.cos(a)*R,cy+Math.sin(a)*R);c.lineTo(cx+Math.cos(a)*(R-5),cy+Math.sin(a)*(R-5));c.stroke();}
+  var ang=-S.th; // screen clockwise for +theta
+  c.strokeStyle=S.om<-1e-4?C.bad:(S.om>1e-4?C.acc2:C.mut);c.lineWidth=2.5;
+  c.beginPath();c.moveTo(cx,cy);c.lineTo(cx+Math.cos(ang)*R*0.92,cy+Math.sin(ang)*R*0.92);c.stroke();
+  c.fillStyle=C.mut;c.font="10px "+css("--mono");
+  c.fillText("plate "+(((S.th/TAU%1)+1)%1*360).toFixed(0)+"°",cx-R,cy+R+16);
+  // omega strip chart
+  var gx=w*0.56,gw=w*0.40,gy=12,gh=h-34,mid=gy+gh*0.62,sc=gh*0.5/(omCruise()*1.25);
+  c.strokeStyle=C.line;c.strokeRect(gx,gy,gw,gh);
+  c.beginPath();c.moveTo(gx,mid);c.lineTo(gx+gw,mid);c.stroke();
+  var tr=S.omTrace,m=tr.length;
+  if(m>1){c.strokeStyle=C.acc;c.lineWidth=1.4;c.beginPath();
+    for(var j=0;j<m;j++){var px=gx+j/(220-1)*gw,py=mid-tr[j]*sc;if(j)c.lineTo(px,py);else c.moveTo(px,py);}c.stroke();}
+  c.fillStyle=C.mut;c.fillText("ω rev/s  (0 line = stop, below = reverse)",gx,gy+gh+16);}
+function d3(C){var cv=$("cv3"),c=fit(cv),w=cv.clientWidth,h=cv.clientHeight;c.clearRect(0,0,w,h);
+  var m=28,ph=h-m*1.5,py0=h-m*0.8,sx=(w-m*2)/(P.r*1.25),sy=ph/P.h;
+  function X(r){return m+r*sx;} function Y(z){return py0-z*sy;}
+  c.strokeStyle=C.line;c.beginPath();c.moveTo(X(0),Y(0));c.lineTo(X(P.r*1.2),Y(0));c.stroke(); // bed
+  c.setLineDash([3,3]);c.beginPath();c.moveTo(X(P.r),Y(0));c.lineTo(X(P.r),Y(P.h));c.stroke();c.setLineDash([]);
+  c.strokeStyle=C.acc2;c.lineWidth=3;c.beginPath();c.moveTo(X(P.r),Y(0));c.lineTo(X(P.r),Y(S.z));c.stroke(); // deposited wall
+  c.lineWidth=1;
+  for(var i=0;i<S.refines.length;i++){var rf=S.refines[i],ex=40;
+    c.strokeStyle=C.bad;
+    c.beginPath();c.moveTo(X(P.r)+rf.d*ex-3,Y(rf.z)-3);c.lineTo(X(P.r)+rf.d*ex+3,Y(rf.z)+3);c.stroke();
+    c.beginPath();c.moveTo(X(P.r)+rf.d*ex-3,Y(rf.z)+3);c.lineTo(X(P.r)+rf.d*ex+3,Y(rf.z)-3);c.stroke();
+    c.fillStyle=C.ok;c.beginPath();c.arc(X(P.r),Y(rf.z),2,0,TAU);c.fill();}
+  c.fillStyle=C.acc;c.beginPath();c.arc(X(P.r),Y(S.z),3.5,0,TAU);c.fill(); // nozzle
+  var e=S.C.length?S.C[S.C.length-2]:0;
+  c.fillStyle=C.mut;c.font="10px "+css("--mono");
+  c.fillText("target wall (dashed) · ✕ candidate fail · e0 "+( (S.C.length? S.C[S.C.length-2]:0).toFixed(2))+" mm/s",8,14);}
+function d4(C){var cv=$("cv4"),c=fit(cv),w=cv.clientWidth,h=cv.clientHeight;c.clearRect(0,0,w,h);
+  var R=Math.min(w,h)*0.33,cx=w/2,cy=h/2+4;
+  c.strokeStyle=C.line;c.lineWidth=1.5;c.beginPath();c.arc(cx,cy,R,0,TAU);c.stroke();
+  var ang=-S.th;
+  c.strokeStyle=C.mut;c.lineWidth=1;c.beginPath();c.moveTo(cx,cy);c.lineTo(cx+Math.cos(ang)*R,cy+Math.sin(ang)*R);c.stroke();
+  var last=S.D.length?S.D.slice(S.D.length-10):null;
+  var e0=last?last[8]:0,e1=last?last[9]:0,eMax=KE*P.v;
+  c.fillStyle=e0>0?C.acc:C.mut;c.beginPath();c.arc(cx+R,cy,5,0,TAU);c.fill();
+  c.fillStyle=e1>0?C.acc2:C.mut;c.beginPath();c.arc(cx-R,cy,5,0,TAU);c.fill();
+  c.fillStyle=C.mut;c.font="10px "+css("--mono");
+  c.fillText("n0 @ 0°",cx+R-14,cy-10);c.fillText("n1 @ 180°",cx-R-16,cy-10);
+  $("eb0").style.width=eMax?Math.min(100,100*e0/eMax)+"%":"0%";
+  $("eb1").style.width=eMax?Math.min(100,100*e1/eMax)+"%":"0%";
+  if(last)$("dLine").textContent=last[1].toFixed(2)+", "+last[2].toFixed(2)+", "+last[3].toFixed(3)+", "+last[4].toFixed(2)+", "+last[5].toFixed(2)+", "+last[6].toFixed(3)+", "+last[7].toFixed(4)+", "+e0.toFixed(2)+", "+e1.toFixed(2);}
+
+// ---------- saving ----------
+var dl=null,blobOK=false;
+(async function(){try{dl=await (window.claude&&window.claude.use?window.claude.use("downloads"):null);}catch(e){dl=null;}
+  if(!dl){
+    if(!(window.claude&&window.claude.use)){blobOK=true;$("svNote").textContent="local mode: saves use browser downloads";}
+    else $("svNote").textContent="saving unavailable in this view";
+  }})();
+function blobSave(fn,str){
+  var url=URL.createObjectURL(new Blob([str],{type:"text/csv"}));
+  var a=document.createElement("a");a.href=url;a.download=fn;document.body.appendChild(a);a.click();
+  setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},400);
+  $("svNote").textContent=fn+" saved";
+}
+function csv(head,arr,stride,fmt){var out=[head],n=arr.length/stride;
+  for(var i=0;i<n;i++){var row=[];for(var j=0;j<stride;j++)row.push(fmt(j,arr[i*stride+j]));out.push(row.join(","));}
+  return out.join("\n");}
+var STN=["?","PRINT","DECEL","REVERSE","DWELL","CATCHUP","ENDSTOP","DONE"];
+function saver(id,fn,make){$(id).onclick=async function(){
+  if(!dl){if(blobOK)blobSave(fn,make());return;}
+  try{await dl.save({filename:fn,data:new Blob([make()])});$("svNote").textContent=fn+" saved";}
+  catch(e){if(e&&e.code==="declined")$("svNote").textContent="save declined";
+    else if(e&&(e.code==="unavailable"||e.code==="not_granted")){dl=null;$("svNote").textContent="saving unavailable in this view";}
+    else $("svNote").textContent="save failed ("+((e&&e.code)||"error")+")";}};}
+saver("svA","A_points.csv",function(){return csv("i,x,y,z",S.A,4,function(j,v){return j===0?v:v.toFixed(4);});});
+saver("svB","B_rotary.csv",function(){return csv("t,plate_angle_deg,rotary_speed_rev_s,state",S.B,4,function(j,v){return j===3?STN[v]:(j===0?v.toFixed(4):v.toFixed(5));});});
+saver("svC","C_single_extruder.csv",function(){return csv("t,x,y,z,extruder_0_mm_s,rotary_speed_rev_s",S.C,6,function(j,v){return v.toFixed(j===0?4:5);});});
+saver("svD","D_dual_stream.csv",function(){return csv("t,x0,y0,z0,x1,y1,z1,rotary_speed_rev_s,extruder_0_mm_s,extruder_1_mm_s",S.D,10,function(j,v){return v.toFixed(j===0?4:(j>=7?5:3));});});
+function updSaves(){["svA","svB","svC","svD"].forEach(function(id){$(id).disabled=true;});}
+
+// ---------- boot ----------
+readParams();seedFeeds();estimate();
+for(var k in feeds)$(k).innerHTML=feeds[k].join("\n");
+})();
+</script>

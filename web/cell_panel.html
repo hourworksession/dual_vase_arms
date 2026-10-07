@@ -1,0 +1,376 @@
+<meta charset="utf-8">
+<title>Dual Arm Cell Panel</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: Klipper-style operator panel — schematic viewport with live tags, control rail, gcode console */
+:root{
+  --bg:#10141b; --panel:#171d27; --panel2:#1d2431; --ink:#e8ecf2; --mut:#8b95a5;
+  --acc:#f0a63c; --a0:#f0a63c; --a1:#e07bb4; --teal:#45c0a7; --bad:#e06060; --ok:#5cb46d; --line:#2a3240;
+  --disp:"Chakra Petch","IBM Plex Sans",system-ui,sans-serif;
+  --body:"IBM Plex Sans",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#eef0f3; --panel:#ffffff; --panel2:#f3f5f8; --ink:#1c2430; --mut:#5c6675;
+    --acc:#b87410; --a0:#b87410; --a1:#b74a8b; --teal:#0d8a72; --bad:#c04545; --ok:#2f8b4e; --line:#d4d9e1;
+    color-scheme:light;
+  }
+}
+:root[data-theme="light"]{
+  --bg:#eef0f3; --panel:#ffffff; --panel2:#f3f5f8; --ink:#1c2430; --mut:#5c6675;
+  --acc:#b87410; --a0:#b87410; --a1:#b74a8b; --teal:#0d8a72; --bad:#c04545; --ok:#2f8b4e; --line:#d4d9e1;
+  color-scheme:light;
+}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:14px;margin:0;padding-block:14px;padding-inline:16px;line-height:1.45}
+.wrap{max-width:1240px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.top{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:8px;padding:9px 14px;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+.top h1{font-family:var(--disp);font-weight:700;font-size:18px;margin:0;letter-spacing:.02em}
+.mode{font-family:var(--disp);font-weight:600;font-size:12px;letter-spacing:.06em;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--teal)}
+.mode.estop{color:var(--bad);border-color:var(--bad)}
+button{font-family:var(--disp);font-weight:600;font-size:13px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 11px;cursor:pointer}
+button:hover{border-color:var(--mut)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+button.stop{background:var(--bad);border-color:var(--bad);color:#fff;font-size:14px;padding:7px 16px}
+button.go{background:var(--ok);border-color:var(--ok);color:#10141b}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:12px}
+@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;min-width:0}
+#cv{display:block;width:100%;height:520px;background:var(--panel2)}
+.rail{display:flex;flex-direction:column;gap:12px;min-width:0}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:8px}
+.pane h2{font-family:var(--disp);font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--mut);margin:0}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.row label{font-size:12px;color:var(--mut)}
+.row input[type=number],.row select{font-family:var(--mono);font-size:13px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:4px 6px;width:70px}
+.jog{display:grid;grid-template-columns:repeat(3,44px);grid-auto-rows:36px;gap:5px;justify-content:start}
+.jog button{padding:0;font-size:13px}
+.jog .blank{visibility:hidden}
+.zcol{display:flex;flex-direction:column;gap:5px;margin-left:10px}
+.jwrap{display:flex;align-items:flex-start}
+.seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{border:0;border-radius:0;background:var(--panel2)}
+.seg button.on{background:var(--acc);color:#141414}
+.console{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:6px}
+#clog{font-family:var(--mono);font-size:11px;color:var(--mut);height:120px;overflow-y:auto;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px;white-space:pre-wrap;overflow-wrap:anywhere}
+#clog b{color:var(--ink);font-weight:500} #clog .er{color:var(--bad)} #clog .okk{color:var(--ok)}
+#cin{font-family:var(--mono);font-size:13px;color:var(--ink);background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%;box-sizing:border-box}
+.note{font-size:11.5px;color:var(--mut)}
+.temp{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px}
+.temp .dot{width:8px;height:8px;border-radius:50%}
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <h1>Dual Arm Cell Panel</h1>
+    <span class="mode" id="mode">SIMULATION</span>
+    <label class="note" style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="demo" checked> demo print</label>
+    <span style="flex:1"></span>
+    <button id="btnHome">Home all</button>
+    <button id="btnAlign">Align spiral</button>
+    <button class="go" id="btnResume" hidden>Resume</button>
+    <button class="stop" id="btnEstop">E-STOP</button>
+  </div>
+
+  <div class="grid">
+    <div class="stage"><canvas id="cv"></canvas></div>
+
+    <div class="rail">
+      <div class="pane">
+        <h2>Toolhead jog</h2>
+        <div class="row">
+          <div class="seg" id="armSel">
+            <button data-a="0" class="on">Arm 0</button><button data-a="1">Arm 1</button>
+          </div>
+          <label>step</label>
+          <select id="step"><option>0.1</option><option selected>1</option><option>10</option></select>
+          <span class="note">mm</span>
+        </div>
+        <div class="jwrap">
+          <div class="jog">
+            <span class="blank"></span><button data-j="y+">Y+</button><span class="blank"></span>
+            <button data-j="x-">X&minus;</button><span class="blank"></span><button data-j="x+">X+</button>
+            <span class="blank"></span><button data-j="y-">Y&minus;</button><span class="blank"></span>
+          </div>
+          <div class="zcol"><button data-j="z+">Z+</button><button data-j="z-">Z&minus;</button></div>
+        </div>
+      </div>
+
+      <div class="pane">
+        <h2>Rotary stage</h2>
+        <div class="row">
+          <label for="rSpd">speed</label><input type="number" id="rSpd" value="0.097" step="0.01" min="0">
+          <span class="note">rev/s</span>
+          <button id="rCCW">&#8634;</button><button id="rCW">&#8635;</button><button id="rStop">&#9632;</button>
+        </div>
+        <div class="row"><button id="rJm">&minus;15&deg;</button><button id="rJp">+15&deg;</button></div>
+      </div>
+
+      <div class="pane">
+        <h2>Extruders</h2>
+        <div class="temp"><span class="dot" style="background:var(--a0)"></span>N0
+          <span id="t0">24&deg;C</span>&rarr;<input type="number" id="tt0" value="210" step="5" style="width:58px">
+          <button data-t="0">Set</button></div>
+        <div class="temp"><span class="dot" style="background:var(--a1)"></span>N1
+          <span id="t1">24&deg;C</span>&rarr;<input type="number" id="tt1" value="210" step="5" style="width:58px">
+          <button data-t="1">Set</button></div>
+        <div class="row"><button data-e="0">N0 purge 5 mm</button><button data-e="1">N1 purge 5 mm</button></div>
+      </div>
+
+      <div class="pane">
+        <h2>Live link</h2>
+        <div class="row"><input id="wsUrl" placeholder="ws://cell-host:7125" style="flex:1;min-width:0;font-family:var(--mono);font-size:12px;background:var(--panel2);border:1px solid var(--line);border-radius:5px;color:var(--ink);padding:5px 7px"><button id="wsGo">Connect</button></div>
+        <span class="note">Live telemetry needs this page served from the cell host; inside claude.ai the socket is sandboxed, so the panel runs its simulator.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="console">
+    <h2 style="font-family:var(--disp);font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--mut);margin:0">Console</h2>
+    <div id="clog"></div>
+    <input id="cin" placeholder="G0 A0 X49.4 Y0 Z5 · ROT S0.097 · ROT STOP · M104 T0 S210 · HOME" autocomplete="off">
+    <span class="note">Commands act on the simulator; the same grammar is what a cell-host bridge should accept.</span>
+  </div>
+</div>
+
+<script>
+"use strict";
+(function(){
+var $=function(id){return document.getElementById(id)};
+var TAU=Math.PI*2, KE=(1.2*0.2)/(Math.PI*1.75*1.75/4);
+
+// ---------- state ----------
+var S={
+  mode:"SIM", estop:false, sel:0,
+  rot:{ang:0, om:0, omT:0.097},
+  arm:[
+    {tcp:[49.4,0,2.0], tgt:[49.4,0,2.0], e:0, temp:24, tt:210, pulse:0},
+    {tcp:[-49.4,0,2.1], tgt:[-49.4,0,2.1], e:0, temp:24, tt:210, pulse:0}
+  ],
+  z0:2.0, demo:true, t:0
+};
+var reduced=window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+if(reduced){S.demo=false;$("demo").checked=false;}
+
+function clog(html){var el=$("clog");el.innerHTML+=html+"\n";el.scrollTop=el.scrollHeight;}
+clog("<b>cell panel ready</b> · simulator active · two UF850 + rotary stage");
+clog("type HELP for the command grammar");
+
+// ---------- simulation ----------
+var last=0;
+function tick(ts){
+  if(!last)last=ts; var dt=Math.min(0.1,(ts-last)/1000); last=ts;
+  if(!S.estop){
+    // rotary ease + integrate
+    S.rot.om+=Math.max(-0.3*dt,Math.min(0.3*dt,S.rot.omT-S.rot.om));
+    S.rot.ang=(S.rot.ang+S.rot.om*360*dt)%360; if(S.rot.ang<0)S.rot.ang+=360;
+    // demo print: z climbs with rotation, e tracks omega
+    if(S.demo&&S.mode==="SIM"){
+      S.z0+=Math.max(0,S.rot.om)*0.2*dt*  (360/360);
+      if(S.z0>10)S.z0=0.4;
+      S.arm[0].tgt[2]=S.z0; S.arm[1].tgt[2]=Math.min(10,S.z0+0.1);
+    }
+    for(var i=0;i<2;i++){var a=S.arm[i];
+      for(var k=0;k<3;k++){var d=a.tgt[k]-a.tcp[k],mv=40*dt;a.tcp[k]+=Math.max(-mv,Math.min(mv,d));}
+      a.temp+=(a.tt-a.temp)*dt/7;
+      var vS=Math.max(0,S.rot.om)*TAU*49.4;
+      var depositing=S.demo&&S.mode==="SIM"&&a.temp>180;
+      a.e=(a.pulse>0)?2.5:(depositing?KE*vS:0);
+      if(a.pulse>0)a.pulse-=dt;
+    }
+  } else {S.rot.om=0;S.arm[0].e=0;S.arm[1].e=0;}
+  S.t+=dt;
+  draw(); requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---------- drawing ----------
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+function fit(cv){var w=cv.clientWidth,h=cv.clientHeight,dpr=window.devicePixelRatio||1;
+  if(cv.width!==Math.round(w*dpr)||cv.height!==Math.round(h*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);}
+  var c=cv.getContext("2d");c.setTransform(dpr,0,0,dpr,0,0);return c;}
+function rrect(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+// Static side-elevation scene: detailed machines drawn once, only values change.
+function box(c,C,px,py,ax,ay,title,lines,col){
+  c.font="700 11px "+css("--mono");
+  var w=c.measureText(title).width;
+  c.font="10.5px "+css("--mono");
+  for(var i=0;i<lines.length;i++)w=Math.max(w,c.measureText(lines[i]).width);
+  w+=18; var h=20+lines.length*14;
+  var bx=px-(ax<px?0:0), by=py;
+  // leader from nearest box edge to anchor
+  var ex=ax<bx?bx:(ax>bx+w?bx+w:ax), ey=ay<by?by:(ay>by+h?by+h:ay);
+  c.strokeStyle=C.mut;c.lineWidth=1;c.beginPath();c.moveTo(ex,ey);c.lineTo(ax,ay);c.stroke();
+  c.fillStyle=C.mut;c.beginPath();c.arc(ax,ay,2,0,TAU);c.fill();
+  c.fillStyle=C.panel;rrect(c,bx,by,w,h,3);c.fill();
+  c.strokeStyle=col;c.lineWidth=2;c.stroke();c.lineWidth=1;
+  c.fillStyle=C.ink;c.font="700 11px "+css("--mono");c.fillText(title,bx+9,by+14);
+  c.font="10.5px "+css("--mono");
+  for(var j=0;j<lines.length;j++)c.fillText(lines[j],bx+9,by+28+j*14);
+}
+function draw(){
+  var cv=$("cv"),c=fit(cv),W=cv.clientWidth,H=cv.clientHeight;c.clearRect(0,0,W,H);
+  var C={line:css("--line"),mut:css("--mut"),ink:css("--ink"),a0:css("--a0"),a1:css("--a1"),teal:css("--teal"),bad:css("--bad"),ok:css("--ok"),panel:css("--panel"),p2:css("--panel2")};
+  var s=Math.min(W/1200,H/640), ox=(W-1200*s)/2, oy=(H-640*s)/2;
+  function X(x){return ox+x*s;} function Y(y){return oy+y*s;}
+  function LN(x1,y1,x2,y2){c.beginPath();c.moveTo(X(x1),Y(y1));c.lineTo(X(x2),Y(y2));c.stroke();}
+  function RR(x,y,w,h,r){rrect(c,X(x),Y(y),w*s,h*s,r*s);}
+  c.lineWidth=1;
+  // floor with hatching
+  c.strokeStyle=C.line;LN(40,560,1160,560);
+  for(var hx=60;hx<1160;hx+=46){c.beginPath();c.moveTo(X(hx),Y(560));c.lineTo(X(hx-14),Y(574));c.stroke();}
+  // ---- rotary stage: pedestal, disc, part ----
+  c.strokeStyle=C.teal;
+  RR(572,505,56,53,4);c.stroke();                                 // pedestal
+  LN(560,558,640,558);
+  c.beginPath();c.ellipse(X(600),Y(502),136*s,17*s,0,0,TAU);c.stroke();  // disc
+  // rotation index dot on disc rim (the one live motion in the scene)
+  var ra=S.rot.ang*Math.PI/180;
+  var rdx=X(600)+Math.cos(ra)*130*s, rdy=Y(502)+Math.sin(ra)*14*s;
+  c.fillStyle=Math.abs(S.rot.om)<1e-4?C.mut:(S.rot.om<0?C.bad:C.teal);
+  c.beginPath();c.arc(rdx,rdy,3.2,0,TAU);c.fill();
+  // part: cylinder on the disc
+  c.strokeStyle=C.ink;
+  LN(540,425,540,492);LN(660,425,660,492);
+  c.beginPath();c.ellipse(X(600),Y(492),60*s,9*s,0,0,Math.PI);c.stroke();
+  c.beginPath();c.ellipse(X(600),Y(425),60*s,9*s,0,0,TAU);c.stroke();
+  // ---- one detailed arm, mirrored for the right side ----
+  function arm(side){ // side 0 = left, 1 = right
+    var M=function(x){return side?1200-x:x;};
+    var col=side?C.a1:C.a0, a=S.arm[side];
+    // base plinth with vents + control console
+    c.strokeStyle=col;c.fillStyle=C.p2;
+    rrect(c,X(Math.min(M(120),M(280))),Y(470),160*s,90*s,6*s);c.fill();c.stroke();
+    for(var v2=0;v2<3;v2++){var vx=(side?1050:150)+v2*22;
+      c.beginPath();c.ellipse(X(vx),Y(515),5*s,14*s,0,0,TAU);c.stroke();}
+    // console with screen
+    var cx0=side?905:225;
+    rrect(c,X(cx0),Y(483),72*s,52*s,4*s);c.fill();c.stroke();
+    c.strokeStyle=C.mut;rrect(c,X(cx0+10),Y(491),32*s,22*s,2*s);c.stroke();
+    rrect(c,X(cx0+48),Y(491),14*s,10*s,2*s);c.stroke();
+    // pedestal column
+    c.strokeStyle=col;rrect(c,X(Math.min(M(195),M(265))),Y(360),70*s,110*s,5*s);c.stroke();
+    // links: shoulder -> elbow -> wrist, drawn as outlined bars with joint hubs
+    var P1=[M(230),352],P2=[M(390),212],P3=[M(530),298];
+    function link(pA,pB,w){
+      var dx=X(pB[0])-X(pA[0]),dy=Y(pB[1])-Y(pA[1]),L=Math.hypot(dx,dy),nx=-dy/L*w*s,ny=dx/L*w*s;
+      c.beginPath();c.moveTo(X(pA[0])+nx,Y(pA[1])+ny);c.lineTo(X(pB[0])+nx,Y(pB[1])+ny);
+      c.lineTo(X(pB[0])-nx,Y(pB[1])-ny);c.lineTo(X(pA[0])-nx,Y(pA[1])-ny);c.closePath();
+      c.fillStyle=C.p2;c.fill();c.strokeStyle=col;c.stroke();
+      c.strokeStyle=C.mut;c.beginPath();c.moveTo(X(pA[0]),Y(pA[1]));c.lineTo(X(pB[0]),Y(pB[1]));c.stroke();c.strokeStyle=col;
+    }
+    link(P1,P2,13);link(P2,P3,10);
+    function hub(p,r){c.beginPath();c.arc(X(p[0]),Y(p[1]),r*s,0,TAU);c.fillStyle=C.p2;c.fill();c.strokeStyle=col;c.stroke();
+      c.beginPath();c.arc(X(p[0]),Y(p[1]),3*s+1,0,TAU);c.fillStyle=col;c.fill();}
+    hub(P1,20);hub(P2,14);hub(P3,10);
+    // extruder: body with heatsink fins + nozzle cone over the part rim
+    var exc=side?650:550;
+    rrect(c,X(exc-24),Y(302),48*s,74*s,5*s);c.fillStyle=C.p2;c.fill();c.strokeStyle=col;c.stroke();
+    for(var f=0;f<4;f++)LN(exc-20,318+f*12,exc+20,318+f*12);
+    c.beginPath();c.moveTo(X(exc-11),Y(386));c.lineTo(X(exc+11),Y(386));c.lineTo(X(exc),Y(412));c.closePath();
+    c.fillStyle=a.e>1e-3?col:(a.e<-1e-3?C.bad:C.mut);c.fill();
+    // bowden tube arc from elbow to extruder top
+    c.strokeStyle=C.mut;c.beginPath();
+    c.moveTo(X(M(390)),Y(200));c.quadraticCurveTo(X(exc),Y(140),X(exc),Y(300));c.stroke();
+    // selected-arm marker
+    if(S.sel===side){c.strokeStyle=C.ink;c.setLineDash([3,3]);
+      rrect(c,X(Math.min(M(120),M(280)))-4,Y(470)-4,160*s+8,90*s+8,6*s);c.stroke();c.setLineDash([]);}
+  }
+  arm(0);arm(1);
+  // ---- fixed label boxes (mockup layout) ----
+  var A0=S.arm[0],A1=S.arm[1];
+  box(c,C,X(60),Y(238),X(230),Y(352),"L:ARM",
+    ["TCP "+A0.tcp[0].toFixed(1)+", "+A0.tcp[1].toFixed(1)+", "+A0.tcp[2].toFixed(2)],C.a0);
+  box(c,C,X(300),Y(58),X(550),Y(330),"L:EXTRUDE",
+    [A0.temp.toFixed(0)+"°C → "+A0.tt.toFixed(0)+"°C","e "+A0.e.toFixed(2)+" mm/s"],C.a0);
+  box(c,C,X(742),Y(58),X(650),Y(330),"R:EXTRUDE",
+    [A1.temp.toFixed(0)+"°C → "+A1.tt.toFixed(0)+"°C","e "+A1.e.toFixed(2)+" mm/s"],C.a1);
+  box(c,C,X(958),Y(238),X(970),Y(352),"R:ARM",
+    ["TCP "+A1.tcp[0].toFixed(1)+", "+A1.tcp[1].toFixed(1)+", "+A1.tcp[2].toFixed(2)],C.a1);
+  var pct=Math.max(0,Math.min(100,S.z0/10*100));
+  box(c,C,X(540),Y(120),X(600),Y(416),"PRINT %",
+    [(S.demo?pct.toFixed(0):"—")+" %   z "+A0.tcp[2].toFixed(2)+" mm"],C.ok);
+  box(c,C,X(300),Y(555),X(470),Y(502),"RT:REV/S",
+    ["θ "+S.rot.ang.toFixed(1)+"°   ω "+S.rot.om.toFixed(3)],C.teal);
+  if(S.estop){c.fillStyle=C.bad;c.font="700 15px "+css("--disp");c.fillText("EMERGENCY STOP — motion inhibited",X(60),Y(40));}
+}
+// ---------- controls ----------
+$("armSel").addEventListener("click",function(e){var b=e.target.closest("button");if(!b)return;
+  S.sel=+b.dataset.a;
+  var bs=$("armSel").querySelectorAll("button");bs[0].classList.toggle("on",S.sel===0);bs[1].classList.toggle("on",S.sel===1);});
+document.querySelectorAll(".jog button,.zcol button").forEach(function(b){b.addEventListener("click",function(){
+  if(S.estop)return clog("<span class='er'>!! estop active</span>");
+  var st=+$("step").value,a=S.arm[S.sel],j=b.dataset.j;
+  if(j==="x+")a.tgt[0]+=st; if(j==="x-")a.tgt[0]-=st;
+  if(j==="y+")a.tgt[1]+=st; if(j==="y-")a.tgt[1]-=st;
+  if(j==="z+")a.tgt[2]+=st; if(j==="z-")a.tgt[2]=Math.max(0,a.tgt[2]-st);
+  clog("jog A"+S.sel+" "+j+" "+st+" <span class='okk'>ok</span>");});});
+$("rCW").onclick=function(){if(!S.estop){S.rot.omT=Math.abs(+$("rSpd").value||0);clog("ROT S"+S.rot.omT+" <span class='okk'>ok</span>");}};
+$("rCCW").onclick=function(){if(!S.estop){S.rot.omT=-Math.abs(+$("rSpd").value||0);clog("ROT S-"+Math.abs(S.rot.omT)+" <span class='okk'>ok</span>");}};
+$("rStop").onclick=function(){S.rot.omT=0;clog("ROT STOP <span class='okk'>ok</span>");};
+$("rJp").onclick=function(){if(!S.estop){S.rot.ang=(S.rot.ang+15)%360;clog("ROT jog +15° <span class='okk'>ok</span>");}};
+$("rJm").onclick=function(){if(!S.estop){S.rot.ang=(S.rot.ang+345)%360;clog("ROT jog -15° <span class='okk'>ok</span>");}};
+document.querySelectorAll("[data-t]").forEach(function(b){b.addEventListener("click",function(){
+  var i=+b.dataset.t;S.arm[i].tt=+$("tt"+i).value||0;clog("M104 T"+i+" S"+S.arm[i].tt+" <span class='okk'>ok</span>");});});
+document.querySelectorAll("[data-e]").forEach(function(b){b.addEventListener("click",function(){
+  if(S.estop)return; var i=+b.dataset.e;
+  if(S.arm[i].temp<180)return clog("<span class='er'>!! N"+i+" cold ("+S.arm[i].temp.toFixed(0)+"°C) — extrude refused below 180</span>");
+  S.arm[i].pulse=2;clog("purge N"+i+" 5mm <span class='okk'>ok</span>");});});
+$("demo").addEventListener("change",function(){S.demo=$("demo").checked;});
+$("btnEstop").onclick=function(){S.estop=true;S.rot.omT=0;$("mode").textContent="ESTOP";$("mode").classList.add("estop");$("btnResume").hidden=false;clog("<span class='er'>EMERGENCY STOP</span>");};
+$("btnResume").onclick=function(){S.estop=false;$("mode").textContent=S.mode==="LIVE"?"LIVE":"SIMULATION";$("mode").classList.remove("estop");$("btnResume").hidden=true;clog("<span class='okk'>resume · drives re-enabled</span>");};
+$("btnHome").onclick=function(){if(S.estop)return;
+  S.arm[0].tgt=[49.4,0,2.0];S.arm[1].tgt=[-49.4,0,2.0];S.rot.omT=0;clog("HOME all <span class='okk'>ok</span> (custom joint-angle home)");};
+$("btnAlign").onclick=function(){if(S.estop)return;
+  clog("<b>ALIGN_SPIRAL</b> queued: converge arms on climbing spiral, side camera edge detect, stop at merge threshold");
+  S.arm[0].tgt=[12,0,6];S.arm[1].tgt=[-12,0,6];};
+
+// ---------- console ----------
+$("cin").addEventListener("keydown",function(e){
+  if(e.key!=="Enter")return; var cmd=$("cin").value.trim();$("cin").value="";
+  if(!cmd)return; clog("&gt; <b>"+cmd.replace(/</g,"&lt;")+"</b>"); exec(cmd.toUpperCase());});
+function num(m){return m?parseFloat(m[1]):null;}
+function exec(c){
+  if(S.estop&&c!=="RESUME"&&c!=="HELP")return clog("<span class='er'>!! estop active — RESUME first</span>");
+  if(c==="HELP")return clog("G0 [A0|A1] X.. Y.. Z..  ·  ROT S&lt;rev/s&gt; | ROT STOP | ROT A&lt;deg&gt;\nM104 T0|T1 S&lt;temp&gt;  ·  HOME  ·  ESTOP · RESUME");
+  if(c==="ESTOP")return $("btnEstop").onclick();
+  if(c==="RESUME")return $("btnResume").onclick();
+  if(c==="HOME")return $("btnHome").onclick();
+  if(c.indexOf("ROT")===0){
+    if(/STOP/.test(c)){S.rot.omT=0;return clog("ok");}
+    var sa=num(c.match(/A(-?[\d.]+)/)); if(sa!==null){S.rot.ang=((sa%360)+360)%360;return clog("ok");}
+    var sv=num(c.match(/S(-?[\d.]+)/)); if(sv!==null){S.rot.omT=sv;return clog("ok");}
+    return clog("<span class='er'>?? ROT needs S, A or STOP</span>");}
+  if(c.indexOf("M104")===0){var ti=/T1/.test(c)?1:0,sv2=num(c.match(/S([\d.]+)/));
+    if(sv2===null)return clog("<span class='er'>?? M104 needs S</span>");
+    S.arm[ti].tt=sv2;$("tt"+ti).value=sv2;return clog("ok");}
+  if(c.indexOf("G0")===0||c.indexOf("G1")===0){
+    var ai=/A1/.test(c)?1:S.sel,a=S.arm[ai];
+    var X=num(c.match(/X(-?[\d.]+)/)),Y=num(c.match(/Y(-?[\d.]+)/)),Z=num(c.match(/Z(-?[\d.]+)/));
+    if(X!==null)a.tgt[0]=X; if(Y!==null)a.tgt[1]=Y; if(Z!==null)a.tgt[2]=Math.max(0,Z);
+    return clog("ok · A"+ai+" → "+a.tgt.map(function(v){return v.toFixed(2);}).join(", "));}
+  clog("<span class='er'>?? unknown — HELP lists the grammar</span>");
+}
+
+// ---------- live link (works when served from the cell host) ----------
+var ws=null;
+$("wsGo").onclick=function(){
+  var url=$("wsUrl").value.trim(); if(!url)return;
+  try{ws=new WebSocket(url);}catch(e){return clog("<span class='er'>!! socket refused: "+(e&&e.message)+"</span>");}
+  clog("connecting "+url+" …");
+  ws.onopen=function(){S.mode="LIVE";$("mode").textContent="LIVE";S.demo=false;$("demo").checked=false;clog("<span class='okk'>live telemetry connected</span>");};
+  ws.onerror=function(){clog("<span class='er'>!! connection failed — inside claude.ai the sandbox blocks sockets; serve this file from the cell host for live mode</span>");};
+  ws.onclose=function(){if(S.mode==="LIVE"){S.mode="SIM";$("mode").textContent="SIMULATION";clog("link closed · simulator resumed");}};
+  ws.onmessage=function(ev){try{
+    var m=JSON.parse(ev.data);
+    if(m.rotary){if(typeof m.rotary.ang==="number")S.rot.ang=m.rotary.ang;if(typeof m.rotary.om==="number"){S.rot.om=m.rotary.om;S.rot.omT=m.rotary.om;}}
+    for(var i=0;i<2;i++){var k="arm"+i,a=m[k];if(!a)continue;
+      if(a.tcp){S.arm[i].tcp=a.tcp.slice(0,3);S.arm[i].tgt=a.tcp.slice(0,3);}
+      if(typeof a.e==="number")S.arm[i].e=a.e;
+      if(typeof a.temp==="number")S.arm[i].temp=a.temp;
+      if(typeof a.target==="number")S.arm[i].tt=a.target;}
+  }catch(e){}};
+};
+})();
+</script>
