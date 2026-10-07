@@ -154,6 +154,10 @@ class CellController:
         self.calc_left_len = DoubleVar(0.0)
         self.calc_right_len = DoubleVar(0.0)
         self.prime_len = DoubleVar(20.0)
+        self.man_len = DoubleVar(20.0)      # manual extrude length, mm
+        self.man_feed = DoubleVar(5.0)      # manual / prime feed, mm/s
+        self.ext_status = StrVar("idle")
+        self.gcode_line = StrVar("")
         _tdef = self.cfg.get('defaults', {}).get('temperature', {})
         self.temp_left = DoubleVar(float(_tdef.get('tool1', 235)))
         self.temp_right = DoubleVar(float(_tdef.get('tool0', 235)))
@@ -560,18 +564,54 @@ class CellController:
         except Exception as e:
             self.ui.error("Calculation Error", str(e))
 
-    def prime_extruder(self, side):
+    def _extrude_job(self, side, tool, length, speed, what):
+        import time as _t
+        self.ext_status.set(f"{what} {side}: {length:g} mm @ {speed:g} mm/s ...")
+        t0 = _t.time()
+        try:
+            self.extruder.extrude(tool, length, speed, wait=True)
+            self.ext_status.set(f"{what} {side}: done, {length:g} mm in {_t.time() - t0:.1f} s")
+            logger.info(f"{what} {side} (tool {tool}): {length:g} mm at {speed:g} mm/s")
+        except Exception as e:
+            self.ext_status.set(f"{what} {side}: FAILED ({e})")
+            logger.error(f"{what} {side} failed: {e}")
+
+    def _start_extrude(self, side, length, what):
         if not self._require('extruder'):
             return
-        length = self.prime_len.get()
-        if side == 'left':
-            speed = self.param_vars['feed_rate_left'].get()
-            tool = 1
-        else:
-            speed = self.param_vars['feed_rate_right'].get()
-            tool = 0
-        self.extruder.extrude(tool, length, speed, wait=False)
-        logger.info(f"Primed {side} extruder: {length} mm at {speed} mm/s")
+        if self._job_running_message(what):
+            return
+        speed = float(self.man_feed.get())
+        if speed <= 0 or length == 0:
+            self.ext_status.set("need a non-zero length and feed")
+            return
+        tool = 1 if side == 'left' else 0
+        threading.Thread(target=self._extrude_job, args=(side, tool, length, speed, what),
+                         daemon=True).start()
+
+    def prime_extruder(self, side):
+        self._start_extrude(side, abs(float(self.prime_len.get())), "prime")
+
+    def manual_extrude(self, side, direction):
+        """direction +1 extrude, -1 retract; length and feed from the panel."""
+        self._start_extrude(side, direction * abs(float(self.man_len.get())), "extrude" if direction > 0 else "retract")
+
+    def send_gcode_line(self):
+        if not self._require('extruder'):
+            return
+        line = (self.gcode_line.get() or "").strip()
+        if not line:
+            return
+        def job():
+            self.ext_status.set(f"gcode: {line} ...")
+            try:
+                self.extruder.send_gcode(line)
+                self.ext_status.set(f"gcode ok: {line}")
+                logger.info(f"Manual gcode: {line}")
+            except Exception as e:
+                self.ext_status.set(f"gcode FAILED: {e}")
+                logger.error(f"Manual gcode failed: {e}")
+        threading.Thread(target=job, daemon=True).start()
 
     def set_tool_temperature(self, side):
         """Heat one tool to its panel target (left = tool 1, right = tool 0)."""

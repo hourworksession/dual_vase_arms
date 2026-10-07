@@ -1,7 +1,8 @@
 """Machine page: connections, actions, jog, live offsets, extruder."""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget, QGridLayout, QVBoxLayout, QHBoxLayout, QLabel
+from PySide6.QtWidgets import (QWidget, QGridLayout, QVBoxLayout, QHBoxLayout, QLabel,
+                               QLineEdit)
 
 from .. import theme
 from ..widgets import (Card, NumberField, Check, Segmented, FormGrid, ReadoutField,
@@ -172,5 +173,23 @@ class MachinePage(QWidget):
                              button("Heaters off", "danger", c.heaters_off), None),
                         temps._row, 1)
         row.addLayout(temps, 1)
+
+        man = FormGrid()
+        man.row("Length", NumberField(c.man_len, "mm", 1, 1.0, minimum=0, width=120))
+        man.row("Feed", NumberField(c.man_feed, "mm/s", 1, 0.5, minimum=0, width=120))
+        man.addWidget(hrow(button("Extrude L", None, lambda: c.manual_extrude('left', +1)),
+                           button("Retract L", None, lambda: c.manual_extrude('left', -1)), None),
+                      man._row, 1); man._row += 1
+        man.addWidget(hrow(button("Extrude R", None, lambda: c.manual_extrude('right', +1)),
+                           button("Retract R", None, lambda: c.manual_extrude('right', -1)), None),
+                      man._row, 1); man._row += 1
+        gline = QLineEdit()
+        gline.setPlaceholderText("custom gcode, e.g. G1 E5 F300")
+        gline.editingFinished.connect(lambda: c.gcode_line.set(gline.text()))
+        gline.returnPressed.connect(c.send_gcode_line)
+        man.addWidget(hrow(gline, button("Send", None, c.send_gcode_line), None, stretch_last=False),
+                      man._row, 1); man._row += 1
+        man.row("Status", ReadoutField(c.ext_status, "{}", "", width=230))
+        row.addLayout(man, 1)
         card.add_layout(row)
         return card
