@@ -35,12 +35,12 @@ def _arm_default(joints, xyz, rpy):
 
 
 # Default home (Oct 2026 lab calibration): both arms at the same TCP pose,
-# X 298.3, Y 0, Z 298.9, roll 180, pitch 90, yaw 180 — nozzle down the mount
+# X 298.3, Y 0, Z 298.9, roll -90, pitch 90, yaw 180 — nozzle down the mount
 # axis, 150 mm proud of the disc. Pose mode drives straight to this; the
 # joint lists remain as a fallback for "joint" mode. A saved
 # config/home_positions.json takes precedence over these defaults.
 _HOME_POSE_XYZ = (298.3, 0.0, 298.9)
-_HOME_POSE_RPY = (180.0, 90.0, 180.0)
+_HOME_POSE_RPY = (-90.0, 90.0, 180.0)
 
 def _pose_default(joints):
     d = _arm_default(joints, _HOME_POSE_XYZ, _HOME_POSE_RPY)
