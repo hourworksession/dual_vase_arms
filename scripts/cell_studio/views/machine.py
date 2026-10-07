@@ -163,5 +163,14 @@ class MachinePage(QWidget):
                               tip="Filament needed for the cylinder as currently set"),
                        calc._row, 1)
         row.addLayout(calc, 1)
+
+        temps = FormGrid()
+        temps.row("Left target", NumberField(c.temp_left, "\u00b0C", 0, 5.0, minimum=0, width=120))
+        temps.row("Right target", NumberField(c.temp_right, "\u00b0C", 0, 5.0, minimum=0, width=120))
+        temps.addWidget(hrow(button("Heat left", None, lambda: c.set_tool_temperature('left')),
+                             button("Heat right", None, lambda: c.set_tool_temperature('right')),
+                             button("Heaters off", "danger", c.heaters_off), None),
+                        temps._row, 1)
+        row.addLayout(temps, 1)
         card.add_layout(row)
         return card

@@ -154,6 +154,9 @@ class CellController:
         self.calc_left_len = DoubleVar(0.0)
         self.calc_right_len = DoubleVar(0.0)
         self.prime_len = DoubleVar(20.0)
+        _tdef = self.cfg.get('defaults', {}).get('temperature', {})
+        self.temp_left = DoubleVar(float(_tdef.get('tool1', 235)))
+        self.temp_right = DoubleVar(float(_tdef.get('tool0', 235)))
 
         # Job status
         self.elapsed_time_var = StrVar("00:00")
@@ -569,6 +572,21 @@ class CellController:
             tool = 0
         self.extruder.extrude(tool, length, speed, wait=False)
         logger.info(f"Primed {side} extruder: {length} mm at {speed} mm/s")
+
+    def set_tool_temperature(self, side):
+        """Heat one tool to its panel target (left = tool 1, right = tool 0)."""
+        if not self._require('extruder'):
+            return
+        tool = 1 if side == 'left' else 0
+        temp = (self.temp_left if side == 'left' else self.temp_right).get()
+        self.extruder.set_temperature(tool, temp, wait=False)
+        logger.info(f"{side} extruder (tool {tool}) target set to {temp:.0f} C")
+
+    def heaters_off(self):
+        if not self._require('extruder'):
+            return
+        self.extruder.disable_all_heaters()
+        logger.info("All heaters off")
 
     # ==================================================================
     # Cylinder job
