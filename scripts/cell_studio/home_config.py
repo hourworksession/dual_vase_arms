@@ -35,21 +35,22 @@ def _arm_default(joints, xyz, rpy):
 
 
 # Default home (Oct 2026 lab calibration): both arms at the same TCP pose,
-# X 298.3, Y 0, Z 298.9, roll 180, pitch 90, yaw 180 — nozzle down the mount
+# X 298.3, Y 0, Z 298.9, pitch 90, yaw 180, roll +90 left / -90 right — nozzle down the mount
 # axis, 150 mm proud of the disc. Pose mode drives straight to this; the
 # joint lists remain as a fallback for "joint" mode. A saved
 # config/home_positions.json takes precedence over these defaults.
 _HOME_POSE_XYZ = (298.3, 0.0, 298.9)
-_HOME_POSE_RPY = (180.0, 90.0, 180.0)
+_HOME_POSE_RPY_LEFT = (90.0, 90.0, 180.0)
+_HOME_POSE_RPY_RIGHT = (-90.0, 90.0, 180.0)   # mirrored extruder mount: opposite roll
 
-def _pose_default(joints):
-    d = _arm_default(joints, _HOME_POSE_XYZ, _HOME_POSE_RPY)
+def _pose_default(joints, rpy):
+    d = _arm_default(joints, _HOME_POSE_XYZ, rpy)
     d["mode"] = "pose"
     return d
 
 DEFAULTS = {
-    "left": _pose_default((-2.8, -26.9, -7.0, -3.0, 109.9, 179.0)),
-    "right": _pose_default((-7.7, -27.8, -6.9, -8.3, 110.8, -3.0)),
+    "left": _pose_default((-2.8, -26.9, -7.0, -3.0, 109.9, 179.0), _HOME_POSE_RPY_LEFT),
+    "right": _pose_default((-7.7, -27.8, -6.9, -8.3, 110.8, -3.0), _HOME_POSE_RPY_RIGHT),
     "sequence": "simultaneous",   # "simultaneous", "right_first", "left_first"
 }
 
