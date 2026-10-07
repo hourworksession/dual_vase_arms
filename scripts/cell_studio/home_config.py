@@ -34,13 +34,22 @@ def _arm_default(joints, xyz, rpy):
     return d
 
 
-# Default home: each arm 250 mm back from the turntable axis ON ITS OWN SIDE, 150 mm above the
-# disc, nozzle in its mount orientation. (The old joints 0/-45/-45/0/90/0 put BOTH nozzles over
-# the disc centre, 30 mm apart.) Joints solved for the Oct 2026 calibration; a saved
-# config/home_positions.json takes precedence.
+# Default home (Oct 2026 lab calibration): both arms at the same TCP pose,
+# X 298.3, Y 0, Z 298.9, roll 180, pitch 90, yaw 180 — nozzle down the mount
+# axis, 150 mm proud of the disc. Pose mode drives straight to this; the
+# joint lists remain as a fallback for "joint" mode. A saved
+# config/home_positions.json takes precedence over these defaults.
+_HOME_POSE_XYZ = (298.3, 0.0, 298.9)
+_HOME_POSE_RPY = (180.0, 90.0, 180.0)
+
+def _pose_default(joints):
+    d = _arm_default(joints, _HOME_POSE_XYZ, _HOME_POSE_RPY)
+    d["mode"] = "pose"
+    return d
+
 DEFAULTS = {
-    "left": _arm_default((-2.8, -26.9, -7.0, -3.0, 109.9, 179.0), (262.1, -8.4, 260.2), (0.0, 90.0, 0.0)),
-    "right": _arm_default((-7.7, -27.8, -6.9, -8.3, 110.8, -3.0), (258.2, -22.9, 257.4), (90.0, -90.0, 90.0)),
+    "left": _pose_default((-2.8, -26.9, -7.0, -3.0, 109.9, 179.0)),
+    "right": _pose_default((-7.7, -27.8, -6.9, -8.3, 110.8, -3.0)),
     "sequence": "simultaneous",   # "simultaneous", "right_first", "left_first"
 }
 
