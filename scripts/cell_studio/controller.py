@@ -145,6 +145,7 @@ class CellController:
         self.tt_speed_max = 2.0
         self.base_arm_speed_var = DoubleVar(100.0)  # mm/s
         self.extrusion_mode = StrVar("single")      # "single" (original) | "streamed"
+        self.cyl_arms = StrVar("both")              # "both" | "left" | "right"
 
         # Jog controls
         self.jog_arm = StrVar('left')
@@ -666,7 +667,10 @@ class CellController:
         self.calculate_extrusion_lengths()
         p = {k: v.get() for k, v in self.param_vars.items()}
         ext_t, rot_t = self.flow_timing()
-        lines = [f"{p['total_revs']:g} rev at radius {p['radius']:g} mm, pitch {p['pitch']:g} mm "
+        _sel = self.cyl_arms.get()
+        lines = [{"both": "Arms: both", "left": "Arms: LEFT only (right stays parked)",
+                  "right": "Arms: RIGHT only (left stays parked)"}.get(_sel, _sel),
+                 f"{p['total_revs']:g} rev at radius {p['radius']:g} mm, pitch {p['pitch']:g} mm "
                  f"→ wall {p['total_revs'] * p['pitch']:.1f} mm tall",
                  f"Turntable {self.turntable_speed_var.get():g} rad/s → about {_mmss(rot_t)} (mm:ss)",
                  f"Filament L {self.calc_left_len.get():.1f} mm · R {self.calc_right_len.get():.1f} mm",
@@ -696,7 +700,13 @@ class CellController:
         """GUI thread. Checks, shows the pre-flight summary, then starts the job."""
         if self._job_running_message("Start cylinder"):
             return
-        if not self._require('left', 'right', 'turntable', 'extruder'):
+        _sel = self.cyl_arms.get()
+        _req = ['turntable', 'extruder']
+        if _sel in ('both', 'left'):
+            _req.append('left')
+        if _sel in ('both', 'right'):
+            _req.append('right')
+        if not self._require(*_req):
             return
         problems = self.cylinder_problems()
         if problems:
@@ -748,6 +758,9 @@ class CellController:
         # Local handles: an E-stop or disconnect clears self.* but must not crash this thread
         left, right, tt, ext = self.left, self.right, self.turntable, self.extruder
         streamed = self.extrusion_mode.get() == "streamed"
+        sel = self.cyl_arms.get()
+        use_l = sel in ('both', 'left') and left is not None
+        use_r = sel in ('both', 'right') and right is not None
         try:
             def safe(name, var):
                 return self.safe_get(var, name)
@@ -770,8 +783,9 @@ class CellController:
             start_angle_rad = math.radians(start_angle_deg)
             angular_off_rad = math.radians(angular_off_deg)
 
-            fil_left = self.calc_left_len.get()
-            fil_right = self.calc_right_len.get()
+            fil_left = self.calc_left_len.get() if use_l else 0.0
+            fil_right = self.calc_right_len.get() if use_r else 0.0
+            logger.info(f"Cylinder arms: {sel}")
 
             def nozzle_pos(cx, cy, r, angle_rad, radial_off):
                 eff_r = r + radial_off
@@ -807,14 +821,19 @@ class CellController:
             RL, PL, YL = self.orientation("left")
             left_yaw_off = safe('left_yaw', self.offset_vars['left_Yaw'])
 
-            approach = [
-                lambda: right.arm.set_position(park_x, park_y, park_z, RR, PR, YR, speed=100, wait=True),
-                lambda: left.arm.set_position(park_x, park_y, park_z, RL, PL, YL + left_yaw_off, speed=100, wait=True),
-                lambda: right.move_to(park_x, park_y, safe_z, RR, PR, YR, speed=100, wait=True),
-                lambda: left.move_to(park_x, park_y, safe_z, RL, PL, YL + left_yaw_off, speed=100, wait=True),
-                lambda: right.move_to(right_base_x, right_base_y, z_start + tt_cz_r, RR, PR, YR, speed=50, wait=True),
-                lambda: left.move_to(left_base_x, left_base_y, z_start + tt_cz_l, RL, PL, YL + left_yaw_off, speed=50, wait=True),
-            ]
+            approach = []
+            if use_r:
+                approach.append(lambda: right.arm.set_position(park_x, park_y, park_z, RR, PR, YR, speed=100, wait=True))
+            if use_l:
+                approach.append(lambda: left.arm.set_position(park_x, park_y, park_z, RL, PL, YL + left_yaw_off, speed=100, wait=True))
+            if use_r:
+                approach.append(lambda: right.move_to(park_x, park_y, safe_z, RR, PR, YR, speed=100, wait=True))
+            if use_l:
+                approach.append(lambda: left.move_to(park_x, park_y, safe_z, RL, PL, YL + left_yaw_off, speed=100, wait=True))
+            if use_r:
+                approach.append(lambda: right.move_to(right_base_x, right_base_y, z_start + tt_cz_r, RR, PR, YR, speed=50, wait=True))
+            if use_l:
+                approach.append(lambda: left.move_to(left_base_x, left_base_y, z_start + tt_cz_l, RL, PL, YL + left_yaw_off, speed=50, wait=True))
             for step in approach:
                 if self.stop_requested:
                     break
@@ -920,12 +939,14 @@ class CellController:
                 factor = waveform_speed_factor.get(waveform, 1.0)
                 arm_speed = max(base_arm_speed * factor, required_speed * factor)
 
-                left.move_to(left_x, left_y, left_z,
-                             roll=RL + lo[3], pitch=PL + lo[4], yaw=YL + lo[5],
-                             speed=arm_speed, wait=False)
-                right.move_to(right_x, right_y, right_z,
-                              roll=RR + ro[3], pitch=PR + ro[4], yaw=YR + ro[5],
-                              speed=arm_speed, wait=False)
+                if use_l:
+                    left.move_to(left_x, left_y, left_z,
+                                 roll=RL + lo[3], pitch=PL + lo[4], yaw=YL + lo[5],
+                                 speed=arm_speed, wait=False)
+                if use_r:
+                    right.move_to(right_x, right_y, right_z,
+                                  roll=RR + ro[3], pitch=PR + ro[4], yaw=YR + ro[5],
+                                  speed=arm_speed, wait=False)
 
                 elapsed = time.time() - start_wall_time
                 self.ui.post(lambda e=elapsed: self.elapsed_time_var.set(_mmss(e)))
@@ -942,8 +963,10 @@ class CellController:
             time.sleep(0.5)
             ext.send_gcode("M18 E X")
             lo = [safe(f'left_{ax}', self.offset_vars[f'left_{ax}']) for ax in self.axes]
-            right.arm.set_position(park_x, park_y, park_z, RR, PR, YR, speed=100, wait=True)
-            left.arm.set_position(park_x, park_y, park_z, RL, PL, YL + lo[5], speed=100, wait=True)
+            if use_r:
+                right.arm.set_position(park_x, park_y, park_z, RR, PR, YR, speed=100, wait=True)
+            if use_l:
+                left.arm.set_position(park_x, park_y, park_z, RL, PL, YL + lo[5], speed=100, wait=True)
             stopped = self.stop_requested
             self._job_finished()
             logger.info("Cylinder stopped." if stopped else "Cylinder finished.")

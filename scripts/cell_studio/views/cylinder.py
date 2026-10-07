@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QGridLayout, Q
 from .. import theme
 from ..controller import PARAM_META
 from ..widgets import (Card, NumberField, Check, Combo, Section, ReadoutField,
-                       button, label, hrow, scroll, divider)
+                       button, label, hrow, scroll, divider, Segmented)
 from .polar_view import PolarView
 
 
@@ -53,6 +53,9 @@ class CylinderPage(QWidget):
         v.addSpacing(6)
 
         geo = Section("Geometry")
+        arms = Segmented(c.cyl_arms, [("both", "Both"), ("left", "Left only"), ("right", "Right only")])
+        geo.row("Arms", arms, "Which arm(s) print this cylinder; the other stays where it is")
+        self.locked.append(arms)
         for k in ('radius', 'z_start', 'pitch', 'total_revs', 'line_width'):
             self._pfield(geo, k)
         v.addWidget(geo); v.addWidget(divider())
@@ -61,7 +64,7 @@ class CylinderPage(QWidget):
         for k in ('filament_diameter', 'feed_rate_left', 'feed_rate_right',
                   'extrusion_factor_left', 'extrusion_factor_right'):
             self._pfield(ext, k)
-        from ..widgets import Segmented
+
         mode = Segmented(c.extrusion_mode, [("single", "One move"), ("streamed", "Follow turntable")])
         ext.row("Extrusion", mode,
                 "One move (original): the whole wall's filament is sent as one G1 at start, at the feed "
