@@ -33,18 +33,12 @@ class ExtruderController:
     # ------------------------------------------------------------------
 
     def set_temperature(self, tool: int, temp: float, wait: bool = False) -> None:
-        """Set target temperature. tool=0 → extruder, tool=1 → heater_bed."""
-        if tool == 0:
-            if wait:
-                self.send_gcode(f"M109 S{temp} T0", timeout=120)
-            else:
-                self.send_gcode(f"M104 S{temp} T0")
-        elif tool == 1:
-            self.send_gcode(f"SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET={temp}")
-            if wait:
-                self._wait_for_heater_bed(temp)
-        else:
+        """Set target temperature. tool=0 → right_hotend, tool=1 → left_hotend
+        (EXTRUDE_TEMP macro in config/klipper/extrude_control.cfg)."""
+        if tool not in (0, 1):
             raise ValueError(f"Invalid tool index: {tool}")
+        self.send_gcode(f"EXTRUDE_TEMP T={tool} TARGET={temp} WAIT={1 if wait else 0}",
+                        timeout=300 if wait else 10)
 
     def heat_and_wait(self, tool: int, temp: float, timeout: int = 120,
                       tolerance: float = 5.0) -> None:
@@ -91,12 +85,8 @@ class ExtruderController:
         """Return current temperature. tool=0 → extruder, tool=1 → heater_bed."""
         try:
             status = self.get_printer_status()
-            if tool == 0:
-                return status.get('extruder', {}).get('temperature', 0.0)
-            elif tool == 1:
-                return status.get('heater_bed', {}).get('temperature', 0.0)
-            else:
-                return 0.0
+            name = {0: 'heater_generic right_hotend', 1: 'heater_generic left_hotend'}.get(tool)
+            return status.get(name, {}).get('temperature', 0.0) if name else 0.0
         except Exception:
             logger.warning(f"Could not read temperature for tool {tool}")
             return 0.0
@@ -121,22 +111,13 @@ class ExtruderController:
             feedrate_mm_s: Extrusion speed in mm/s.
             wait: If False, fire‑and‑forget (non‑blocking).
         """
-        self.set_relative_extrusion()
-        feedrate_mm_min = feedrate_mm_s * 60.0
-        if tool == 0:
-            script = f"G1 E{length_mm:.3f} F{feedrate_mm_min:.1f}"
-        elif tool == 1:
-            script = f"G1 X{length_mm:.3f} F{feedrate_mm_min:.1f}"
-        else:
+        if tool not in (0, 1):
             raise ValueError(f"Invalid tool index: {tool}")
-
+        script = f"EXTRUDE_MM T={tool} MM={length_mm:.3f} RATE={feedrate_mm_s:.3f}"
+        self.send_gcode(script, timeout=10)      # SYNC=0 inside: returns at once
         if wait:
-            self.send_gcode(script)
-        else:
-            try:
-                self.send_gcode(script, async_mode=True, timeout=10)
-            except requests.exceptions.ReadTimeout:
-                pass
+            self.send_gcode(f"MANUAL_STEPPER STEPPER={'right' if tool == 0 else 'left'} SYNC=1",
+                            timeout=max(10, abs(length_mm) / max(feedrate_mm_s, 0.1) + 5))
 
     # ------------------------------------------------------------------
     # Synchronous dual extrusion (single G1 command)
@@ -196,10 +177,12 @@ class ExtruderController:
     def get_printer_status(self) -> Dict[str, Any]:
         url = f"{self.base_url}/printer/objects/query"
         resp = self.session.get(url, params={
-            "extruder": "",
-            "heater_bed": "",
+            "heater_generic right_hotend": "",
+            "heater_generic left_hotend": "",
+            "manual_stepper right": "",
+            "manual_stepper left": "",
             "toolhead": "",
-            "print_stats": ""
+            "gcode_macro _EXT": ""
         })
         resp.raise_for_status()
         data = resp.json()
@@ -210,6 +193,7 @@ class ExtruderController:
     # ------------------------------------------------------------------
 
     def disable_all_heaters(self) -> None:
-        self.send_gcode("M104 S0 T0")
-        self.send_gcode("SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=0")
+        self.send_gcode("EXTRUDE_OFF")
+        self.send_gcode("EXTRUDE_TEMP T=0 TARGET=0")
+        self.send_gcode("EXTRUDE_TEMP T=1 TARGET=0")
         logger.info("All heaters disabled")

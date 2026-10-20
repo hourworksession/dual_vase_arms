@@ -1,7 +1,7 @@
 """Binary extruder control: on at a fixed rate, or off.
 
 Thin wrapper over the EXTRUDE_ON / EXTRUDE_OFF macros in
-config/klipper/extrude_binary.cfg. All state lives in Klipper; this class
+config/klipper/extrude_control.cfg. All state lives in Klipper; this class
 only sends commands and re-sends the keepalive. Use this as the failsafe
 mode when the streamed controller is not trusted.
 
@@ -49,6 +49,17 @@ class ExtruderBinary:
             self.on_flags[tool] = False
             self.ext.send_gcode(f"EXTRUDE_OFF T={tool}", timeout=5)
             logger.info("extruder %d OFF", tool)
+
+    def scale(self, tool: int, percent: float):
+        """Live throttle, 0..300 %. Takes effect within one pulse period."""
+        self.ext.send_gcode(f"EXTRUDE_SCALE T={tool} PERCENT={percent:.1f}", timeout=5)
+
+    def dose(self, tool: int, mm: float, rate_mm_s: float = 3.0, accel: float = 500.0):
+        """Push (or retract, negative) a fixed length and stop. Tool must be off."""
+        self.ext.send_gcode(f"EXTRUDE_MM T={tool} MM={mm:.3f} RATE={rate_mm_s:.3f} ACCEL={accel:.0f}", timeout=5)
+
+    def temp(self, tool: int, target: float, wait: bool = False):
+        self.ext.set_temperature(tool, target, wait=wait)
 
     def keepalive(self):
         """Re-arm the firmware watchdog. Safe to call every loop pass; only
