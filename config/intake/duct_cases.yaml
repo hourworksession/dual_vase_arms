@@ -56,7 +56,7 @@ cases:
       length_mm: [305, 3]
       outer_diameter_mm: [248.5, 1]
       interface_status: conflict
-      fit_problem: loose
+      fit_problem: too_small_loose
       recommended_outer_diameter_mm: [252.5, 1.5]
 
   - id: C2
@@ -85,7 +85,7 @@ cases:
     expect:
       quantity: 10
       interface_status: conflict
-      fit_problem: loose
+      fit_problem: too_small_loose
       recommended_outer_diameter_mm: [252.5, 1.5]
 
   - id: C5
@@ -97,5 +97,5 @@ cases:
       length_mm: [304.8, 3]
       outer_diameter_mm: [252.5, 1]
       interface_status: conflict
-      fit_problem: will_not_fit
+      fit_problem: too_large_will_not_insert
       recommended_outer_diameter_mm: [248.5, 1.5]
