@@ -15,3 +15,4 @@ dist/
 *.plan.json
 !tests/fixtures/*.plan.json
 build/
+runs/
