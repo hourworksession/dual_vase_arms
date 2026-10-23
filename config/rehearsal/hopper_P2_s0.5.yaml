@@ -1,10 +1,10 @@
 # Hopper case study, product P2 (tube) at campaign scale 0.5.
-# R 60 mm, height 152.4 mm (12 in x 0.5), 1.2 mm bead, 0.6 mm rise per revolution.
+# R 61.8 mm (half of 123.65; full-scale OD 248.5 mm fits a 250 mm duct), height 152.4 mm (12 in x 0.5), 1.2 mm bead, 0.6 mm rise per revolution.
 # The base ring (P1 at scale 0.5 = 6 mm) is one job; the wall is split into
 # bands so a second arm can join a band and interweave.
 name: hopper_P2_s0.5
 part:
-  radius: 60.0
+  radius: 61.8
   bead: 1.2
   pitch: 0.6
   max_surface_speed_mm_s: 30.0     # 21.6 mm3/s at 1.2 x 0.6, inside the Revo HF 1.2 limit

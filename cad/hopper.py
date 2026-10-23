@@ -1,6 +1,7 @@
 """Parametric hopper case-study models (P1 ring, P2 tube, P3 tube with 35 deg collar).
 
-Geometry is the thesis case study: 120 mm body radius, single 1.2 mm bead wall,
+Geometry is the thesis case study: 123.65 mm body radius (OD 248.5 mm, the spigot
+for a 250 mm metric duct), single 1.2 mm bead wall,
 12 in tall, collar root at 8 in rising at 35 deg to the horizontal over the last
 4 in (a 55 deg overhang from vertical). All dimensions in mm; `scale` shrinks
 everything uniformly (0.5 = campaign scale).
@@ -16,7 +17,7 @@ import cadquery as cq
 
 IN = 25.4
 P = dict(
-    radius=120.0,          # body wall radius (to the bead centreline)
+    radius=123.65,         # bead centreline; outside diameter 248.5 mm = spigot for a 250 mm (EN 1506) duct
     bead=1.2,              # wall thickness = one bead
     h1=12.0,               # P1 height, the misread "12"
     h2=12 * IN,            # P2 height, 12 inches

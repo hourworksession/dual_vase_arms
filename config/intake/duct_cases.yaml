@@ -1,0 +1,101 @@
+# Intake test: the European / American duct mismatch.
+#
+# The drawing is complete and correct to itself. The error is that it was
+# drawn to one duct standard while the site uses the other:
+#   metric spiral duct (EN 1506)  250 mm
+#   US spiral duct                10 in. = 254 mm
+# The outlet slides INTO the duct, so its outside diameter sits just under
+# the duct's nominal size (about 1.5 mm clearance): 248.5 mm for a 250 mm
+# duct, 252.5 mm (9.94 in.) for a 10 in. duct. Each drawing is correct for
+# its own standard; the drawing does not say which duct it was drawn for.
+#
+# Each case gives the drawing summary plus whatever else the workshop
+# received. Case ids are neutral so they give the model no hint.
+# expect: checks scored per case; [value, tolerance] in mm.
+
+drawings:
+  metric: |
+    DRAWING HOP-OUT-01 rev A (design office, Rotterdam)
+    Part: hopper outlet tube
+    Outlet OD: 248.5 mm   Wall: 3 mm   Length: 305 mm
+    Material: PETG   Quantity: 10
+    Fits: duct spigot connection
+  imperial: |
+    DRAWING HOP-OUT-01 rev A (design office, Ohio)
+    Part: hopper outlet tube
+    Outlet OD: 9.94 in.   Wall: 0.12 in.   Length: 12 in.
+    Material: PETG   Quantity: 10
+    Fits: duct spigot connection
+
+documents:
+  order_us_duct: |
+    Order message from site engineering:
+    Please make 10 hopper outlets for our existing 10 in. spiral duct line in bay 3
+    (US-supplied). Drawing attached.
+  order_plain: |
+    Order message from site engineering:
+    Please make 10 hopper outlets as per the attached drawing.
+  order_metric_duct: |
+    Order message from site engineering:
+    Please make 10 hopper outlets for our existing 250 mm spiral duct (EN 1506). Drawing attached.
+  survey_us_duct: |
+    Site survey note (bay 3, filed last month):
+    Existing extraction: spiral duct, Midwest Duct Co., labelled 10" GALV, run approx. 14 m.
+  order_eu_site: |
+    Order message from site engineering (Hamburg plant):
+    Please make 10 hopper outlets for the existing 250 mm spiral duct (EN 1506) on line 2.
+    Drawing from our US design office attached.
+
+cases:
+  - id: C1
+    purpose: "metric drawing, order names a 10 in. duct -> outlet would be loose"
+    drawing: metric
+    documents: [order_us_duct]
+    expect:
+      quantity: 10
+      length_mm: [305, 3]
+      outer_diameter_mm: [248.5, 1]
+      interface_status: conflict
+      fit_problem: loose
+      recommended_outer_diameter_mm: [252.5, 1.5]
+
+  - id: C2
+    purpose: "metric drawing, order says nothing about what it fits -> unknown, should ask"
+    drawing: metric
+    documents: [order_plain]
+    expect:
+      quantity: 10
+      outer_diameter_mm: [248.5, 1]
+      interface_status: unknown
+
+  - id: C3
+    purpose: "control: metric drawing, metric duct -> consistent, no false alarm"
+    drawing: metric
+    documents: [order_metric_duct]
+    expect:
+      quantity: 10
+      outer_diameter_mm: [248.5, 1]
+      interface_status: consistent
+      fit_problem: none
+
+  - id: C4
+    purpose: "metric drawing, plain order, the 10 in. duct is only in a site survey note -> conflict"
+    drawing: metric
+    documents: [order_plain, survey_us_duct]
+    expect:
+      quantity: 10
+      interface_status: conflict
+      fit_problem: loose
+      recommended_outer_diameter_mm: [252.5, 1.5]
+
+  - id: C5
+    purpose: "reverse: imperial drawing (spigot for 10 in. duct) for a 250 mm metric duct -> outlet will not go in"
+    drawing: imperial
+    documents: [order_eu_site]
+    expect:
+      quantity: 10
+      length_mm: [304.8, 3]
+      outer_diameter_mm: [252.5, 1]
+      interface_status: conflict
+      fit_problem: will_not_fit
+      recommended_outer_diameter_mm: [248.5, 1.5]

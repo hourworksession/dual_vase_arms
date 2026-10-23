@@ -6,6 +6,9 @@
     python -m rehearsal run                          # live, models from config/rehearsal.yaml
     python -m rehearsal run --models a/b c/d         # live, override the model list
     python -m rehearsal report runs/<file>.jsonl     # table + timeline PNG for a run
+    python -m rehearsal intake --baseline technician ideal   # duct-mismatch intake test, offline
+    python -m rehearsal intake --models openai/gpt-4o-mini   # same, live
+    python -m rehearsal routes --p-catch 0.8         # traditional vs cell, plus batch-size sweep
 
 Run from the repo root (with ``src`` on PYTHONPATH, or after ``pip install -e .``).
 """
@@ -78,7 +81,8 @@ def cmd_run(a) -> int:
     r = Rehearsal(world, agents, log, max_calls=a.max_calls or cfg["engine"]["max_calls"],
                   max_rounds=cfg["engine"].get("max_rounds", 200))
     summary = r.run()
-    print(json.dumps(summary, indent=2))
+    if not a.report:
+        print(json.dumps(summary, indent=2))
     print("log:", log)
     if a.report:
         return cmd_report(argparse.Namespace(log=log, png=None))
@@ -133,6 +137,45 @@ def _timeline_png(recs: list[dict], path: str) -> None:
     print("timeline:", path)
 
 
+def cmd_intake(a) -> int:
+    from . import intake
+    load_dotenv()
+    if a.baseline:
+        clients = [(b, intake.baseline_client(b)) for b in a.baseline]
+    else:
+        cfg = _cfg(a.config)["llm"]
+        models = a.models or cfg["models"]
+        clients = [(m, OpenRouterClient(models=[m], base_url=cfg.get("base_url", "https://openrouter.ai/api/v1"),
+                                        temperature=cfg.get("temperature", 0.2), max_tokens=cfg.get("max_tokens", 800)))
+                   for m in models]
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    for label, client in clients:
+        safe = label.replace("/", "_").replace(":", "_")
+        res = intake.run(client, a.cases, os.path.join("runs", f"intake_{safe}_{stamp}.jsonl"), label)
+        intake.print_report(res)
+    return 0
+
+
+def cmd_routes(a) -> int:
+    from . import routes
+    cfg = routes.load(a.config)
+    if a.direction:
+        cfg["direction"] = a.direction
+    if a.batch:
+        cfg["batch"] = a.batch
+    if a.on_site:
+        cfg["cell"]["on_site"] = True
+    pc = {"cell": a.p_catch} if a.p_catch is not None else None
+    print(f"direction={cfg['direction']}  batch={cfg['batch']}  cell on_site={cfg['cell']['on_site']}  "
+          f"(all figures are placeholder assumptions from {a.config})")
+    routes.print_table(routes.evaluate(cfg, p_catch=pc))
+    png = os.path.join("runs", f"routes_{cfg['direction']}_sweep.png")
+    os.makedirs("runs", exist_ok=True)
+    routes.sweep_png(routes.sweep(cfg, p_catch=pc), png, f"{cfg['direction']}, p_catch cell={pc['cell'] if pc else cfg['p_catch']['cell']}")
+    print("sweep:", png)
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rehearsal")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -152,8 +195,20 @@ def main(argv=None) -> int:
     rep = sub.add_parser("report")
     rep.add_argument("log")
     rep.add_argument("--png", default=None)
+    it = sub.add_parser("intake", help="duct-mismatch intake test")
+    it.add_argument("--config", default="config/rehearsal.yaml")
+    it.add_argument("--cases", default="config/intake/duct_cases.yaml")
+    it.add_argument("--models", nargs="+", help="one run per model")
+    it.add_argument("--baseline", nargs="+", choices=["technician", "ideal"], help="offline baselines")
+    ro = sub.add_parser("routes", help="traditional vs cell route comparison")
+    ro.add_argument("--config", default="config/routes/duct_case.yaml")
+    ro.add_argument("--direction", choices=["loose", "will_not_fit"])
+    ro.add_argument("--batch", type=int)
+    ro.add_argument("--p-catch", type=float, help="cell catch rate, e.g. from an intake run")
+    ro.add_argument("--on-site", action="store_true", help="cell sits at the customer (no shipping)")
     a = ap.parse_args(argv)
-    return {"doctor": cmd_doctor, "run": cmd_run, "report": cmd_report}[a.cmd](a)
+    return {"doctor": cmd_doctor, "run": cmd_run, "report": cmd_report,
+            "intake": cmd_intake, "routes": cmd_routes}[a.cmd](a)
 
 
 if __name__ == "__main__":

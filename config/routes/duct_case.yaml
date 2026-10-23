@@ -1,0 +1,62 @@
+# Route comparison for the European / American duct mismatch.
+# EVERY number below is a placeholder assumption for the thesis scenario, not
+# measured or quoted data. Change them here; the report prints them back.
+
+batch: 10
+direction: loose              # loose: 248.5 mm outlet (drawn for a 250 mm duct) on a 10 in. duct (intake case C1/C4)
+                              # will_not_fit: 9.94 in. outlet (drawn for a 10 in. duct) on a 250 mm duct (case C5)
+part:
+  length_mm: 305.0
+  spigot_insert_mm: 50.0      # length of the outlet that sits inside the duct
+  density_g_cm3: 1.27         # PETG
+  od_mm:                      # [as drawn, what actually fits]
+    loose: [248.5, 252.5]
+    will_not_fit: [252.5, 248.5]
+
+# Probability the mismatch is caught at intake, before anything is made.
+# Traditional: 0 by the scenario's premise (the technician builds to the drawing).
+# Cell: the AI's catch rate; replace with p_catch from an intake run (--p-catch).
+p_catch:
+  traditional: 0.0
+  cell: 0.8
+
+traditional:
+  wall_mm: 3.0
+  drawing_to_shop_h: 4        # paperwork, scheduling onto the line
+  die_setup_h: 3              # fit die, heat, purge, stabilise
+  line_speed_m_per_min: 1.0
+  cut_s_per_part: 30
+  qa_policy: end_of_line      # every_step | end_of_line | sample
+  qa_min_per_part: {every_step: 6, end_of_line: 3, sample: 0.6}
+  ship_days: 2
+  install_h_per_part: 0.5
+  return_days: 2              # failed parts back to the factory
+  # loose: heat the outlet and expand it ~1% on a mandrel in a second cell
+  expand_min_per_part: 15
+  expand_scrap: 0.10          # parts that split or distort and must be remade
+  # will_not_fit: an extruded tube cannot be shrunk reliably, so remake on the right die
+  remake_setup_h: 3
+  machine_gbp_h: 60
+  labour_gbp_h: 35
+  material_gbp_kg: 4.0        # pellet
+
+cell:
+  wall_mm: 1.2                # one bead
+  pitch_mm: 0.6
+  surface_speed_mm_s: 30
+  dual_arm_speedup: 1.92      # from the rehearsal runs (both arms interweaving)
+  intake_min: 5               # AI reads drawing, order and survey
+  approval_min: 10            # human checks the shown plan
+  load_unload_min_per_part: 10
+  on_site: false              # true = the cell sits at the customer, no shipping
+  ship_days: 2
+  install_h_per_part: 0.5
+  return_days: 2
+  relocate_min_per_part: 10   # re-seat and datum the finished part on the disc
+  # loose: add outer beads round the spigot (+2.4 mm on diameter per bead)
+  # will_not_fit: cut the spigot off (additive cannot remove material) and reprint it smaller
+  cut_min_per_part: 5
+  machine_gbp_h: 40
+  labour_gbp_h: 35
+  labour_fraction_while_printing: 0.25
+  material_gbp_kg: 20.0       # filament

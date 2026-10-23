@@ -123,3 +123,44 @@ def test_local_endpoint_uses_single_model_and_no_key():
 
 def test_parse_json_tolerates_fences():
     assert parse_json_object('```json\n{"a": 1}\n```') == {"a": 1}
+
+
+# ---------------------------------------------------------------- intake + routes
+from rehearsal import intake, routes  # noqa: E402
+
+CASES = os.path.join(ROOT, "config", "intake", "duct_cases.yaml")
+ROUTES = os.path.join(ROOT, "config", "routes", "duct_case.yaml")
+
+
+def test_intake_baselines(tmp_path):
+    tech = intake.run(intake.baseline_client("technician"), CASES, str(tmp_path / "t.jsonl"), "technician")
+    ideal = intake.run(intake.baseline_client("ideal"), CASES, str(tmp_path / "i.jsonl"), "ideal")
+    assert tech["summary"]["p_catch"] == 0.0
+    assert ideal["summary"]["cases_passed"] == ideal["summary"]["cases"] == 5
+    assert ideal["summary"]["p_catch"] == 1.0
+
+
+def test_intake_messages_carry_only_listed_documents():
+    pack = intake.load_cases(CASES)
+    c4 = next(c for c in pack["cases"] if c["id"] == "C4")
+    text = intake.build_messages(pack, c4)[1]["content"]
+    assert '10" GALV' in text and "10 in. spiral duct line" not in text
+
+
+def test_routes_caught_beats_missed_and_cell_has_one_job_order():
+    cfg = routes.load(ROUTES)
+    for d in ("loose", "will_not_fit"):
+        cfg["direction"] = d
+        r = routes.evaluate(cfg)
+        for name in ("traditional", "cell"):
+            assert r[name]["caught"]["lead_time_h"] < r[name]["missed"]["lead_time_h"]
+        assert r["cell"]["missed"]["job_orders"] == 1
+        assert r["traditional"]["missed"]["job_orders"] == 2
+
+
+def test_will_not_fit_traditional_scraps_whole_batch():
+    cfg = routes.load(ROUTES)
+    cfg["direction"] = "will_not_fit"
+    miss = routes.traditional(cfg, 10, caught=False)
+    hit = routes.traditional(cfg, 10, caught=True)
+    assert miss.scrap_kg == pytest.approx(hit.material_kg, rel=0.05)
