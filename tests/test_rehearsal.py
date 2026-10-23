@@ -177,3 +177,16 @@ def test_fit_check_directions():
 def test_extract_mode_ideal_passes_all(tmp_path):
     r = intake.run(intake.baseline_client("ideal_extract"), CASES, str(tmp_path / "e.jsonl"), "ideal_extract", "extract")
     assert r["summary"]["cases_passed"] == 5 and r["summary"]["false_alarms"] == "0/2"
+
+
+def test_batch_workbook(tmp_path):
+    from rehearsal import batch
+    from openpyxl import load_workbook
+    out = str(tmp_path / "b.xlsx")
+    jobs = [("ideal_extract", "extract", intake.baseline_client("ideal_extract")),
+            ("technician", "direct", intake.baseline_client("technician"))]
+    batch.run_batch(jobs, CASES, repeats=2, workers=2, out_xlsx=out, settings={"note": "test"})
+    wb = load_workbook(out)
+    assert wb.sheetnames[:3] == ["Summary", "By case", "Direct vs extract"]
+    assert wb["Answers"].max_row == 1 + 2 * 2 * 5
+    assert str(wb["Summary"]["M2"].value).startswith("=")

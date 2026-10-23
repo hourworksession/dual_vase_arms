@@ -81,3 +81,15 @@ it (will not fit; additive cannot remove material).
     python -m rehearsal routes --direction will_not_fit --on-site
 
 Every figure in the YAML is a placeholder assumption to be replaced.
+
+### Repeated runs into Excel
+
+    pip install openpyxl
+    python -m rehearsal batch --models openai/gpt-4o-mini google/gemini-2.5-flash --repeats 30
+
+Runs every case `--repeats` times per model in both modes (`--modes direct extract`),
+four calls at a time (`--workers`), and writes `runs/intake_batch_<time>.xlsx`:
+Summary (p_catch, p_fix with a 95% Wilson interval, false-alarm rate, cost, grade),
+By case, Direct vs extract, Answers (one row per call; the other sheets are formulas
+over it), Settings (thresholds and run settings) and Prompts and cases. Ctrl+C stops
+and still saves what finished.

@@ -184,48 +184,60 @@ def baseline_client(name: str) -> MockClient:
     return MockClient(policy=BASELINES[name], name=name)
 
 
+def evaluate_case(client, pack: dict, case: dict, mode: str, label: str) -> dict:
+    """One call: send one case, score the answer. Never raises on a bad reply."""
+    t0 = time.monotonic()
+    try:
+        if mode == "extract":
+            reply = client.complete_json(build_messages(pack, case, mode), EXTRACT_SCHEMA, "part_facts")
+            out = dict(reply.content)
+            out.update(fit_check(out.get("outer_diameter_mm"), out.get("mating_nominal_mm")))
+        else:
+            reply = client.complete_json(build_messages(pack, case), SPEC_SCHEMA, "part_spec")
+            out = reply.content
+        model, err, cost = reply.model, None, reply.cost_usd
+    except (LLMError, ValueError, KeyError) as e:
+        out, model, err, cost = {}, label, str(e)[:300], None
+    checks = score(case["expect"], out)
+    return {"case": case["id"], "purpose": case["purpose"], "expect": case["expect"], "model": model,
+            "passed": err is None and all(c[1] for c in checks), "checks": checks, "answer": out,
+            "error": err, "cost_usd": cost, "latency_s": round(time.monotonic() - t0, 2)}
+
+
+def conflict_stats(rows: list[dict]) -> dict:
+    conflicts = [r for r in rows if r["expect"].get("interface_status") == "conflict"]
+    clean = [r for r in rows if r["expect"].get("interface_status") != "conflict"]
+    caught = sum(1 for r in conflicts if r["answer"].get("interface_status") == "conflict")
+    right = sum(1 for r in conflicts if r["error"] is None and all(
+        ok for k, ok, _ in r["checks"] if k in ("interface_status", "fit_problem", "recommended_outer_diameter_mm")))
+    false_alarms = sum(1 for r in clean if r["answer"].get("interface_status") == "conflict")
+    return {"n_conflict": len(conflicts), "n_clean": len(clean), "caught": caught, "right": right,
+            "false_alarms": false_alarms}
+
+
 def run(client, pack_path: str, out_path: str, label: str, mode: str = "direct") -> dict:
     pack = load_cases(pack_path)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     rows, n_checks, n_pass = [], 0, 0
     with open(out_path, "w", encoding="utf-8") as log:
         for case in pack["cases"]:
-            t0 = time.monotonic()
-            try:
-                if mode == "extract":
-                    reply = client.complete_json(build_messages(pack, case, mode), EXTRACT_SCHEMA, "part_facts")
-                    out = dict(reply.content)
-                    out.update(fit_check(out.get("outer_diameter_mm"), out.get("mating_nominal_mm")))
-                else:
-                    reply = client.complete_json(build_messages(pack, case), SPEC_SCHEMA, "part_spec")
-                    out = reply.content
-                model, err, cost = reply.model, None, reply.cost_usd
-            except (LLMError, ValueError, KeyError) as e:
-                out, model, err, cost = {}, label, str(e)[:300], None
-            checks = score(case["expect"], out)
-            ok = err is None and all(c[1] for c in checks)
+            row = evaluate_case(client, pack, case, mode, label)
+            checks = row["checks"]
             n_checks += len(checks)
             n_pass += sum(c[1] for c in checks)
-            row = {"case": case["id"], "purpose": case["purpose"], "expect": case["expect"], "model": model, "passed": ok,
-                   "checks": checks, "answer": out, "error": err, "cost_usd": cost,
-                   "latency_s": round(time.monotonic() - t0, 2)}
             rows.append(row)
             log.write(json.dumps(row) + "\n")
-        conflicts = [r for r in rows if r["expect"].get("interface_status") == "conflict"]
-        caught = sum(1 for r in conflicts if r["answer"].get("interface_status") == "conflict")
-        # caught AND the right direction AND a usable recommended diameter
-        right = sum(1 for r in conflicts if all(ok for k, ok, _ in r["checks"]
-                                                 if k in ("interface_status", "fit_problem", "recommended_outer_diameter_mm")))
-        clean = [r for r in rows if r["expect"].get("interface_status") != "conflict"]
-        false_alarms = sum(1 for r in clean if r["answer"].get("interface_status") == "conflict")
+        cs = conflict_stats(rows)
+        conflicts, clean = cs["n_conflict"], cs["n_clean"]
+        caught, right, false_alarms = cs["caught"], cs["right"], cs["false_alarms"]
         summary = {"label": label, "mode": mode, "llm_errors": sum(1 for r in rows if r["error"]),
                    "cases_passed": sum(r["passed"] for r in rows), "cases": len(rows),
                    "checks_passed": n_pass, "checks": n_checks,
-                   "conflicts_caught": f"{caught}/{len(conflicts)}",
-                   "p_catch": round(caught / len(conflicts), 3) if conflicts else None,
-                   "correct_fixes": f"{right}/{len(conflicts)}",
-                   "p_correct_fix": round(right / len(conflicts), 3) if conflicts else None,
-                   "false_alarms": f"{false_alarms}/{len(clean)}",
+                   "conflicts_caught": f"{caught}/{conflicts}",
+                   "p_catch": round(caught / conflicts, 3) if conflicts else None,
+                   "correct_fixes": f"{right}/{conflicts}",
+                   "p_correct_fix": round(right / conflicts, 3) if conflicts else None,
+                   "false_alarms": f"{false_alarms}/{clean}",
                    "cost_usd": round(sum(r["cost_usd"] or 0 for r in rows), 5), "log": out_path}
         log.write(json.dumps({"summary": summary}) + "\n")
     return {"summary": summary, "rows": rows}

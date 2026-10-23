@@ -9,6 +9,7 @@
     python -m rehearsal intake --baseline technician ideal   # duct-mismatch intake test, offline
     python -m rehearsal intake --models openai/gpt-4o-mini   # same, live (model judges the fit)
     python -m rehearsal intake --mode extract --models openai/gpt-4o-mini   # model extracts, code judges
+    python -m rehearsal batch --models openai/gpt-4o-mini --repeats 30   # both modes, Excel workbook
     python -m rehearsal routes --p-catch 0.8         # traditional vs cell, plus batch-size sweep
 
 Run from the repo root (with ``src`` on PYTHONPATH, or after ``pip install -e .``).
@@ -158,6 +159,32 @@ def cmd_intake(a) -> int:
     return 0
 
 
+def cmd_batch(a) -> int:
+    from . import batch, intake
+    load_dotenv()
+    cfg = _cfg(a.config)["llm"]
+    temp = a.temperature if a.temperature is not None else cfg.get("temperature", 0.2)
+    jobs = []
+    if a.baseline:
+        for b in a.baseline:
+            jobs.append((b, "extract" if b == "ideal_extract" else "direct", intake.baseline_client(b)))
+    else:
+        for m in a.models or cfg["models"]:
+            client = OpenRouterClient(models=[m], base_url=cfg.get("base_url", "https://openrouter.ai/api/v1"),
+                                      temperature=temp, max_tokens=cfg.get("max_tokens", 2000))
+            for mode in a.modes:
+                jobs.append((m, mode, client))
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    out = a.out or os.path.join("runs", f"intake_batch_{stamp}.xlsx")
+    settings = {"run started": time.strftime("%Y-%m-%d %H:%M"), "cases file": a.cases,
+                "models": ", ".join(sorted({j[0] for j in jobs})), "modes": ", ".join(sorted({j[1] for j in jobs})),
+                "repeats per model and mode": a.repeats, "temperature": temp,
+                "max tokens": cfg.get("max_tokens", 2000), "parallel calls": a.workers}
+    path = batch.run_batch(jobs, a.cases, a.repeats, a.workers, out, settings)
+    print("workbook:", path)
+    return 0
+
+
 def cmd_routes(a) -> int:
     from . import routes
     cfg = routes.load(a.config)
@@ -204,6 +231,16 @@ def main(argv=None) -> int:
     it.add_argument("--baseline", nargs="+", choices=["technician", "ideal", "ideal_extract"], help="offline baselines")
     it.add_argument("--mode", choices=["direct", "extract"], default="direct",
                     help="direct: the model judges the fit; extract: the model reports facts, code judges the fit")
+    ba = sub.add_parser("batch", help="repeat the intake test and write an Excel workbook")
+    ba.add_argument("--config", default="config/rehearsal.yaml")
+    ba.add_argument("--cases", default="config/intake/duct_cases.yaml")
+    ba.add_argument("--models", nargs="+")
+    ba.add_argument("--modes", nargs="+", choices=["direct", "extract"], default=["direct", "extract"])
+    ba.add_argument("--repeats", type=int, default=30)
+    ba.add_argument("--workers", type=int, default=4, help="calls in parallel")
+    ba.add_argument("--temperature", type=float, default=None)
+    ba.add_argument("--baseline", nargs="+", choices=["technician", "ideal", "ideal_extract"])
+    ba.add_argument("--out", default=None)
     ro = sub.add_parser("routes", help="traditional vs cell route comparison")
     ro.add_argument("--config", default="config/routes/duct_case.yaml")
     ro.add_argument("--direction", choices=["loose", "will_not_fit"])
@@ -212,7 +249,7 @@ def main(argv=None) -> int:
     ro.add_argument("--on-site", action="store_true", help="cell sits at the customer (no shipping)")
     a = ap.parse_args(argv)
     return {"doctor": cmd_doctor, "run": cmd_run, "report": cmd_report,
-            "intake": cmd_intake, "routes": cmd_routes}[a.cmd](a)
+            "intake": cmd_intake, "batch": cmd_batch, "routes": cmd_routes}[a.cmd](a)
 
 
 if __name__ == "__main__":
