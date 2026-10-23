@@ -164,3 +164,16 @@ def test_will_not_fit_traditional_scraps_whole_batch():
     miss = routes.traditional(cfg, 10, caught=False)
     hit = routes.traditional(cfg, 10, caught=True)
     assert miss.scrap_kg == pytest.approx(hit.material_kg, rel=0.05)
+
+
+def test_fit_check_directions():
+    assert intake.fit_check(248.5, 254)["fit_problem"] == "too_small_loose"
+    assert intake.fit_check(248.5, 254)["recommended_outer_diameter_mm"] == 252.5
+    assert intake.fit_check(252.5, 250)["fit_problem"] == "too_large_will_not_insert"
+    assert intake.fit_check(248.5, 250)["interface_status"] == "consistent"
+    assert intake.fit_check(248.5, None)["interface_status"] == "unknown"
+
+
+def test_extract_mode_ideal_passes_all(tmp_path):
+    r = intake.run(intake.baseline_client("ideal_extract"), CASES, str(tmp_path / "e.jsonl"), "ideal_extract", "extract")
+    assert r["summary"]["cases_passed"] == 5 and r["summary"]["false_alarms"] == "0/2"

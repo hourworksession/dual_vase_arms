@@ -55,15 +55,64 @@ A spigot outlet slides inside its duct, so its outside diameter must be slightly
 duct's nominal size. Reply with one JSON object matching the schema."""
 
 
+# ----------------------------------------------------------------------
+# Extract mode: the model only reports facts; deterministic code judges the fit.
+EXTRACT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "quantity": {"type": ["integer", "null"]},
+        "length_mm": {"type": ["number", "null"]},
+        "outer_diameter_mm": {"type": ["number", "null"], "description": "as drawn, converted to mm"},
+        "mating_part": {"type": "string", "description": "what the part connects to, quoted from the documents, or 'not stated'"},
+        "mating_nominal_mm": {"type": ["number", "null"],
+                              "description": "nominal size of that duct in mm, only if a document states it; null otherwise"},
+        "mating_source": {"type": "string", "description": "which document states it, or 'none'"},
+        "questions_for_requester": {"type": "array", "items": {"type": "string"}},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["quantity", "length_mm", "outer_diameter_mm", "mating_part", "mating_nominal_mm",
+                 "mating_source", "questions_for_requester", "reasoning"],
+}
+
+EXTRACT_SYSTEM = """You are the order-intake clerk for a manufacturing cell.
+You receive a drawing summary and every other document that came with the order.
+Report the facts only, converted to millimetres: quantity, length, the outlet outside diameter
+as drawn, and what the part connects to with its nominal size if any document states it.
+Do not judge whether it fits; a separate checker does that. Never invent a size that no document
+states: use null and ask instead. Reply with one JSON object matching the schema."""
+
+# Spigot fit window: outlet OD sits this far under the duct's nominal size.
+FIT_WINDOW_MM = {"target": 1.5, "min": 0.5, "max": 2.5}
+
+
+def fit_check(od_mm: float | None, nominal_mm: float | None, window: dict = FIT_WINDOW_MM) -> dict:
+    """Deterministic spigot-in-duct fit judgement."""
+    if od_mm is None or nominal_mm is None:
+        return {"interface_status": "unknown", "fit_problem": "unknown", "recommended_outer_diameter_mm": None,
+                "clearance_mm": None}
+    c = nominal_mm - od_mm
+    if c > window["max"]:
+        fp = "too_small_loose"
+    elif c < window["min"]:
+        fp = "too_large_will_not_insert"
+    else:
+        fp = "none"
+    return {"interface_status": "consistent" if fp == "none" else "conflict", "fit_problem": fp,
+            "recommended_outer_diameter_mm": None if fp == "none" else round(nominal_mm - window["target"], 2),
+            "clearance_mm": round(c, 2)}
+
+
 def load_cases(path: str) -> dict:
     return yaml.safe_load(open(path, encoding="utf-8"))
 
 
-def build_messages(pack: dict, case: dict) -> list[dict]:
+def build_messages(pack: dict, case: dict, mode: str = "direct") -> list[dict]:
     text = [f"Request {case['id']}.", "", pack["drawings"][case["drawing"]]]
     for d in case.get("documents", []):
         text += ["", pack["documents"][d]]
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "\n".join(text)}]
+    system = EXTRACT_SYSTEM if mode == "extract" else SYSTEM
+    return [{"role": "system", "content": system}, {"role": "user", "content": "\n".join(text)}]
 
 
 def score(expect: dict, out: dict) -> list[tuple[str, bool, str]]:
@@ -118,14 +167,24 @@ def ideal_policy(messages: list[dict]) -> dict:
     return out
 
 
-BASELINES = {"technician": technician_policy, "ideal": ideal_policy}
+def ideal_extract_policy(messages: list[dict]) -> dict:
+    t = _text(messages)
+    imperial = "Outlet OD: 9.94 in." in t
+    nominal = 254.0 if ('10 in. spiral duct' in t or '10" GALV' in t) else 250.0 if "250 mm spiral duct" in t else None
+    return {"quantity": 10, "length_mm": 304.8 if imperial else 305, "outer_diameter_mm": 252.5 if imperial else 248.5,
+            "mating_part": "spiral duct" if nominal else "not stated", "mating_nominal_mm": nominal,
+            "mating_source": "order or survey" if nominal else "none",
+            "questions_for_requester": [] if nominal else ["What duct does it fit?"], "reasoning": "ideal"}
+
+
+BASELINES = {"technician": technician_policy, "ideal": ideal_policy, "ideal_extract": ideal_extract_policy}
 
 
 def baseline_client(name: str) -> MockClient:
     return MockClient(policy=BASELINES[name], name=name)
 
 
-def run(client, pack_path: str, out_path: str, label: str) -> dict:
+def run(client, pack_path: str, out_path: str, label: str, mode: str = "direct") -> dict:
     pack = load_cases(pack_path)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     rows, n_checks, n_pass = [], 0, 0
@@ -133,8 +192,14 @@ def run(client, pack_path: str, out_path: str, label: str) -> dict:
         for case in pack["cases"]:
             t0 = time.monotonic()
             try:
-                reply = client.complete_json(build_messages(pack, case), SPEC_SCHEMA, "part_spec")
-                out, model, err, cost = reply.content, reply.model, None, reply.cost_usd
+                if mode == "extract":
+                    reply = client.complete_json(build_messages(pack, case, mode), EXTRACT_SCHEMA, "part_facts")
+                    out = dict(reply.content)
+                    out.update(fit_check(out.get("outer_diameter_mm"), out.get("mating_nominal_mm")))
+                else:
+                    reply = client.complete_json(build_messages(pack, case), SPEC_SCHEMA, "part_spec")
+                    out = reply.content
+                model, err, cost = reply.model, None, reply.cost_usd
             except (LLMError, ValueError, KeyError) as e:
                 out, model, err, cost = {}, label, str(e)[:300], None
             checks = score(case["expect"], out)
@@ -153,7 +218,8 @@ def run(client, pack_path: str, out_path: str, label: str) -> dict:
                                                  if k in ("interface_status", "fit_problem", "recommended_outer_diameter_mm")))
         clean = [r for r in rows if r["expect"].get("interface_status") != "conflict"]
         false_alarms = sum(1 for r in clean if r["answer"].get("interface_status") == "conflict")
-        summary = {"label": label, "cases_passed": sum(r["passed"] for r in rows), "cases": len(rows),
+        summary = {"label": label, "mode": mode, "llm_errors": sum(1 for r in rows if r["error"]),
+                   "cases_passed": sum(r["passed"] for r in rows), "cases": len(rows),
                    "checks_passed": n_pass, "checks": n_checks,
                    "conflicts_caught": f"{caught}/{len(conflicts)}",
                    "p_catch": round(caught / len(conflicts), 3) if conflicts else None,
@@ -167,10 +233,10 @@ def run(client, pack_path: str, out_path: str, label: str) -> dict:
 
 def print_report(result: dict) -> None:
     s = result["summary"]
-    print(f"\n{s['label']}: {s['cases_passed']}/{s['cases']} cases, {s['checks_passed']}/{s['checks']} checks, "
+    print(f"\n{s['label']} [{s['mode']}]: {s['cases_passed']}/{s['cases']} cases, {s['checks_passed']}/{s['checks']} checks, "
           f"${s['cost_usd']}")
     print(f"  conflicts flagged {s['conflicts_caught']}, flagged with the right direction and fix "
-          f"{s['correct_fixes']}, false alarms {s['false_alarms']}")
+          f"{s['correct_fixes']}, false alarms {s['false_alarms']}, unreadable replies {s['llm_errors']}")
     for r in result["rows"]:
         print(f"  {r['case']} {'PASS' if r['passed'] else 'FAIL':4}  {r['purpose']}")
         if r["error"]:

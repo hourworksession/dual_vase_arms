@@ -9,7 +9,7 @@ llm:
     - openai/gpt-4o-mini
     - google/gemini-2.5-flash
   temperature: 0.2
-  max_tokens: 800
+  max_tokens: 2000      # thinking models (e.g. Gemini 2.5) spend part of this before answering
 
 engine:
   max_retries: 2        # refutations an agent may answer per decision

@@ -7,7 +7,8 @@
     python -m rehearsal run --models a/b c/d         # live, override the model list
     python -m rehearsal report runs/<file>.jsonl     # table + timeline PNG for a run
     python -m rehearsal intake --baseline technician ideal   # duct-mismatch intake test, offline
-    python -m rehearsal intake --models openai/gpt-4o-mini   # same, live
+    python -m rehearsal intake --models openai/gpt-4o-mini   # same, live (model judges the fit)
+    python -m rehearsal intake --mode extract --models openai/gpt-4o-mini   # model extracts, code judges
     python -m rehearsal routes --p-catch 0.8         # traditional vs cell, plus batch-size sweep
 
 Run from the repo root (with ``src`` on PYTHONPATH, or after ``pip install -e .``).
@@ -146,12 +147,13 @@ def cmd_intake(a) -> int:
         cfg = _cfg(a.config)["llm"]
         models = a.models or cfg["models"]
         clients = [(m, OpenRouterClient(models=[m], base_url=cfg.get("base_url", "https://openrouter.ai/api/v1"),
-                                        temperature=cfg.get("temperature", 0.2), max_tokens=cfg.get("max_tokens", 800)))
+                                        temperature=cfg.get("temperature", 0.2), max_tokens=cfg.get("max_tokens", 2000)))
                    for m in models]
     stamp = time.strftime("%Y%m%d_%H%M%S")
     for label, client in clients:
         safe = label.replace("/", "_").replace(":", "_")
-        res = intake.run(client, a.cases, os.path.join("runs", f"intake_{safe}_{stamp}.jsonl"), label)
+        mode = "extract" if label == "ideal_extract" else a.mode
+        res = intake.run(client, a.cases, os.path.join("runs", f"intake_{mode}_{safe}_{stamp}.jsonl"), label, mode)
         intake.print_report(res)
     return 0
 
@@ -199,7 +201,9 @@ def main(argv=None) -> int:
     it.add_argument("--config", default="config/rehearsal.yaml")
     it.add_argument("--cases", default="config/intake/duct_cases.yaml")
     it.add_argument("--models", nargs="+", help="one run per model")
-    it.add_argument("--baseline", nargs="+", choices=["technician", "ideal"], help="offline baselines")
+    it.add_argument("--baseline", nargs="+", choices=["technician", "ideal", "ideal_extract"], help="offline baselines")
+    it.add_argument("--mode", choices=["direct", "extract"], default="direct",
+                    help="direct: the model judges the fit; extract: the model reports facts, code judges the fit")
     ro = sub.add_parser("routes", help="traditional vs cell route comparison")
     ro.add_argument("--config", default="config/routes/duct_case.yaml")
     ro.add_argument("--direction", choices=["loose", "will_not_fit"])
