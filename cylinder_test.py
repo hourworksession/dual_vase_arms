@@ -30,6 +30,9 @@ Values (KEY=value, any order):
     PRIME_S   prime time, s (bed at half speed, extruder at half E)          (default 5)
     PRIME_Z   prime start height above Z0, mm                                (default 2)
     FIL     filament diameter, mm                                            (default 1.75)
+    FLOW_K  measured / planned plastic, from a test print: measured width x L_H divided by
+            planned W x L_H (first test: 1.5 / 1.1 = 1.36). The bed speeds up by this so
+            the bead lands at W.                                             (default 1.0)
     MIN_TEMP  refuse to start below this hot-end temperature, C              (default 190)
 
 Sequence:
@@ -58,7 +61,7 @@ DEFAULTS = {  # per tool; centres and start angles from cell studio's cylinder d
     0: {"W": 1.1, "Z0": 105.9, "CX": 508.18, "CY": -22.88, "ANGLE": 135.0},
     1: {"W": 0.9, "Z0": 110.2, "CX": 512.1, "CY": -8.4, "ANGLE": 140.0},
 }
-COMMON = {"MAX_VB": math.pi, "MAX_VT": 100.0, "FIRST": 0.6, "SPIRAL": 3, "PRIME_MM": 15.0,
+COMMON = {"FLOW_K": 1.0, "MAX_VB": math.pi, "MAX_VT": 100.0, "FIRST": 0.6, "SPIRAL": 3, "PRIME_MM": 15.0,
           "PRIME_S": 5.0, "PRIME_Z": 2.0, "FIL": 1.75, "MIN_TEMP": 190.0}
 REQUIRED = ("T", "R", "L_H", "P")
 BASE_ARM_SPEED = 100.0            # mm/s = MAX_VT 100 %
@@ -108,7 +111,7 @@ def parse(argv):
 def plan(p):
     """Every number the run will use, worked out before anything moves."""
     fil_area = math.pi * (p["FIL"] / 2) ** 2
-    flow = p["E"] * fil_area                                  # mm3/s
+    flow = p["E"] * fil_area * p["FLOW_K"]                    # mm3/s actually laid
     v_surface = flow / (p["W"] * p["L_H"])                    # mm/s the bead needs
     omega_needed = v_surface / p["R"]
     omega = min(omega_needed, p["MAX_VB"])
@@ -127,8 +130,8 @@ def plan(p):
     if p.get("WAVE") and p["E_MAX"] * fil_area > 30:
         warn.append(f"Wave peak E_MAX {p['E_MAX']:g} mm/s is {p['E_MAX'] * fil_area:.0f} mm3/s, above what a Revo HF "
                     "usually melts (about 30): the peaks may under-extrude (that is part of what this shows).")
-    if flow > 30:
-        warn.append(f"{flow:.0f} mm3/s is above what a Revo HF usually melts (about 30); expect under-extrusion.")
+    if p["E"] * fil_area > 30:
+        warn.append(f"{p['E'] * fil_area:.0f} mm3/s is above what a Revo HF usually melts (about 30); expect under-extrusion.")
     if p["L_H"] > 0.8 * (1.0 if p["T"] == 0 else 0.8):
         warn.append(f"L_H {p['L_H']} mm is over 80 % of the nozzle.")
     if p["FIRST"] <= 0:
@@ -144,7 +147,8 @@ def plan(p):
 def show(p, k):
     side = SIDE[p["T"]]
     print(f"\nCylinder test, {side} arm (T={p['T']})")
-    print(f"  Bead {p['W']} x {p['L_H']} mm at E={p['E']} mm/s -> {k['flow']:.1f} mm3/s, "
+    kk = f" x FLOW_K {p['FLOW_K']:g}" if p["FLOW_K"] != 1 else ""
+    print(f"  Bead {p['W']} x {p['L_H']} mm at E={p['E']} mm/s{kk} -> {k['flow']:.1f} mm3/s, "
           f"{k['v_surface']:.1f} mm/s at the nozzle")
     print(f"  Bed {k['omega']:.3f} rad/s ({math.degrees(k['omega']):.1f} deg/s), {k['rev_s']:.1f} s per rev"
           f"   [ceiling {p['MAX_VB']:.3f}]")
