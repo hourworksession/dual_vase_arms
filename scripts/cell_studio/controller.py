@@ -117,10 +117,10 @@ class CellController:
             # (Old mounts: left 574.1, -5.4, 153; right 567.7, 6.7, 151.1.)
             'tt_cx_left':         DoubleVar(512.1),
             'tt_cy_left':         DoubleVar(-8.4),
-            'tt_cz_left':         DoubleVar(110.2),
+            'tt_cz_left':         DoubleVar(111.9),
             'tt_cx_right':        DoubleVar(508.18),
             'tt_cy_right':        DoubleVar(-22.88),
-            'tt_cz_right':        DoubleVar(107.4),
+            'tt_cz_right':        DoubleVar(109.9),
             'angular_offset_deg': DoubleVar(5.0),
             'radial_offset_left':  DoubleVar(0.0),
             'radial_offset_right': DoubleVar(0.0),
