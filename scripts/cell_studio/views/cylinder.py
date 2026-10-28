@@ -56,7 +56,7 @@ class CylinderPage(QWidget):
         arms = Segmented(c.cyl_arms, [("both", "Both"), ("left", "Left only"), ("right", "Right only")])
         geo.row("Arms", arms, "Which arm(s) print this cylinder; the other stays where it is")
         self.locked.append(arms)
-        for k in ('radius', 'z_start', 'pitch', 'total_revs', 'line_width'):
+        for k in ('radius', 'z_start', 'pitch', 'total_revs', 'flat_revs', 'line_width'):
             self._pfield(geo, k)
         v.addWidget(geo); v.addWidget(divider())
 
