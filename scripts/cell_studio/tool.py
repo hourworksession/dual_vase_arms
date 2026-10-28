@@ -4,8 +4,10 @@ Settings ▸ Tool and nozzle. Saved in config/tool.json. Used by the cylinder
 print, Prepare to print, the planner (Model print, Generators) and the macros,
 so a mount or nozzle change is entered once.
 
-Defaults match the current cell (Oct 2026): E3D Revo High Flow 1.2 mm nozzles on
-the new mounts. Each arm's flange points horizontally at the disc and the extruder
+Defaults match the current cell (28 Oct 2026): E3D Revo High Flow nozzles, 1.0 mm on
+the RIGHT arm and 0.8 mm on the LEFT, on the new mounts. "nozzle_diameter" /
+"line_width" are the right arm's (the cylinder's line width); the left arm's flow is
+scaled by line_width_left / line_width through its extrusion factor. Each arm's flange points horizontally at the disc and the extruder
 hangs off it pointing straight down, so each arm has its OWN orientation:
     right arm: roll 90, pitch -90, yaw 90
     left arm:  roll 0,  pitch  90, yaw 0
@@ -30,10 +32,12 @@ from .home_config import REPO_ROOT
 TOOL_FILE = os.path.join(REPO_ROOT, "config", "tool.json")
 
 DEFAULTS = {
-    "nozzle": "E3D Revo High Flow",
-    "nozzle_diameter": 1.2,
-    "line_width": 1.3,          # mm, default extrusion width
-    "layer_height": 0.6,        # mm, default layer height (≤ ~75 % of the nozzle)
+    "nozzle": "E3D Revo High Flow (right 1.0 mm, left 0.8 mm)",
+    "nozzle_diameter": 1.0,     # mm, RIGHT arm (also the planner's nozzle)
+    "line_width": 1.1,          # mm, RIGHT arm default extrusion width (~1.1 x nozzle)
+    "nozzle_diameter_left": 0.8,
+    "line_width_left": 0.9,     # mm, LEFT arm
+    "layer_height": 0.5,        # mm, default layer height (<= ~75 % of the SMALLER nozzle, 0.8 -> 0.6 max)
     "roll_right": 90.0,
     "pitch_right": -90.0,
     "yaw_right": 90.0,
@@ -123,6 +127,11 @@ def save(data):
 
 def problems(data):
     out = []
+    dl = data.get("nozzle_diameter_left", data["nozzle_diameter"])
+    if not 0.5 * dl <= data.get("line_width_left", dl) <= 2.5 * dl:
+        out.append(f"Left line width {data.get('line_width_left')} mm is far from the {dl} mm left nozzle.")
+    if data["layer_height"] > 0.9 * min(dl, data["nozzle_diameter"]):
+        out.append(f"Layer height {data['layer_height']} mm is too tall for the {min(dl, data['nozzle_diameter'])} mm nozzle.")
     d = data["nozzle_diameter"]
     if not 0.1 <= d <= 3.0:
         out.append(f"Nozzle diameter {d} mm looks wrong.")

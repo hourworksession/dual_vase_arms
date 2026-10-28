@@ -319,9 +319,9 @@ def s09(x):
     m = x.mark(); ANSWERS.extend([True] * 3)
     x.c.start_cylinder(); x.wait_for(lambda: x.log_since(m, cmd="extrude_sync"), 3)
     ev = x.log_since(m, cmd="extrude_sync")
-    used = x.c.calc_left_len.get()        # what the job was started with
+    used = x.c.calc_right_len.get()       # what the job was started with
     x.c.calculate_extrusion_lengths()
-    fresh = x.c.calc_left_len.get()
+    fresh = x.c.calc_right_len.get()      # extrude_sync's first amount is tool 0 = right
     if MODE == "single":
         got = ev[0][3][0] if ev else None
     else:                                  # follow-turntable sends 10° chunks of the job's total

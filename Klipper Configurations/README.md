@@ -20,6 +20,16 @@ In Mainsail: upload `extrude_control.cfg`; open `printer.cfg`, replace its conte
 `non_extruder_control_test.cfg`, Save & Restart (or run `FIRMWARE_RESTART`).
 Klipper should show **Ready**. If it reports a config error, read the line it names and send it to Claude.
 
+## Test panel (instead of typing the console commands)
+
+    python3 scripts/extruder_test_panel.py            # Pi address from config/settings.yaml
+    python3 scripts/extruder_test_panel.py --sim      # practise without hardware
+
+Per tool: heat, ON/OFF at a rate, flow slider, push a length. ALL OFF (button, Space or Esc)
+skips any queued commands. Untick Keepalive to check the 5 s watchdog stops a tool by itself.
+ON is blocked below the minimum extrusion temperature (190 C by default). The log shows each
+command's round-trip time. On start it says whether the test config is the one loaded.
+
 ## 3. Heaters (console)
 
 | Command | Expect |

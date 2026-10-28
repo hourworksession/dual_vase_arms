@@ -118,7 +118,7 @@ class MainWindow(QMainWindow):
         tb = QVBoxLayout()
         tb.setSpacing(0)
         tb.addWidget(label("Cell Studio", "AppTitle"))
-        tb.addWidget(label("Dual xArm 850 · ADRS turntable · Revo HF 1.2 mm", "AppSub"))
+        tb.addWidget(label("Dual xArm 850 · ADRS turntable · Revo HF R 1.0 / L 0.8 mm", "AppSub"))
         lay.addLayout(tb)
         lay.addSpacing(18)
 
