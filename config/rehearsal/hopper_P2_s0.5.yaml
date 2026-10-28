@@ -1,0 +1,23 @@
+# Hopper case study, product P2 (tube) at campaign scale 0.5.
+# R 61.8 mm (half of 123.65; full-scale OD 248.5 mm fits a 250 mm duct), height 152.4 mm (12 in x 0.5), 1.2 mm bead, 0.6 mm rise per revolution.
+# The base ring (P1 at scale 0.5 = 6 mm) is one job; the wall is split into
+# bands so a second arm can join a band and interweave.
+name: hopper_P2_s0.5
+part:
+  radius: 61.8
+  bead: 1.2
+  pitch: 0.6
+  max_surface_speed_mm_s: 30.0     # 21.6 mm3/s at 1.2 x 0.6, inside the Revo HF 1.2 limit
+z_floor_mm: 0.2
+arm_min_gap_mm: 80.0
+arms:
+  right: {role: primary, station_deg: 0}      # base at +700 mm X (config/system.yaml)
+  left:  {role: greedy,  station_deg: 180}    # base at -700 mm X
+jobs:
+  - {id: J1, feature: base ring (P1),   z0: 0.0,   z1: 6.0,   deps: [],   max_arms: 1}
+  - {id: J2, feature: wall band 1,      z0: 6.0,   z1: 31.0,  deps: [J1], max_arms: 2}
+  - {id: J3, feature: wall band 2,      z0: 31.0,  z1: 56.0,  deps: [J2], max_arms: 2}
+  - {id: J4, feature: wall band 3,      z0: 56.0,  z1: 81.0,  deps: [J3], max_arms: 2}
+  - {id: J5, feature: wall band 4,      z0: 81.0,  z1: 106.0, deps: [J4], max_arms: 2}
+  - {id: J6, feature: wall band 5,      z0: 106.0, z1: 131.0, deps: [J5], max_arms: 2}
+  - {id: J7, feature: wall band 6,      z0: 131.0, z1: 152.4, deps: [J6], max_arms: 2}

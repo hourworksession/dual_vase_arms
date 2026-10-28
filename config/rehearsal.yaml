@@ -1,0 +1,17 @@
+# Rehearsal test bed settings. The API key is NOT stored here:
+# put OPENROUTER_API_KEY=sk-or-... in a .env file at the repo root (gitignored)
+# or set it as an environment variable.
+llm:
+  base_url: https://openrouter.ai/api/v1     # for a local model: http://localhost:11434/v1 (Ollama) or http://localhost:1234/v1 (LM Studio)
+  # Fallback list, tried in order. Each must support structured outputs;
+  # `python -m rehearsal doctor` checks them and lists current free ones.
+  models:
+    - openai/gpt-4o-mini
+    - google/gemini-2.5-flash
+  temperature: 0.2
+  max_tokens: 2000      # thinking models (e.g. Gemini 2.5) spend part of this before answering
+
+engine:
+  max_retries: 2        # refutations an agent may answer per decision
+  max_calls: 60         # hard budget per run (free tier: 50 requests/day under 10 credits)
+  max_rounds: 200
