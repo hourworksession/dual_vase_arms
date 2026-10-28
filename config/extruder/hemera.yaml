@@ -1,6 +1,7 @@
 # E3D Hemera direct-drive extruder mounted on each xArm end effector.
 model: e3d_hemera
-nozzle_diameter_mm: 0.4
+nozzle_diameter_mm: 1.0      # RIGHT arm, E3D Revo High Flow (28 Oct 2026)
+nozzle_diameter_mm_left: 0.8 # LEFT arm, E3D Revo High Flow
 filament_diameter_mm: 1.75
 max_flow_mm3_s: 24.0
 default_temp_c: 215
