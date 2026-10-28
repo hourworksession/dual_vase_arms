@@ -35,6 +35,10 @@ Values (KEY=value, any order):
             the bead lands at W.                                             (default 1.0)
     MIN_TEMP  refuse to start below this hot-end temperature, C              (default 190)
 
+Find the real zero height first (touch-off with a sheet of paper):
+
+    python3 cylinder_test.py T=1 R=60 --find-z0
+
 Sequence:
   1. Prime: approach to R + PRIME_MM at Z0 + PRIME_Z; bed at half speed, extruder at E/2;
      over PRIME_S the nozzle moves in to R and down to Z0 + FIRST.
@@ -85,6 +89,9 @@ def parse(argv):
             vals[k.strip().upper()] = float(v)
         else:
             raise SystemExit(f"Not understood: {a!r} (use KEY=value, e.g. R=60)")
+    if "--find-z0" in flags:                    # touch-off needs only the arm and the radius
+        for k_, v_ in (("E", 1.0), ("L_H", 0.5), ("P", 0.5)):
+            vals.setdefault(k_, v_)
     if "E" not in vals and "E_MIN" in vals and "E_MAX" in vals:
         vals["E"] = (vals["E_MIN"] + vals["E_MAX"]) / 2
     missing = [k for k in REQUIRED + ("E",) if k not in vals]
@@ -341,6 +348,73 @@ def throttle(p, cell, live, log_path):
                 cell.stop_keep.wait(delay)
 
 
+def find_z0(p, k, cell):
+    """Touch-off: hover over the print point, step down by hand, read Z when paper drags."""
+    z0_guess = p["Z0"]
+    floor = z0_guess - 25.0                     # never below this, even by hand
+    qx, qy = k["print_xy"]
+    v = k["arm_speed"]
+    print(f"\nTouch-off for the {cell.side} arm at R {p['R']:g} (X {qx:.1f} Y {qy:.1f}). "
+          f"Current zero height {z0_guess:.2f}; hand limit {floor:.2f}.")
+    cell.move(*PARK, speed=v, wait=True)
+    cell.move(PARK[0], PARK[1], SAFE_Z, speed=v, wait=True)
+    cell.move(qx, qy, z0_guess + 20, speed=v, wait=True)
+    z = z0_guess + 5
+    cell.move(qx, qy, z, speed=10, wait=True)
+    help_ = ("Type a step and Enter:  -1  -0.5  -0.1  -0.05  (down)   +1  +0.1 (up)\n"
+             "  r = turn the bed 90 deg (check another spot)   ok = paper drags here   q = quit\n"
+             "Slide a sheet of paper (about 0.1 mm) under the nozzle between steps.")
+    print(help_)
+    found = []
+    while True:
+        try:
+            pose_z = cell.pose()[2]
+        except Exception:
+            pose_z = z
+        a = input(f"Z {z:.2f} (arm reports {pose_z:.2f}) > ").strip().lower()
+        if a in ("q", "quit", ""):
+            if a == "":
+                continue
+            break
+        if a == "ok":
+            found.append(z - 0.1)                 # paper thickness
+            print(f"  zero height here = {z - 0.1:.2f} (Z {z:.2f} minus 0.1 mm paper)")
+            continue
+        if a == "r":
+            cell.move(qx, qy, z + 2, speed=10, wait=True)
+            cell.tt.rotate_velocity(30.0)
+            time.sleep(3.0)                      # 90 deg at 30 deg/s
+            cell.tt.stop_rotation()
+            time.sleep(0.5)
+            cell.move(qx, qy, z, speed=5, wait=True)
+            print("  bed turned 90 deg")
+            continue
+        try:
+            step = float(a)
+        except ValueError:
+            print(help_)
+            continue
+        if abs(step) > 5:
+            print("  steps are limited to 5 mm")
+            continue
+        new = z + step
+        if new < floor:
+            print(f"  refused: {new:.2f} is below the hand limit {floor:.2f}")
+            continue
+        cell.move(qx, qy, new, speed=5, wait=True)
+        z = new
+    cell.move(qx, qy, z + 10, speed=10, wait=True)
+    cell.move(*PARK, speed=v, wait=True)
+    if found:
+        mean = sum(found) / len(found)
+        spread = max(found) - min(found)
+        print(f"\nZero heights found: {', '.join(f'{f:.2f}' for f in found)}  "
+              f"(mean {mean:.2f}, spread {spread:.2f} mm)")
+        print(f"Use it with:  Z0={mean:.2f}   (e.g. python3 cylinder_test.py T={p['T']} Z0={mean:.2f} ...)")
+        if spread > 0.3:
+            print("The bed is not flat or level at this radius by more than 0.3 mm: worth fixing before printing.")
+
+
 def abort(cell, p, why):
     print(f"\nABORT: {why}")
     cell.stop_keep.set()
@@ -357,6 +431,14 @@ def abort(cell, p, why):
 def main(argv=None):
     p, flags = parse(sys.argv[1:] if argv is None else argv)
     k = plan(p)
+    if "--find-z0" in flags:
+        cell = Cell(p, "--sim" in flags)
+        try:
+            find_z0(p, k, cell)
+        except KeyboardInterrupt:
+            cell.move(*cell.pose()[:2], cell.pose()[2] + 10, speed=10, wait=True)
+            print("\nStopped; arm lifted 10 mm.")
+        return 0
     show(p, k)
     if "--dry-run" in flags:
         print("\nDry run: nothing moved.")
