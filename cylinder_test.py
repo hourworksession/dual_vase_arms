@@ -6,6 +6,7 @@ Macro-style values, run from the repo root (test Klipper config loaded, hot ends
     python3 cylinder_test.py T=1 R=60 E=12 L_H=0.6 P=0.6 --dry-run           # left arm
     python3 cylinder_test.py T=2 R=60 E=12 L_H=0.6 --dry-run                 # both arms
     python3 cylinder_test.py T=0 R=60 E_MIN=8 E_MAX=16 WAVE_T=1 L_H=0.8 P=0.8 REVS=10
+    python3 cylinder_test.py T=0 R=60 E_MIN=8 E_MAX=16 WAVE_T=1 SHAPE=square L_H=0.8 P=0.8 REVS=10
     python3 cylinder_test.py T=1 R=60 --find-z0                              # touch-off
 
 Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys override the left.
@@ -26,7 +27,8 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     SPIRAL  spiral revolutions                                               (default 3)
     REVS    total counted revolutions (sets SPIRAL);  HEIGHT  wall height above the first
             layer, mm (sets SPIRAL = HEIGHT / P, wins over REVS)
-    E_MIN, E_MAX, WAVE_T or WAVES_PER_REV   sine throttle (scale applied to every arm used)
+    E_MIN, E_MAX, WAVE_T or WAVES_PER_REV   throttle between E_MIN and E_MAX (every arm used)
+    SHAPE   throttle waveform: sine, square or triangle                      (default sine)
     PRIME_MM, PRIME_S, PRIME_Z   prime move-in mm, time s, start height above Z0 mm (15, 5, 2)
     FIL     filament diameter, mm (1.75);  MIN_TEMP  refuse below this, C (190)
     ANGLE, CX, CY (and _L)   print angle and turntable centre in each arm's frame
@@ -67,6 +69,13 @@ SAFE_Z = 250.0
 WATCHDOG_S = 5.0
 
 
+SHAPES = {   # phase in radians -> -1 .. +1
+    "sine": math.sin,
+    "square": lambda ph: 1.0 if math.sin(ph) >= 0 else -1.0,
+    "triangle": lambda ph: 2 / math.pi * math.asin(math.sin(ph)),
+}
+
+
 class Abort(Exception):
     pass
 
@@ -79,7 +88,14 @@ def parse(argv):
             flags.add(a)
         elif "=" in a:
             k, v = a.split("=", 1)
-            vals[k.strip().upper()] = float(v)
+            k = k.strip().upper()
+            if k == "SHAPE":
+                v = v.strip().lower()
+                if v not in SHAPES:
+                    raise SystemExit(f"SHAPE must be one of {', '.join(SHAPES)}")
+                vals[k] = v
+            else:
+                vals[k] = float(v)
         else:
             raise SystemExit(f"Not understood: {a!r} (use KEY=value, e.g. R=60)")
     if "--find-z0" in flags:                    # touch-off needs only the arm and the radius
@@ -109,6 +125,7 @@ def parse(argv):
         if not 0 < g["E_MIN"] <= g["E_MAX"]:
             raise SystemExit("Need 0 < E_MIN <= E_MAX")
         g.setdefault("WAVE_T", 1.0)
+        g.setdefault("SHAPE", "sine")
 
     arms = {}
     first = tools[0]
@@ -203,7 +220,7 @@ def show(g, k):
     if g["WAVE"]:
         how = (f"{g['WAVES_PER_REV']:g} waves per rev, locked to the bed" if "WAVES_PER_REV" in g
                else f"period {g['WAVE_T']:g} s ({k['rev_s'] / g['WAVE_T']:.1f} waves per rev)")
-        print(f"  Throttle: sine, E x {g['E_MIN'] / g['E']:.2f} to x {g['E_MAX'] / g['E']:.2f}, {how}")
+        print(f"  Throttle: {g['SHAPE']}, E x {g['E_MIN'] / g['E']:.2f} to x {g['E_MAX'] / g['E']:.2f}, {how}")
     print(f"  6-8. Extruders off at {k['total_revs']:g} rev, lift 10 mm, park, stop bed")
     print(f"  Time about {k['total_revs'] * k['rev_s'] + g['PRIME_S']:.0f} s, filament about "
           f"{k['filament_mm']:.0f} mm in total;  arm moves {k['arm_speed']:.0f} mm/s")
@@ -375,7 +392,7 @@ def throttle(g, cell, live, log_path):
             if amp:
                 ph = (2 * math.pi * g["WAVES_PER_REV"] * live["rev"] if "WAVES_PER_REV" in g
                       else 2 * math.pi * now / g["WAVE_T"])
-                scale = 1 + amp * math.sin(ph)
+                scale = 1 + amp * SHAPES[g["SHAPE"]](ph)
                 for tl in arms:
                     try:
                         cell.gcode(f"EXTRUDE_SCALE T={tl} PERCENT={100 * scale:.1f}")
