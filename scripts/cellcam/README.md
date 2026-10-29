@@ -53,6 +53,29 @@ Kiosk browser on the touchscreen. Recent Raspberry Pi OS (labwc desktop):
 Older desktop (X11 / LXDE): put the same line, without the `&`, prefixed with `@`, in
 `~/.config/lxsession/LXDE-pi/autostart`. Reboot. To get out of kiosk: Alt+F4 with a keyboard.
 
+## Lens (HQ Camera, IMX477) for a nozzle 15-30 mm from the lens
+
+Preferred: **6 mm CS-mount wide lens** (the official HQ kit "wide angle" lens) with a
+**1-3 mm spacer** between lens and camera so it focuses that close. Expected view:
+
+| Nozzle to lens | Spacer (approx.) | Field of view | Detail at 1280 px |
+| --- | --- | --- | --- |
+| 30 mm | ~1.5 mm | ~25 mm wide | ~0.02 mm/px |
+| 20 mm | ~2.5 mm | ~15 mm wide | ~0.012 mm/px |
+
+(Thin-lens estimates; the real distances shift by a few mm because the lens's optical centre
+sits behind its front glass. Set focus by eye on the 4x view.)
+
+- Alternative: an M12 lens of about 4-8 mm on the HQ Camera's M12 version or an M12 adapter.
+- Not suitable: the 16 mm C-mount telephoto (view only ~3 mm wide, needs ~28 mm of extension)
+  and the microscope lens (works ~100 mm away).
+- Do not use the C-CS adapter ring as the spacer with the 6 mm lens: 5 mm is too much
+  (focus ~13 mm away, view ~8 mm).
+- Depth of focus is only about a millimetre this close: useful as a Z check, but the nozzle
+  must be near the focus plane before it looks sharp.
+- A hot nozzle 15-30 mm from the glass can drip or radiate onto it: align cold or briefly, and
+  consider a thin glass cover slip in front of the lens.
+
 ## 5. Focus
 
 Camera Module 1/2 are fixed-focus, set for about 1 m. For a nozzle 50-100 mm away, turn the
