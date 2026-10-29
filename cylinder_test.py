@@ -60,7 +60,7 @@ SIDE = {0: "right", 1: "left"}
 NOZZLE = {0: 1.0, 1: 1.0}         # Revo HF 1.0 mm on both arms, 29 Oct 2026
 DEFAULTS = {  # per tool; centres and start angles from cell studio's cylinder defaults
     0: {"W": 1.1, "Z0": 105.80, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
-    1: {"W": 1.1, "Z0": 109.60, "CX": 511.60, "CY": -10.13, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
+    1: {"W": 1.1, "Z0": 109.60, "CX": 511.60, "CY": -10.11, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
 }
 COMMON = {"FLOW_K": 1.0, "MAX_VB": math.pi, "MAX_VT": 100.0, "FIRST": 0.6, "SPIRAL": 3,
           "PRIME_MM": 15.0, "PRIME_S": 5.0, "PRIME_Z": 2.0, "FIL": 1.75, "MIN_TEMP": 190.0}
@@ -295,7 +295,7 @@ def run(g, k, cell):
         temp = cell.hot_end_temp(tl)
         if temp < g["MIN_TEMP"]:
             raise Abort(f"{a['side']} hot end is at {temp:.0f} C, below MIN_TEMP {g['MIN_TEMP']:.0f}. Heat it first "
-                        f"(python3 extrude.py heat {a['side']} 225 --wait).")
+                        f"(python3 extrude.py heat {a['side']} 215 --wait).")
     cell.gcode("EXTRUDE_OFF")
     v = k["arm_speed"]
     print("Approach: each arm to park, safe height, above its prime point, down to the prime start")
