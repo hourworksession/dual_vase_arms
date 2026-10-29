@@ -59,8 +59,8 @@ sys.path[:0] = [ROOT, os.path.join(ROOT, "src"), os.path.join(ROOT, "scripts")]
 SIDE = {0: "right", 1: "left"}
 NOZZLE = {0: 1.0, 1: 0.8}         # Revo HF, 28 Oct 2026
 DEFAULTS = {  # per tool; centres and start angles from cell studio's cylinder defaults
-    0: {"W": 1.1, "Z0": 106.40, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # cali_jog 29 Oct 2026
-    1: {"W": 0.9, "Z0": 110.70, "CX": 511.60, "CY": -9.90, "ANGLE": 140.0},   # cali_jog 29 Oct 2026
+    0: {"W": 1.1, "Z0": 105.90, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # cali_jog 29 Oct 2026
+    1: {"W": 0.9, "Z0": 109.70, "CX": 511.60, "CY": -9.90, "ANGLE": 140.0},   # cali_jog 29 Oct 2026
 }
 COMMON = {"FLOW_K": 1.0, "MAX_VB": math.pi, "MAX_VT": 100.0, "FIRST": 0.6, "SPIRAL": 3,
           "PRIME_MM": 15.0, "PRIME_S": 5.0, "PRIME_Z": 2.0, "FIL": 1.75, "MIN_TEMP": 190.0}
