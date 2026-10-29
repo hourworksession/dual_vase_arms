@@ -18,9 +18,9 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     P       Z rise per bed revolution, mm/rev                 (default n x L_H, n = arms used)
     W       line width, mm                                   (default 1.1, both arms)
     FLOW_K  measured / planned plastic from a test print (1.5 / 1.1 = 1.36)
-    Z0      zero height, nozzle touching the disc            (default 106.4 right, 110.7 left)
+    Z0      zero height, nozzle touching the disc            (default 105.9 right, 109.7 left)
     E_L, W_L, FLOW_K_L, Z0_L   left arm in T=2. Both nozzles are 1.0 mm, so the left takes the
-            same E, W and FLOW_K as the right unless you set these; Z0_L defaults to 110.7
+            same E, W and FLOW_K as the right unless you set these; Z0_L defaults to 109.7
     MAX_VB  bed speed ceiling, rad/s; the bed runs at the speed that lays the right arm's
             W x L_H bead at E x FLOW_K, capped at this                       (default 3.1416)
     MAX_VT  arm speed ceiling, % of 100 mm/s                                 (default 100)
@@ -59,13 +59,8 @@ sys.path[:0] = [ROOT, os.path.join(ROOT, "src"), os.path.join(ROOT, "scripts")]
 SIDE = {0: "right", 1: "left"}
 NOZZLE = {0: 1.0, 1: 1.0}         # Revo HF 1.0 mm on both arms, 29 Oct 2026
 DEFAULTS = {  # per tool; centres and start angles from cell studio's cylinder defaults
-<<<<<<< HEAD
-    0: {"W": 1.1, "Z0": 105.90, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # cali_jog 29 Oct 2026
-    1: {"W": 0.9, "Z0": 109.70, "CX": 511.60, "CY": -9.90, "ANGLE": 140.0},   # cali_jog 29 Oct 2026
-=======
-    0: {"W": 1.1, "Z0": 106.40, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # cali_jog 29 Oct 2026
-    1: {"W": 1.1, "Z0": 110.70, "CX": 511.60, "CY": -9.90, "ANGLE": 140.0},   # cali_jog 29 Oct 2026
->>>>>>> 338d034a977cf07621e9654bd32f3ff0d105b2c5
+    0: {"W": 1.1, "Z0": 105.90, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
+    1: {"W": 1.1, "Z0": 109.70, "CX": 511.60, "CY": -9.90, "ANGLE": 140.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
 }
 COMMON = {"FLOW_K": 1.0, "MAX_VB": math.pi, "MAX_VT": 100.0, "FIRST": 0.6, "SPIRAL": 3,
           "PRIME_MM": 15.0, "PRIME_S": 5.0, "PRIME_Z": 2.0, "FIL": 1.75, "MIN_TEMP": 190.0}
