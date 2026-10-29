@@ -113,10 +113,8 @@ class CellController:
             'filament_diameter':  DoubleVar(1.75),
             'feed_rate_left':     DoubleVar(4.0),
             'feed_rate_right':    DoubleVar(4.0),
-            # Left nozzle 0.8 mm vs right 1.0 mm: the left lays a narrower line, so less filament
-            # per rev (line_width_left / line_width, about 0.82). Settings > Tool and nozzle.
-            'extrusion_factor_left':  DoubleVar(round(self._tool_default('line_width_left', 0.9)
-                                                      / self._tool_default('line_width', 1.1), 3)),
+            # Both arms 1.0 mm Revo HF (29 Oct 2026): same flow, so no left/right scaling.
+            'extrusion_factor_left':  DoubleVar(1.0),
             'extrusion_factor_right': DoubleVar(1.0),
             # New mounts (Oct 2026): XC/YC_{RIGHT,LEFT} and Z_{R,L}_OFFSET from the cell config.
             # (Old mounts: left 574.1, -5.4, 153; right 567.7, 6.7, 151.1.)

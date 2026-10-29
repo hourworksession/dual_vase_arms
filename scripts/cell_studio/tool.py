@@ -4,10 +4,9 @@ Settings ▸ Tool and nozzle. Saved in config/tool.json. Used by the cylinder
 print, Prepare to print, the planner (Model print, Generators) and the macros,
 so a mount or nozzle change is entered once.
 
-Defaults match the current cell (28 Oct 2026): E3D Revo High Flow nozzles, 1.0 mm on
-the RIGHT arm and 0.8 mm on the LEFT, on the new mounts. "nozzle_diameter" /
-"line_width" are the right arm's (the cylinder's line width); the left arm's flow is
-scaled by line_width_left / line_width through its extrusion factor. Each arm's flange points horizontally at the disc and the extruder
+Defaults match the current cell (29 Oct 2026): E3D Revo High Flow 1.0 mm nozzles on
+BOTH arms, on the new mounts. "nozzle_diameter" / "line_width" are the right arm's
+(the cylinder's line width); the left arm's are kept separately but match. Each arm's flange points horizontally at the disc and the extruder
 hangs off it pointing straight down, so each arm has its OWN orientation:
     right arm: roll 90, pitch -90, yaw 90
     left arm:  roll 0,  pitch  90, yaw 0
@@ -32,12 +31,12 @@ from .home_config import REPO_ROOT
 TOOL_FILE = os.path.join(REPO_ROOT, "config", "tool.json")
 
 DEFAULTS = {
-    "nozzle": "E3D Revo High Flow (right 1.0 mm, left 0.8 mm)",
+    "nozzle": "E3D Revo High Flow 1.0 mm (both arms)",
     "nozzle_diameter": 1.0,     # mm, RIGHT arm (also the planner's nozzle)
     "line_width": 1.1,          # mm, RIGHT arm default extrusion width (~1.1 x nozzle)
-    "nozzle_diameter_left": 0.8,
-    "line_width_left": 0.9,     # mm, LEFT arm
-    "layer_height": 0.5,        # mm, default layer height (<= ~75 % of the SMALLER nozzle, 0.8 -> 0.6 max)
+    "nozzle_diameter_left": 1.0,
+    "line_width_left": 1.1,     # mm, LEFT arm
+    "layer_height": 0.5,        # mm, default layer height (<= ~75 % of the nozzle, 1.0 -> 0.75 max)
     "roll_right": 90.0,
     "pitch_right": -90.0,
     "yaw_right": 90.0,
