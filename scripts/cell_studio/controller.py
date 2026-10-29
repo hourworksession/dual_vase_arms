@@ -120,12 +120,13 @@ class CellController:
             'extrusion_factor_right': DoubleVar(1.0),
             # New mounts (Oct 2026): XC/YC_{RIGHT,LEFT} and Z_{R,L}_OFFSET from the cell config.
             # (Old mounts: left 574.1, -5.4, 153; right 567.7, 6.7, 151.1.)
-            'tt_cx_left':         DoubleVar(512.1),
-            'tt_cy_left':         DoubleVar(-8.4),
-            'tt_cz_left':         DoubleVar(110.2),
-            'tt_cx_right':        DoubleVar(508.18),
-            'tt_cy_right':        DoubleVar(-22.88),
-            'tt_cz_right':        DoubleVar(105.9),
+            # Measured with cali_jog.py on 29 Oct 2026 (nozzle on the turntable axis, paper-drag Z).
+            'tt_cx_left':         DoubleVar(511.60),
+            'tt_cy_left':         DoubleVar(-9.90),
+            'tt_cz_left':         DoubleVar(110.70),
+            'tt_cx_right':        DoubleVar(510.08),
+            'tt_cy_right':        DoubleVar(-18.98),
+            'tt_cz_right':        DoubleVar(106.40),
             'angular_offset_deg': DoubleVar(5.0),
             'radial_offset_left':  DoubleVar(0.0),
             'radial_offset_right': DoubleVar(0.0),
