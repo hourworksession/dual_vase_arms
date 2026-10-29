@@ -51,7 +51,7 @@ class ExtruderBinary:
             logger.info("extruder %d OFF", tool)
 
     def scale(self, tool: int, percent: float):
-        """Live throttle, 0..300 %. Takes effect within one pulse period."""
+        """Live throttle, 0..300 %. Takes effect within about 0.5 s (the queued flow)."""
         self.ext.send_gcode(f"EXTRUDE_SCALE T={tool} PERCENT={percent:.1f}", timeout=5)
 
     def dose(self, tool: int, mm: float, rate_mm_s: float = 3.0, accel: float = 500.0):
