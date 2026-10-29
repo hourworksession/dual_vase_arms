@@ -8,6 +8,7 @@ Macro-style values, run from the repo root (test Klipper config loaded, hot ends
     python3 cylinder_test.py T=0 R=60 E_MIN=8 E_MAX=16 WAVE_T=1 L_H=0.8 P=0.8 REVS=10
     python3 cylinder_test.py T=0 R=60 E_MIN=8 E_MAX=16 WAVE_T=1 SHAPE=square L_H=0.8 P=0.8 REVS=10
     python3 cylinder_test.py T=1 R=60 --find-z0                              # touch-off
+    python3 cylinder_test.py T=1 --find-centre                               # jog to the turntable centre
 
 Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys override the left.
     T       0 = right, 1 = left, 2 = both                                    (required)
@@ -98,8 +99,8 @@ def parse(argv):
                 vals[k] = float(v)
         else:
             raise SystemExit(f"Not understood: {a!r} (use KEY=value, e.g. R=60)")
-    if "--find-z0" in flags:                    # touch-off needs only the arm and the radius
-        for k_, v_ in (("E", 1.0), ("L_H", 0.5)):
+    if "--find-z0" in flags or "--find-centre" in flags:   # only the arm (and radius) needed
+        for k_, v_ in (("E", 1.0), ("L_H", 0.5), ("R", 60.0)):
             vals.setdefault(k_, v_)
     if "E" not in vals and "E_MIN" in vals and "E_MAX" in vals:
         vals["E"] = (vals["E_MIN"] + vals["E_MAX"]) / 2
@@ -109,8 +110,8 @@ def parse(argv):
     t = int(vals["T"])
     if t not in (0, 1, 2):
         raise SystemExit("T must be 0 (right), 1 (left) or 2 (both)")
-    if t == 2 and "--find-z0" in flags:
-        raise SystemExit("Touch-off one arm at a time: T=0 or T=1")
+    if t == 2 and ("--find-z0" in flags or "--find-centre" in flags):
+        raise SystemExit("Calibrate one arm at a time: T=0 or T=1")
     tools = [0, 1] if t == 2 else [t]
     g = {**COMMON, **vals, "T": t, "N": len(tools)}
     g.setdefault("P", g["N"] * g["L_H"])
@@ -477,6 +478,83 @@ def find_z0(g, k, cell):
             print("The bed is not flat or level at this radius by more than 0.3 mm: worth fixing before printing.")
 
 
+def find_centre(g, k, cell):
+    """Jog the nozzle onto the turntable axis in X, Y, Z; record CX, CY, Z0 for that arm."""
+    tl = next(iter(g["arms"]))
+    a = g["arms"][tl]
+    cx0, cy0, z0 = a["CX"], a["CY"], a["Z0"]
+    v = k["arm_speed"]
+    lim_xy, floor = 30.0, z0 - 25.0
+    print(f"\nCentre jog for the {a['side']} arm. Current centre X {cx0:.2f} Y {cy0:.2f}, zero height {z0:.2f}.")
+    cell.move(tl, *PARK, speed=v, wait=True)
+    cell.move(tl, PARK[0], PARK[1], SAFE_Z, speed=v, wait=True)
+    cell.move(tl, cx0, cy0, z0 + 20, speed=v, wait=True)
+    x, y, z = cx0, cy0, z0 + 5
+    cell.move(tl, x, y, z, speed=10, wait=True)
+    help_ = ("Type a move and Enter (any axis, any step up to 5 mm):\n"
+             "  x+1  x-0.5  y+0.1  y-2  z-1  z+0.1     (or just -0.1 / +0.1 for Z)\n"
+             "  r = lift 2 mm, turn the bed 180 deg, come back down    ok = record here    q = quit\n"
+             "Finding the axis: put a pen dot on the disc under the nozzle, press r. If the dot stays\n"
+             "under the nozzle you are on the axis; if not, jog HALF way towards where it went, repeat.\n"
+             "Bring Z down to paper-drag before 'ok' to record the zero height too.")
+    print(help_)
+    found = []
+    while True:
+        try:
+            px, py, pz = cell.pose(tl)[:3]
+        except Exception:
+            px, py, pz = x, y, z
+        ans = input(f"X {x:.2f}  Y {y:.2f}  Z {z:.2f}   (arm reports {px:.2f} {py:.2f} {pz:.2f}) > ").strip().lower()
+        if ans == "":
+            continue
+        if ans in ("q", "quit"):
+            break
+        if ans == "ok":
+            found.append((x, y, z - 0.1))
+            print(f"  recorded: CX {x:.2f}  CY {y:.2f}  Z0 {z - 0.1:.2f} (Z minus 0.1 mm paper; ignore Z0 if you "
+                  "were not at paper-drag)")
+            continue
+        if ans == "r":
+            cell.move(tl, x, y, z + 2, speed=10, wait=True)
+            cell.tt.rotate_velocity(60.0)
+            time.sleep(3.0)                      # 180 deg at 60 deg/s
+            cell.tt.stop_rotation()
+            time.sleep(0.5)
+            cell.move(tl, x, y, z, speed=5, wait=True)
+            print("  bed turned 180 deg")
+            continue
+        axis, rest = (ans[0], ans[1:]) if ans[0] in "xyz" else ("z", ans)
+        try:
+            step = float(rest)
+        except ValueError:
+            print(help_)
+            continue
+        if abs(step) > 5:
+            print("  steps are limited to 5 mm")
+            continue
+        nx, ny, nz = x + (step if axis == "x" else 0), y + (step if axis == "y" else 0), z + (step if axis == "z" else 0)
+        if math.hypot(nx - cx0, ny - cy0) > lim_xy:
+            print(f"  refused: more than {lim_xy:g} mm from the starting centre")
+            continue
+        if nz < floor:
+            print(f"  refused: Z {nz:.2f} is below the hand limit {floor:.2f}")
+            continue
+        cell.move(tl, nx, ny, nz, speed=5, wait=True)
+        x, y, z = nx, ny, nz
+    cell.move(tl, x, y, z + 10, speed=10, wait=True)
+    cell.move(tl, *PARK, speed=v, wait=True)
+    if found:
+        mx = sum(f[0] for f in found) / len(found)
+        my = sum(f[1] for f in found) / len(found)
+        mz = sum(f[2] for f in found) / len(found)
+        print(f"\nTurntable centre for the {a['side']} arm: CX {mx:.2f}  CY {my:.2f}  (was {cx0:.2f}, {cy0:.2f}; "
+              f"moved {math.hypot(mx - cx0, my - cy0):.2f} mm)   Z0 {mz:.2f}")
+        print(f"Use it with:  T={tl} CX={mx:.2f} CY={my:.2f} Z0={mz:.2f}"
+              + ("   (in T=2 runs: CX_L, CY_L, Z0_L)" if tl == 1 else ""))
+        print("In cell studio: Cylinder page > Turntable centre (calibration) > "
+              f"Centre X/Y/Z · {a['side']}.")
+
+
 def abort(cell, why):
     print(f"\nABORT: {why}")
     cell.stop_keep.set()
@@ -496,10 +574,10 @@ def main(argv=None):
     g, flags = parse(sys.argv[1:] if argv is None else argv)
     k = plan(g)
     sim = "--sim" in flags
-    if "--find-z0" in flags:
+    if "--find-z0" in flags or "--find-centre" in flags:
         cell = Cell(g, sim)
         try:
-            find_z0(g, k, cell)
+            (find_centre if "--find-centre" in flags else find_z0)(g, k, cell)
         except KeyboardInterrupt:
             tl = next(iter(cell.arms))
             cell.move(tl, *cell.pose(tl)[:2], cell.pose(tl)[2] + 10, speed=10, wait=True)
