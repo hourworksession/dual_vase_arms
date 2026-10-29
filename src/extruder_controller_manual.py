@@ -122,10 +122,9 @@ class ManualExtruderController:
         if tool not in (0, 1):
             raise ValueError(f"Invalid tool index: {tool}")
         script = f"EXTRUDE_MM T={tool} MM={length_mm:.3f} RATE={feedrate_mm_s:.3f}"
-        self.send_gcode(script, timeout=10)      # SYNC=0 inside: returns at once
+        self.send_gcode(script, timeout=10)      # queues a G1 on axis A/B: returns at once
         if wait:
-            self.send_gcode(f"MANUAL_STEPPER STEPPER={'right' if tool == 0 else 'left'} SYNC=1",
-                            timeout=max(10, abs(length_mm) / max(feedrate_mm_s, 0.1) + 5))
+            self.send_gcode("M400", timeout=max(10, abs(length_mm) / max(feedrate_mm_s, 0.1) + 5))
 
     # ------------------------------------------------------------------
     # Synchronous dual extrusion (single G1 command)
@@ -134,17 +133,17 @@ class ManualExtruderController:
     def extrude_sync(self, length_t0: float, speed_t0: float,
                      length_t1: float, speed_t1: float,
                      wait: bool = True) -> None:
-        """Extrude both tools simultaneously with one G1 command."""
+        """Extrude both tools simultaneously with one G1 command.
+
+        The steppers are G-code axes A (right) and B (left); X is a dummy axis
+        (kinematics: none) that sets the move time: 100 mm of X per second.
+        """
         if speed_t0 <= 0 or speed_t1 <= 0:
             raise ValueError("Speeds must be positive.")
         time_t0 = abs(length_t0) / speed_t0
         time_t1 = abs(length_t1) / speed_t1
         duration = max(time_t0, time_t1)
-        L = (length_t0**2 + length_t1**2) ** 0.5
-        F = (L / duration) * 60.0
-
-        self.set_relative_extrusion()
-        script = f"G91\nG1 F{F:.1f} X{length_t1:.3f} E{length_t0:.3f} \nG90"
+        script = f"G91\nG1 X{100.0 * duration:.4f} A{length_t0:.4f} B{length_t1:.4f} F6000\nG90"
 
         if wait:
             self.send_gcode(script)

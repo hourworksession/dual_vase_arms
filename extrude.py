@@ -193,8 +193,8 @@ def purge(tool, mm: float = 50, speed: float = 3):
     off(t, quiet=True)
     t0 = time.monotonic()
     _need().gcode(f"EXTRUDE_MM T={t} MM={mm:.3f} RATE={speed:.3f}")
-    if isinstance(_link, _Moonraker):        # hand the stepper's time to the toolhead, then wait for it
-        _link.gcode(f"MANUAL_STEPPER STEPPER={STEPPERS[t]} SYNC=1\nM400", timeout=abs(mm) / speed + 15)
+    if isinstance(_link, _Moonraker):        # wait for the queued move to finish
+        _link.gcode("M400", timeout=abs(mm) / speed + 15)
     print(f"{STEPPERS[t]}: {'pushed' if mm >= 0 else 'pulled'} {abs(mm):g} mm at {speed:g} mm/s "
           f"({time.monotonic() - t0:.1f} s)")
 

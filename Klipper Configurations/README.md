@@ -4,7 +4,7 @@
 | --- | --- |
 | `stepX_left_control.cfg` | The config that works today (cartesian, left nozzle on X, bed heater). The panel needs this one. |
 | `non_extruder_control_test.cfg` | The test config: same pins, sensors, PID and fans, but two independent extruders driven by macros |
-| `extrude_control.cfg` | The EXTRUDE_* macros the test config includes |
+| `extrude_control.cfg` | The EXTRUDE_* macros the test config includes. Needs Klipper v0.13.0-106 or newer: both steppers become G-code axes (right = A, left = B) and every tick sends one G1 that turns both together, so they run continuously at the same time. |
 
 The test config replaces the Pi's `printer.cfg` **for a bench test only**. While it is loaded,
 the cell studio panel's extrusion does not work. Put `stepX_left_control.cfg` back afterwards (step 7).
@@ -19,6 +19,17 @@ PID). If it differs, download the Pi's version and commit it over `stepX_left_co
 In Mainsail: upload `extrude_control.cfg`; open `printer.cfg`, replace its contents with
 `non_extruder_control_test.cfg`, Save & Restart (or run `FIRMWARE_RESTART`).
 Klipper should show **Ready**. If it reports a config error, read the line it names and send it to Claude.
+
+Check both extruders run continuously together (filament loaded, hot ends above 190 C):
+
+    EXTRUDE_ON T=0 RATE=5
+    EXTRUDE_ON T=1 RATE=5
+    EXTRUDE_STATUS          ; both on=1, ticking=1
+    EXTRUDE_OFF
+
+Both motors should hum steadily, not tick. `MANUAL_STEPPER ... MOVE=` no longer works while the
+macros own the steppers (Klipper says "Must unregister from gcode axis first"): use `EXTRUDE_MM`.
+Mainsail's X position climbs while extruding; X drives nothing and can be ignored.
 
 ## Test panel (instead of typing the console commands)
 
