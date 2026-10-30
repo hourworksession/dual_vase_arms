@@ -52,8 +52,8 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     PRIME_MM, PRIME_S, PRIME_Z   prime move-in mm, time s, start height above Z0 mm (15, 5, 2)
     FIL     filament diameter, mm (1.75);  MIN_TEMP  refuse below this, C (190)
     ANGLE, CX, CY (and _L)   print angle and turntable centre in each arm's frame
-    DR (and DR_L)  radius trim, mm: add to that arm's print radius in every mode, e.g. DR_L=1
-            when the left lays its bead 1 mm inside the right's (left centre slightly off)
+    DR (and DR_L)  radius trim, mm: add to that arm's print radius in every mode. Left default 1.5:
+            it lands about 1.5 mm inside where it is sent (ring test, 30 Oct 2026). Right default 0
 
 Sequence, with n arms (each on its own side of the disc):
   1. Prime: every arm approaches R + PRIME_MM at Z0 + PRIME_Z; bed at half speed, extruders
@@ -81,7 +81,7 @@ SIDE = {0: "right", 1: "left"}
 NOZZLE = {0: 1.0, 1: 1.0}         # Revo HF 1.0 mm on both arms, 29 Oct 2026
 DEFAULTS = {  # per tool; centres and start angles from cell studio's cylinder defaults
     0: {"W": 1.0, "Z0": 105.80, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
-    1: {"W": 1.0, "Z0": 109.60, "CX": 511.60, "CY": -10.11, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
+    1: {"W": 1.0, "Z0": 109.60, "CX": 511.60, "CY": -10.11, "ANGLE": 135.0, "DR": 1.5},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
 }
 COMMON = {"FLOW_K": 1.0, "MAX_VB": math.pi, "MAX_VT": 100.0, "SPIRAL": 3,
           "PRIME_MM": 15.0, "PRIME_S": 5.0, "PRIME_Z": 2.0, "FIL": 1.75, "MIN_TEMP": 190.0}
