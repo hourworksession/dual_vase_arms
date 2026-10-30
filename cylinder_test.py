@@ -81,7 +81,7 @@ SIDE = {0: "right", 1: "left"}
 NOZZLE = {0: 1.0, 1: 1.0}         # Revo HF 1.0 mm on both arms, 29 Oct 2026
 DEFAULTS = {  # per tool; centres and start angles from cell studio's cylinder defaults
     0: {"W": 1.0, "Z0": 105.80, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
-    1: {"W": 1.0, "Z0": 109.80, "CX": 511.60, "CY": -10.11, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
+    1: {"W": 1.0, "Z0": 109.80, "CX": 511.60, "CY": -10.11, "ANGLE": 135.0, "DR": 1.5},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
 }
 COMMON = {"FLOW_K": 1.0, "MAX_VB": math.pi, "MAX_VT": 100.0, "SPIRAL": 3,
           "PRIME_MM": 15.0, "PRIME_S": 5.0, "PRIME_Z": 2.0, "FIL": 1.75, "MIN_TEMP": 190.0}
