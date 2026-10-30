@@ -52,8 +52,8 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     PRIME_MM, PRIME_S, PRIME_Z   prime move-in mm, time s, start height above Z0 mm (15, 5, 2)
     FIL     filament diameter, mm (1.75);  MIN_TEMP  refuse below this, C (190)
     ANGLE, CX, CY (and _L)   print angle and turntable centre in each arm's frame
-    DR (and DR_L)  radius trim, mm: add to that arm's print radius in every mode, e.g. DR_L=1
-            when the left lays its bead 1 mm inside the right's (left centre slightly off)
+    DR (and DR_L)  radius trim, mm: add to that arm's print radius in every mode. Left default 1.5:
+            it lands about 1.5 mm inside where it is sent (ring test, 30 Oct 2026). Right default 0
 
 Sequence, with n arms (each on its own side of the disc):
   1. Prime: every arm approaches R + PRIME_MM at Z0 + PRIME_Z; bed at half speed, extruders
