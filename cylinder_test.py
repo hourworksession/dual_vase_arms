@@ -23,6 +23,9 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
             same E, W and FLOW_K as the right unless you set these; Z0_L defaults to 109.7
     MAX_VB  bed speed ceiling, rad/s; the bed runs at the speed that lays the right arm's
             W x L_H bead at E x FLOW_K, capped at this                       (default 3.1416)
+    VB      bed speed, rad/s, instead of E: E is worked out so every arm still lays its
+            W x L_H bead (E = VB x R x W x L_H / (filament area x FLOW_K)). Same VB = same bed
+            speed in one- and two-arm runs.
     MAX_VT  arm speed ceiling, % of 100 mm/s                                 (default 100)
     FIRST   first layer above Z0, mm                                         (default L_H)
     SPIRAL  spiral revolutions                                               (default 3)
@@ -108,6 +111,15 @@ def parse(argv):
     if "E" not in vals and "E_MIN" in vals and "E_MAX" in vals:
         vals["E"] = (vals["E_MIN"] + vals["E_MAX"]) / 2
     vals.setdefault("L_H", 0.5)                            # 1.0 mm nozzle: 1.0 x 0.5 mm bead
+    if "VB" in vals:                                       # bed speed given: work out E from it
+        if "E" in vals or "E_MIN" in vals:
+            raise SystemExit("Give VB or E (or E_MIN/E_MAX), not both")
+        if "R" not in vals or "T" not in vals:
+            raise SystemExit("VB needs T and R")
+        lead = 0 if int(vals["T"]) in (0, 2) else 1
+        w = vals.get("W", DEFAULTS[lead]["W"])
+        fil = math.pi * (vals.get("FIL", COMMON["FIL"]) / 2) ** 2
+        vals["E"] = vals["VB"] * vals["R"] * w * vals["L_H"] / (fil * vals.get("FLOW_K", COMMON["FLOW_K"]))
     missing = [k for k in ("T", "R", "E") if k not in vals]
     if missing:
         raise SystemExit("Missing: " + ", ".join(missing) + "\n\n" + __doc__.split("Values")[0])
