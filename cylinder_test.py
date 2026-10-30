@@ -126,6 +126,13 @@ def parse(argv):
                 vals[k] = float(v)
         else:
             raise SystemExit(f"Not understood: {a!r} (use KEY=value, e.g. R=60)")
+    known = {"T", "R", "L_H", "E", "P", "W", "FLOW_K", "Z0", "E_L", "W_L", "FLOW_K_L", "Z0_L", "VB", "MAX_VB",
+             "MAX_VT", "FIRST", "SPIRAL", "REVS", "HEIGHT", "E_MIN", "E_MAX", "WAVE_T", "WAVES_PER_REV", "SHAPE",
+             "PRIME_MM", "PRIME_S", "PRIME_Z", "FIL", "MIN_TEMP", "ANGLE", "CX", "CY", "ANGLE_L", "CX_L", "CY_L",
+             "DR", "DR_L", "MODE", "SPACING", "SIDE_REVS", "MERGE_REVS", "AS_DUAL", "RAMP_STEPS", "RAMP_EVERY"}
+    unknown = sorted(set(vals) - known)
+    if unknown:
+        raise SystemExit("Unknown setting(s): " + ", ".join(unknown) + "  (check the spelling; see the list at the top)")
     if "--find-z0" in flags or "--find-centre" in flags:   # only the arm (and radius) needed
         for k_, v_ in (("E", 1.0), ("L_H", 0.5), ("R", 60.0)):
             vals.setdefault(k_, v_)
