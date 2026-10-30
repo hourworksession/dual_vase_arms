@@ -26,6 +26,9 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     MAX_VT  arm speed ceiling, % of 100 mm/s                                 (default 100)
     FIRST   first layer above Z0, mm                                         (default 0.6)
     SPIRAL  spiral revolutions                                               (default 3)
+    AS_DUAL=1  (T=0 or T=1) give the TWO-arm profile (its L_H, P, REVS) and run ONE arm with the
+            same beads: P becomes P/2 and REVS 2 x REVS, same bed speed and E, same height.
+            e.g. the 2-arm L_H=0.6 P=0.8 REVS=100 -> one arm at P 0.4 for 200 revs
     REVS    total counted revolutions (sets SPIRAL);  HEIGHT  wall height above the first
             layer, mm (sets SPIRAL = HEIGHT / P, wins over REVS)
     E_MIN, E_MAX, WAVE_T or WAVES_PER_REV   throttle between E_MIN and E_MAX (every arm used)
@@ -114,6 +117,12 @@ def parse(argv):
         raise SystemExit("Calibrate one arm at a time: T=0 or T=1")
     tools = [0, 1] if t == 2 else [t]
     g = {**COMMON, **vals, "T": t, "N": len(tools)}
+    if vals.get("AS_DUAL"):
+        if t == 2:
+            raise SystemExit("AS_DUAL is for one arm (T=0 or T=1): it runs that arm as if the other were there")
+        g["P"] = vals.get("P", 2 * g["L_H"]) / 2          # each arm's beads sat P/2 apart in the 2-arm run
+        if "REVS" in vals:
+            vals["REVS"] = g["REVS"] = vals["REVS"] * 2     # same height at half the rise per rev
     g.setdefault("P", g["N"] * g["L_H"])
     if "HEIGHT" in vals:
         g["SPIRAL"] = vals["HEIGHT"] / g["P"]
@@ -171,6 +180,9 @@ def plan(g):
     if abs(g["P"] - n * g["L_H"]) > 1e-6:
         warn.append(f"P {g['P']:g} is not n x L_H = {n * g['L_H']:g}: beads will be "
                     f"{g['P'] / n:.2f} mm tall but the flow is sized for {g['L_H']:g} mm.")
+    if g.get("AS_DUAL"):
+        warn.append(f"AS_DUAL: one arm laying the two-arm wall's beads ({g['P']:g} mm apart, "
+                    f"{total_revs:g} revs); the arm climbs half as fast as in the two-arm run.")
     if g["FIRST"] <= 0:
         raise SystemExit("FIRST must be above 0: nothing may run at or below Z0.")
     per = {}
@@ -333,7 +345,8 @@ def run(g, k, cell):
     a0 = cell.tt.get_angle()
     c = k["circle"]
     print(f"2. Circle: {c:g} rev, bed {k['omega']:.3f} rad/s, extruders at E, start angle {a0:.1f} deg")
-    live = {"rev": 0.0, "z": {tl: per[tl]["z_first"] for tl in arms}}
+    live = {"rev": 0.0, "z": {tl: per[tl]["z_first"] for tl in arms},
+            "xy": {tl: per[tl]["print_xy"] for tl in arms}, "dev": {tl: [] for tl in arms}}
     os.makedirs(os.path.join(ROOT, "runs"), exist_ok=True)
     log_path = os.path.join(ROOT, "runs", time.strftime("cylinder_test_%Y%m%d_%H%M%S.csv"))
     threading.Thread(target=throttle, args=(g, cell, live, log_path), daemon=True).start()
@@ -369,6 +382,7 @@ def run(g, k, cell):
     for tl in arms:
         cell.gcode(f"EXTRUDE_SCALE T={tl} PERCENT=100")
     print(f"6. Extruders off at rev {(cell.tt.get_angle() - a0) / 360:.3f}")
+    report_deviation(g, live)
     print("7. Move away")
     for tl in arms:
         cell.move(tl, *per[tl]["print_xy"], guard(tl, last_z[tl] + 10), speed=20, wait=True)
@@ -384,7 +398,9 @@ def throttle(g, cell, live, log_path):
     amp = (g["E_MAX"] - g["E_MIN"]) / 2 / g["E"] if g["WAVE"] else 0.0     # as a fraction of E
     t0 = time.monotonic()
     with open(log_path, "w", encoding="utf-8") as f:
-        f.write("t_s,rev,scale_pct," + ",".join(f"z_{arms[t]['side']},e_{arms[t]['side']}" for t in arms) + "\n")
+        f.write("t_s,rev,scale_pct," + ",".join(
+            f"z_cmd_{s},x_act_{s},y_act_{s},z_act_{s},dz_{s},dxy_{s},e_{s}"
+            for s in (arms[t]["side"] for t in arms)) + "\n")
         tick = 0
         while not cell.stop_keep.is_set():
             now = time.monotonic() - t0
@@ -399,12 +415,40 @@ def throttle(g, cell, live, log_path):
                         print(f"  throttle command failed: {ex}")
             else:
                 scale = 1.0
-            cols = ",".join(f"{live['z'][t]:.3f},{arms[t]['E'] * scale:.3f}" for t in arms)
+            cols = []
+            for t in arms:
+                try:
+                    p = cell.pose(t)                  # what the arm reports (its own encoders)
+                except Exception:
+                    p = None
+                if p:
+                    dz = p[2] - live["z"][t]
+                    dxy = math.dist(p[:2], live["xy"][t])
+                    live["dev"][t].append((live["rev"], dz, dxy))
+                    cols.append(f"{live['z'][t]:.3f},{p[0]:.3f},{p[1]:.3f},{p[2]:.3f},{dz:.3f},{dxy:.3f},"
+                                f"{arms[t]['E'] * scale:.3f}")
+                else:
+                    cols.append(f"{live['z'][t]:.3f},,,,,,{arms[t]['E'] * scale:.3f}")
+            cols = ",".join(cols)
             f.write(f"{now:.3f},{live['rev']:.4f},{100 * scale:.1f},{cols}\n")
             tick += 1
             delay = t0 + tick * 0.1 - time.monotonic()
             if delay > 0:
                 cell.stop_keep.wait(delay)
+
+
+def report_deviation(g, live):
+    """Commanded vs reported arm position over the spiral (skips the first 0.5 rev of settling)."""
+    print("   Arm position vs command (from the arm's own reports; physical sag or slip won't show here):")
+    for t, rows in live["dev"].items():
+        rows = [r for r in rows if r[0] >= 0.5]
+        if not rows:
+            continue
+        dz = [abs(r[1]) for r in rows]
+        dxy = [r[2] for r in rows]
+        rms = lambda v: math.sqrt(sum(x * x for x in v) / len(v))
+        print(f"   {g['arms'][t]['side']:5}: Z off by max {max(dz):.3f} / rms {rms(dz):.3f} mm;  "
+              f"XY off by max {max(dxy):.3f} / rms {rms(dxy):.3f} mm  ({len(rows)} samples)")
 
 
 def find_z0(g, k, cell):
