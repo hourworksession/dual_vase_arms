@@ -33,9 +33,9 @@ TOOL_FILE = os.path.join(REPO_ROOT, "config", "tool.json")
 DEFAULTS = {
     "nozzle": "E3D Revo High Flow 1.0 mm (both arms)",
     "nozzle_diameter": 1.0,     # mm, RIGHT arm (also the planner's nozzle)
-    "line_width": 1.1,          # mm, RIGHT arm default extrusion width (~1.1 x nozzle)
+    "line_width": 1.0,          # mm, RIGHT arm default extrusion width (= nozzle, 30 Oct 2026)
     "nozzle_diameter_left": 1.0,
-    "line_width_left": 1.1,     # mm, LEFT arm
+    "line_width_left": 1.0,     # mm, LEFT arm
     "layer_height": 0.5,        # mm, default layer height (<= ~75 % of the nozzle, 1.0 -> 0.75 max)
     "roll_right": 90.0,
     "pitch_right": -90.0,

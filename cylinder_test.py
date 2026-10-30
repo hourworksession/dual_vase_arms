@@ -13,10 +13,10 @@ Macro-style values, run from the repo root (test Klipper config loaded, hot ends
 Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys override the left.
     T       0 = right, 1 = left, 2 = both                                    (required)
     R       cylinder radius, mm                                              (required)
-    L_H     bead height (layer height), mm                                   (required)
+    L_H     bead height (layer height), mm                                   (default 0.5)
     E       filament speed, mm/s                  (required, unless E_MIN and E_MAX are given)
     P       Z rise per bed revolution, mm/rev                 (default n x L_H, n = arms used)
-    W       line width, mm                                   (default 1.1, both arms)
+    W       line width, mm                                   (default 1.0, both arms)
     FLOW_K  measured / planned plastic from a test print (1.5 / 1.1 = 1.36)
     Z0      zero height, nozzle touching the disc            (default 105.9 right, 109.7 left)
     E_L, W_L, FLOW_K_L, Z0_L   left arm in T=2. Both nozzles are 1.0 mm, so the left takes the
@@ -24,7 +24,7 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     MAX_VB  bed speed ceiling, rad/s; the bed runs at the speed that lays the right arm's
             W x L_H bead at E x FLOW_K, capped at this                       (default 3.1416)
     MAX_VT  arm speed ceiling, % of 100 mm/s                                 (default 100)
-    FIRST   first layer above Z0, mm                                         (default 0.6)
+    FIRST   first layer above Z0, mm                                         (default L_H)
     SPIRAL  spiral revolutions                                               (default 3)
     AS_DUAL=1  (T=0 or T=1) give the TWO-arm profile (its L_H, P, REVS) and run ONE arm with the
             same beads: P becomes P/2 and REVS 2 x REVS, same bed speed and E, same height.
@@ -62,10 +62,10 @@ sys.path[:0] = [ROOT, os.path.join(ROOT, "src"), os.path.join(ROOT, "scripts")]
 SIDE = {0: "right", 1: "left"}
 NOZZLE = {0: 1.0, 1: 1.0}         # Revo HF 1.0 mm on both arms, 29 Oct 2026
 DEFAULTS = {  # per tool; centres and start angles from cell studio's cylinder defaults
-    0: {"W": 1.1, "Z0": 105.80, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
-    1: {"W": 1.1, "Z0": 109.60, "CX": 511.60, "CY": -10.11, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
+    0: {"W": 1.0, "Z0": 105.80, "CX": 510.08, "CY": -18.98, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
+    1: {"W": 1.0, "Z0": 109.60, "CX": 511.60, "CY": -10.11, "ANGLE": 135.0},   # centre cali_jog 29 Oct, Z0 touch-off at R 60
 }
-COMMON = {"FLOW_K": 1.0, "MAX_VB": math.pi, "MAX_VT": 100.0, "FIRST": 0.6, "SPIRAL": 3,
+COMMON = {"FLOW_K": 1.0, "MAX_VB": math.pi, "MAX_VT": 100.0, "SPIRAL": 3,
           "PRIME_MM": 15.0, "PRIME_S": 5.0, "PRIME_Z": 2.0, "FIL": 1.75, "MIN_TEMP": 190.0}
 BASE_ARM_SPEED = 100.0            # mm/s = MAX_VT 100 %
 PARK = (400.0, 174.0, 180.0)      # cell studio's park pose (each arm's own frame)
@@ -107,7 +107,8 @@ def parse(argv):
             vals.setdefault(k_, v_)
     if "E" not in vals and "E_MIN" in vals and "E_MAX" in vals:
         vals["E"] = (vals["E_MIN"] + vals["E_MAX"]) / 2
-    missing = [k for k in ("T", "R", "L_H", "E") if k not in vals]
+    vals.setdefault("L_H", 0.5)                            # 1.0 mm nozzle: 1.0 x 0.5 mm bead
+    missing = [k for k in ("T", "R", "E") if k not in vals]
     if missing:
         raise SystemExit("Missing: " + ", ".join(missing) + "\n\n" + __doc__.split("Values")[0])
     t = int(vals["T"])
@@ -117,6 +118,7 @@ def parse(argv):
         raise SystemExit("Calibrate one arm at a time: T=0 or T=1")
     tools = [0, 1] if t == 2 else [t]
     g = {**COMMON, **vals, "T": t, "N": len(tools)}
+    g.setdefault("FIRST", g["L_H"])                        # first bead the same height as the rest
     if vals.get("AS_DUAL"):
         if t == 2:
             raise SystemExit("AS_DUAL is for one arm (T=0 or T=1): it runs that arm as if the other were there")
