@@ -400,7 +400,9 @@ def throttle(g, cell, live, log_path):
     with open(log_path, "w", encoding="utf-8") as f:
         f.write("t_s,rev,scale_pct," + ",".join(
             f"z_cmd_{s},x_act_{s},y_act_{s},z_act_{s},dz_{s},dxy_{s},e_{s}"
-            for s in (arms[t]["side"] for t in arms)) + "\n")
+            for s in (arms[t]["side"] for t in arms))
+            + "," + ",".join(f"temp_{arms[t]['side']}" for t in arms) + "\n")
+        temps = {t: "" for t in arms}
         tick = 0
         while not cell.stop_keep.is_set():
             now = time.monotonic() - t0
@@ -429,7 +431,13 @@ def throttle(g, cell, live, log_path):
                                 f"{arms[t]['E'] * scale:.3f}")
                 else:
                     cols.append(f"{live['z'][t]:.3f},,,,,,{arms[t]['E'] * scale:.3f}")
-            cols = ",".join(cols)
+            if tick % 10 == 0:                         # hot-end temperature once a second
+                for t in arms:
+                    try:
+                        temps[t] = f"{cell.hot_end_temp(t):.1f}"
+                    except Exception:
+                        temps[t] = ""
+            cols = ",".join(cols) + "," + ",".join(temps[t] for t in arms)
             f.write(f"{now:.3f},{live['rev']:.4f},{100 * scale:.1f},{cols}\n")
             tick += 1
             delay = t0 + tick * 0.1 - time.monotonic()
