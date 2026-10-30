@@ -52,6 +52,8 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     PRIME_MM, PRIME_S, PRIME_Z   prime move-in mm, time s, start height above Z0 mm (15, 5, 2)
     FIL     filament diameter, mm (1.75);  MIN_TEMP  refuse below this, C (190)
     ANGLE, CX, CY (and _L)   print angle and turntable centre in each arm's frame
+    DR (and DR_L)  radius trim, mm: add to that arm's print radius in every mode, e.g. DR_L=1
+            when the left lays its bead 1 mm inside the right's (left centre slightly off)
 
 Sequence, with n arms (each on its own side of the disc):
   1. Prime: every arm approaches R + PRIME_MM at Z0 + PRIME_Z; bed at half speed, extruders
@@ -193,29 +195,29 @@ def parse(argv):
         sfx = "_L" if (t == 2 and tl == 1) else ""
         a = dict(DEFAULTS[tl])
         if sfx == "":                                     # plain keys = this arm
-            for key in ("W", "Z0", "CX", "CY", "ANGLE"):
+            for key in ("W", "Z0", "CX", "CY", "ANGLE", "DR"):
                 if key in vals:
                     a[key] = vals[key]
             a["FLOW_K"] = g["FLOW_K"]
             a["E"] = g["E"]
         else:                                             # left arm in T=2
-            for key in ("W", "Z0", "CX", "CY", "ANGLE", "FLOW_K", "E"):
+            for key in ("W", "Z0", "CX", "CY", "ANGLE", "FLOW_K", "E", "DR"):
                 if key + "_L" in vals:
                     a[key] = vals[key + "_L"]
             for key in ("W", "FLOW_K", "E"):              # same nozzle: same as the right
                 if key + "_L" not in vals:
                     a[key] = arms[first][key]
-        a["R"] = g["R"]
+        a["R"] = g["R"] + a.get("DR", 0.0)
         if g["MODE"] == "merge" and sfx:                  # left ends on the right's ring; starts SPACING out
             g["S"] = vals.get("SPACING", arms[first]["W"])
             if g["R"] + g["S"] <= 0:
                 raise SystemExit("SPACING puts the left ring at or inside the centre")
         if g["MODE"] == "side" and sfx:                   # left ring beside the right one
-            a["R"] = g["R"] + vals.get("SPACING", arms[first]["W"])
+            a["R"] += vals.get("SPACING", arms[first]["W"])
             if a["R"] <= 0:
                 raise SystemExit("SPACING puts the left ring at or inside the centre")
             if "E_L" not in vals:                         # same bead on a longer path: more filament
-                a["E"] = arms[first]["E"] * a["R"] / g["R"]
+                a["E"] = arms[first]["E"] * (g["R"] + vals.get("SPACING", arms[first]["W"])) / g["R"]
         a["T"], a["side"], a["nozzle"] = tl, SIDE[tl], NOZZLE[tl]
         arms[tl] = a
     g["arms"] = arms
