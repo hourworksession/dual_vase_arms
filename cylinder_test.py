@@ -29,6 +29,12 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     MAX_VT  arm speed ceiling, % of 100 mm/s                                 (default 100)
     FIRST   first layer above Z0, mm                                         (default L_H)
     SPIRAL  spiral revolutions                                               (default 3)
+    MODE    T=2 only.  layered (default): the arms' beads stack, each arm on top of the other's,
+            P = 2 x L_H.  side: both arms at the same height, beads side by side (a wall two
+            beads thick), left ring SPACING mm outside the right, P = L_H. For tuning the
+            arms' relative position before layering.
+    SPACING side mode: left bead centre minus right bead centre, mm (default W; negative =
+            left inside). The left arm's E is scaled by R_left / R so its bead matches.
     AS_DUAL=1  (T=0 or T=1) give the TWO-arm profile (its L_H, P, REVS) and run ONE arm with the
             same beads: P becomes P/2 and REVS 2 x REVS, same bed speed and E, same height.
             e.g. the 2-arm L_H=0.6 P=0.8 REVS=100 -> one arm at P 0.4 for 200 revs
@@ -96,7 +102,13 @@ def parse(argv):
         elif "=" in a:
             k, v = a.split("=", 1)
             k = k.strip().upper()
-            if k == "SHAPE":
+            if k == "MODE":
+                v = {"layered": "layered", "layer": "layered", "side": "side", "side-by-side": "side",
+                     "sbs": "side"}.get(v.strip().lower())
+                if v is None:
+                    raise SystemExit("MODE must be layered or side")
+                vals[k] = v
+            elif k == "SHAPE":
                 v = v.strip().lower()
                 if v not in SHAPES:
                     raise SystemExit(f"SHAPE must be one of {', '.join(SHAPES)}")
@@ -130,6 +142,10 @@ def parse(argv):
         raise SystemExit("Calibrate one arm at a time: T=0 or T=1")
     tools = [0, 1] if t == 2 else [t]
     g = {**COMMON, **vals, "T": t, "N": len(tools)}
+    g.setdefault("MODE", "layered")
+    if g["MODE"] == "side" and t != 2:
+        raise SystemExit("MODE=side needs both arms (T=2)")
+    g["NL"] = g["N"] if g["MODE"] == "layered" else 1      # beads per ring height: 2 layered, 1 side by side
     g.setdefault("FIRST", g["L_H"])                        # first bead the same height as the rest
     if vals.get("AS_DUAL"):
         if t == 2:
@@ -137,13 +153,13 @@ def parse(argv):
         g["P"] = vals.get("P", 2 * g["L_H"]) / 2          # each arm's beads sat P/2 apart in the 2-arm run
         if "REVS" in vals:
             vals["REVS"] = g["REVS"] = vals["REVS"] * 2     # same height at half the rise per rev
-    g.setdefault("P", g["N"] * g["L_H"])
+    g.setdefault("P", g["NL"] * g["L_H"])
     if "HEIGHT" in vals:
         g["SPIRAL"] = vals["HEIGHT"] / g["P"]
     elif "REVS" in vals:
-        if vals["REVS"] < 2 / g["N"]:
+        if vals["REVS"] < 2 / g["NL"]:
             raise SystemExit("REVS is too small for the opening and closing circles")
-        g["SPIRAL"] = vals["REVS"] - 2 / g["N"]
+        g["SPIRAL"] = vals["REVS"] - 2 / g["NL"]
     g["WAVE"] = "E_MIN" in vals and "E_MAX" in vals
     if g["WAVE"]:
         if not 0 < g["E_MIN"] <= g["E_MAX"]:
@@ -169,6 +185,13 @@ def parse(argv):
             for key in ("W", "FLOW_K", "E"):              # same nozzle: same as the right
                 if key + "_L" not in vals:
                     a[key] = arms[first][key]
+        a["R"] = g["R"]
+        if g["MODE"] == "side" and sfx:                   # left ring beside the right one
+            a["R"] = g["R"] + vals.get("SPACING", arms[first]["W"])
+            if a["R"] <= 0:
+                raise SystemExit("SPACING puts the left ring at or inside the centre")
+            if "E_L" not in vals:                         # same bead on a longer path: more filament
+                a["E"] = arms[first]["E"] * a["R"] / g["R"]
         a["T"], a["side"], a["nozzle"] = tl, SIDE[tl], NOZZLE[tl]
         arms[tl] = a
     g["arms"] = arms
@@ -183,7 +206,7 @@ def plan(g):
     v_surface = flow / (lead["W"] * g["L_H"])
     omega_needed = v_surface / g["R"]
     omega = min(omega_needed, g["MAX_VB"])
-    n = g["N"]
+    n = g["NL"]
     circle = 1.0 / n
     total_revs = 2 * circle + g["SPIRAL"]
     rev_s = 2 * math.pi / omega
@@ -216,7 +239,7 @@ def plan(g):
                         f"{a['nozzle']:g} mm nozzle.")
         prime_dist = math.hypot(g["PRIME_MM"], g["PRIME_Z"] - g["FIRST"])
         per[tl] = {"z_first": z_first, "z_top": z_first + g["SPIRAL"] * g["P"],
-                   "prime_xy": pt(g["R"] + g["PRIME_MM"]), "print_xy": pt(g["R"]),
+                   "prime_xy": pt(a["R"] + g["PRIME_MM"]), "print_xy": pt(a["R"]),
                    "prime_z": a["Z0"] + g["PRIME_Z"], "prime_speed": prime_dist / g["PRIME_S"],
                    "flow": a["E"] * fil_area * a["FLOW_K"]}
     return {"fil_area": fil_area, "flow": flow, "v_surface": v_surface, "omega": omega,
@@ -227,7 +250,8 @@ def plan(g):
 
 def show(g, k):
     names = " + ".join(f"{a['side']} ({a['nozzle']:g} mm)" for a in g["arms"].values())
-    print(f"\nCylinder test: {names}, n = {g['N']}")
+    mode = {"layered": "layered", "side": "side by side"}[g["MODE"]] if g["N"] == 2 else "one arm"
+    print(f"\nCylinder test: {names}, {mode}")
     print(f"  Bed {k['omega']:.3f} rad/s ({math.degrees(k['omega']):.1f} deg/s), {k['rev_s']:.1f} s per rev, "
           f"{k['v_surface']:.1f} mm/s at R {g['R']:g}   [ceiling {g['MAX_VB']:.3f}]")
     for tl, a in g["arms"].items():
@@ -235,11 +259,12 @@ def show(g, k):
         kk = f" x FLOW_K {a['FLOW_K']:g}" if a["FLOW_K"] != 1 else ""
         print(f"  {a['side']:5}: E {a['E']:.2f} mm/s{kk} -> {q['flow']:.1f} mm3/s, bead {a['W']:g} x {g['L_H']:g} mm;"
               f"  Z0 {a['Z0']:.2f}, first {q['z_first']:.2f}, top {q['z_top']:.2f};"
-              f"  print point X {q['print_xy'][0]:.1f} Y {q['print_xy'][1]:.1f}")
+              f"  R {a['R']:g} at X {q['print_xy'][0]:.1f} Y {q['print_xy'][1]:.1f}")
     print(f"  1. Prime: {g['PRIME_MM']:g} mm move-in over {g['PRIME_S']:g} s from {g['PRIME_Z']:g} mm above Z0; "
           f"bed {k['omega'] / 2:.3f} rad/s, extruders at half E")
     print(f"  2. Circle: {k['circle']:g} rev flat at the first layer"
-          + (" (each arm half the circle)" if g["N"] == 2 else ""))
+          + (" (each arm half the circle)" if g["NL"] == 2 else
+             " (each arm its own full ring, side by side)" if g["N"] == 2 else ""))
     print(f"  3/4. Spiral: {g['SPIRAL']:g} rev from rev {k['circle']:g}, rising {g['P']:g} mm/rev")
     print(f"  5. Final circle: {k['circle']:g} rev flat at the top")
     if g["WAVE"]:
