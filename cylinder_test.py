@@ -38,6 +38,9 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     AS_DUAL=1  (T=0 or T=1) give the TWO-arm profile (its L_H, P, REVS) and run ONE arm with the
             same beads: P becomes P/2 and REVS 2 x REVS, same bed speed and E, same height.
             e.g. the 2-arm L_H=0.6 P=0.8 REVS=100 -> one arm at P 0.4 for 200 revs
+    RAMP_STEPS, RAMP_EVERY   ease into the spiral: the rise per rev starts at P / RAMP_STEPS and
+            goes up by that much every RAMP_EVERY rev until it is P. Default 5 steps every
+            0.125 rev (L_H 0.5: 0.1, 0.2 ... 0.5 mm per bead). RAMP_STEPS=1 turns it off.
     REVS    total counted revolutions (sets SPIRAL);  HEIGHT  wall height above the first
             layer, mm (sets SPIRAL = HEIGHT / P, wins over REVS)
     E_MIN, E_MAX, WAVE_T or WAVES_PER_REV   throttle between E_MIN and E_MAX (every arm used)
@@ -154,8 +157,13 @@ def parse(argv):
         if "REVS" in vals:
             vals["REVS"] = g["REVS"] = vals["REVS"] * 2     # same height at half the rise per rev
     g.setdefault("P", g["NL"] * g["L_H"])
+    g.setdefault("RAMP_STEPS", 5)
+    g.setdefault("RAMP_EVERY", 0.125)
+    if g["RAMP_STEPS"] < 1 or g["RAMP_EVERY"] <= 0:
+        raise SystemExit("RAMP_STEPS must be 1 or more and RAMP_EVERY above 0")
+    g["RAMP_STEPS"] = int(g["RAMP_STEPS"])
     if "HEIGHT" in vals:
-        g["SPIRAL"] = vals["HEIGHT"] / g["P"]
+        g["SPIRAL"] = (vals["HEIGHT"] + ramp_loss(g)) / g["P"]
     elif "REVS" in vals:
         if vals["REVS"] < 2 / g["NL"]:
             raise SystemExit("REVS is too small for the opening and closing circles")
@@ -198,6 +206,21 @@ def parse(argv):
     return g, flags
 
 
+def ramp_loss(g):
+    """Height the ramp gives up compared with climbing at full P from the start, mm."""
+    n, every = g["RAMP_STEPS"], g["RAMP_EVERY"]
+    return g["P"] * every * (n - 1) / 2
+
+
+def spiral_dz(g, u):
+    """Height above the first layer after u revolutions of spiral, with the ramp-in."""
+    n, every, P = g["RAMP_STEPS"], g["RAMP_EVERY"], g["P"]
+    if u >= n * every:
+        return P * u - ramp_loss(g)
+    k = int(u // every)                         # whole steps done; step j climbs at P (j+1)/n
+    return P * every * k * (k + 1) / (2 * n) + P * (k + 1) / n * (u - k * every)
+
+
 def plan(g):
     """Every number the run will use, worked out before anything moves."""
     fil_area = math.pi * (g["FIL"] / 2) ** 2
@@ -238,7 +261,7 @@ def plan(g):
             warn.append(f"{a['side']}: line width {a['W']:g} mm is outside about 1 to 1.5 x its "
                         f"{a['nozzle']:g} mm nozzle.")
         prime_dist = math.hypot(g["PRIME_MM"], g["PRIME_Z"] - g["FIRST"])
-        per[tl] = {"z_first": z_first, "z_top": z_first + g["SPIRAL"] * g["P"],
+        per[tl] = {"z_first": z_first, "z_top": z_first + spiral_dz(g, g["SPIRAL"]),
                    "prime_xy": pt(a["R"] + g["PRIME_MM"]), "print_xy": pt(a["R"]),
                    "prime_z": a["Z0"] + g["PRIME_Z"], "prime_speed": prime_dist / g["PRIME_S"],
                    "flow": a["E"] * fil_area * a["FLOW_K"]}
@@ -265,7 +288,9 @@ def show(g, k):
     print(f"  2. Circle: {k['circle']:g} rev flat at the first layer"
           + (" (each arm half the circle)" if g["NL"] == 2 else
              " (each arm its own full ring, side by side)" if g["N"] == 2 else ""))
-    print(f"  3/4. Spiral: {g['SPIRAL']:g} rev from rev {k['circle']:g}, rising {g['P']:g} mm/rev")
+    ramp = (f", easing in over {g['RAMP_STEPS'] * g['RAMP_EVERY']:g} rev ({g['P'] / g['RAMP_STEPS']:.2f} mm/rev "
+            f"more every {g['RAMP_EVERY']:g} rev)" if g["RAMP_STEPS"] > 1 else "")
+    print(f"  3/4. Spiral: {g['SPIRAL']:g} rev from rev {k['circle']:g}, rising {g['P']:g} mm/rev{ramp}")
     print(f"  5. Final circle: {k['circle']:g} rev flat at the top")
     if g["WAVE"]:
         how = (f"{g['WAVES_PER_REV']:g} waves per rev, locked to the bed" if "WAVES_PER_REV" in g
@@ -400,9 +425,9 @@ def run(g, k, cell):
         if rev < c:
             dz, ph = 0.0, "circle"
         elif rev < c + n_sp:
-            dz, ph = (rev - c) * g["P"], "spiral"
+            dz, ph = spiral_dz(g, rev - c), "spiral"
         else:
-            dz, ph = n_sp * g["P"], "final circle"
+            dz, ph = spiral_dz(g, n_sp), "final circle"
         if ph != phase:
             print({"spiral": f"3. Spiral: {n_sp:g} rev at P {g['P']:g} mm/rev",
                    "final circle": f"5. Final circle: {c:g} rev at the top"}[ph] + f"  (rev {rev:.2f})")
