@@ -33,7 +33,11 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
             P = 2 x L_H.  side: both arms at the same height, beads side by side (a wall two
             beads thick), left ring SPACING mm outside the right, P = L_H. For tuning the
             arms' relative position before layering.
-    SPACING side mode: left bead centre minus right bead centre, mm (default W; negative =
+            merge: start side by side (full first ring, SIDE_REVS revs), then over MERGE_REVS
+            revs the left ring slides in onto the right one and the rise grows to the layered
+            P = 2 x L_H; layered from then on. A first layer that always goes down, then stacked.
+    SIDE_REVS, MERGE_REVS   merge mode: revs side by side, revs to slide in      (2, 4)
+    SPACING side and merge modes: left bead centre minus right bead centre, mm (default W; negative =
             left inside). The left arm's E is scaled by R_left / R so its bead matches.
     AS_DUAL=1  (T=0 or T=1) give the TWO-arm profile (its L_H, P, REVS) and run ONE arm with the
             same beads: P becomes P/2 and REVS 2 x REVS, same bed speed and E, same height.
@@ -107,9 +111,9 @@ def parse(argv):
             k = k.strip().upper()
             if k == "MODE":
                 v = {"layered": "layered", "layer": "layered", "side": "side", "side-by-side": "side",
-                     "sbs": "side"}.get(v.strip().lower())
+                     "sbs": "side", "merge": "merge"}.get(v.strip().lower())
                 if v is None:
-                    raise SystemExit("MODE must be layered or side")
+                    raise SystemExit("MODE must be layered, side or merge")
                 vals[k] = v
             elif k == "SHAPE":
                 v = v.strip().lower()
@@ -146,9 +150,11 @@ def parse(argv):
     tools = [0, 1] if t == 2 else [t]
     g = {**COMMON, **vals, "T": t, "N": len(tools)}
     g.setdefault("MODE", "layered")
-    if g["MODE"] == "side" and t != 2:
-        raise SystemExit("MODE=side needs both arms (T=2)")
-    g["NL"] = g["N"] if g["MODE"] == "layered" else 1      # beads per ring height: 2 layered, 1 side by side
+    if g["MODE"] in ("side", "merge") and t != 2:
+        raise SystemExit(f"MODE={g['MODE']} needs both arms (T=2)")
+    g["NL"] = 1 if g["MODE"] == "side" else g["N"]         # beads per ring height: 2 stacked, 1 side by side
+    g.setdefault("SIDE_REVS", 2.0)
+    g.setdefault("MERGE_REVS", 4.0)
     g.setdefault("FIRST", g["L_H"])                        # first bead the same height as the rest
     if vals.get("AS_DUAL"):
         if t == 2:
@@ -162,12 +168,18 @@ def parse(argv):
     if g["RAMP_STEPS"] < 1 or g["RAMP_EVERY"] <= 0:
         raise SystemExit("RAMP_STEPS must be 1 or more and RAMP_EVERY above 0")
     g["RAMP_STEPS"] = int(g["RAMP_STEPS"])
+    # opening circle: a full ring when the arms lay rings of their own, 1/n when they share one
+    g["C0"] = 1.0 if g["MODE"] == "merge" else 1.0 / g["NL"]
+    g["C1"] = 1.0 / g["NL"]
     if "HEIGHT" in vals:
-        g["SPIRAL"] = (vals["HEIGHT"] + ramp_loss(g)) / g["P"]
+        if g["MODE"] == "merge":
+            g["SPIRAL"] = 0.0                                  # set once the arms (and W) are known
+        else:
+            g["SPIRAL"] = (vals["HEIGHT"] + ramp_loss(g)) / g["P"]
     elif "REVS" in vals:
-        if vals["REVS"] < 2 / g["NL"]:
+        if vals["REVS"] < g["C0"] + g["C1"]:
             raise SystemExit("REVS is too small for the opening and closing circles")
-        g["SPIRAL"] = vals["REVS"] - 2 / g["NL"]
+        g["SPIRAL"] = vals["REVS"] - g["C0"] - g["C1"]
     g["WAVE"] = "E_MIN" in vals and "E_MAX" in vals
     if g["WAVE"]:
         if not 0 < g["E_MIN"] <= g["E_MAX"]:
@@ -194,6 +206,10 @@ def parse(argv):
                 if key + "_L" not in vals:
                     a[key] = arms[first][key]
         a["R"] = g["R"]
+        if g["MODE"] == "merge" and sfx:                  # left ends on the right's ring; starts SPACING out
+            g["S"] = vals.get("SPACING", arms[first]["W"])
+            if g["R"] + g["S"] <= 0:
+                raise SystemExit("SPACING puts the left ring at or inside the centre")
         if g["MODE"] == "side" and sfx:                   # left ring beside the right one
             a["R"] = g["R"] + vals.get("SPACING", arms[first]["W"])
             if a["R"] <= 0:
@@ -203,6 +219,17 @@ def parse(argv):
         a["T"], a["side"], a["nozzle"] = tl, SIDE[tl], NOZZLE[tl]
         arms[tl] = a
     g["arms"] = arms
+    g.setdefault("S", 0.0)
+    if g["MODE"] == "merge":
+        g["WM"] = arms[first]["W"]
+        lead_in = g["SIDE_REVS"] + g["MERGE_REVS"]
+        if "HEIGHT" in vals:
+            h_in = spiral(g, lead_in)[0]
+            g["SPIRAL"] = lead_in + max(0.0, vals["HEIGHT"] - h_in) / g["P"]
+        if g["SPIRAL"] < lead_in:
+            raise SystemExit(f"merge needs at least {lead_in + g['C0'] + g['C1']:g} REVS "
+                             f"({g['C0']:g} ring + {g['SIDE_REVS']:g} side by side + {g['MERGE_REVS']:g} merging "
+                             f"+ {g['C1']:g} final circle)")
     return g, flags
 
 
@@ -212,13 +239,55 @@ def ramp_loss(g):
     return g["P"] * every * (n - 1) / 2
 
 
-def spiral_dz(g, u):
-    """Height above the first layer after u revolutions of spiral, with the ramp-in."""
-    n, every, P = g["RAMP_STEPS"], g["RAMP_EVERY"], g["P"]
+def spiral_dz(g, u, P=None):
+    """Height above the first layer after u revolutions of spiral at pitch P, with the ramp-in."""
+    n, every = g["RAMP_STEPS"], g["RAMP_EVERY"]
+    P = g["P"] if P is None else P
     if u >= n * every:
-        return P * u - ramp_loss(g)
+        return P * u - P * every * (n - 1) / 2
     k = int(u // every)                         # whole steps done; step j climbs at P (j+1)/n
     return P * every * k * (k + 1) / (2 * n) + P * (k + 1) / n * (u - k * every)
+
+
+def spiral(g, u):
+    """(height above the first layer, left arm's extra radius) after u revs of spiral.
+
+    layered / side / one arm: the plain spiral, no extra radius. merge: side by side at
+    L_H per rev, then the left ring slides in from S to 0 over MERGE_REVS while the rise
+    grows so the plastic still fills the narrowing wall (2 W L_H per rev over a wall
+    W + S(1-f) wide), then layered at P."""
+    if g["MODE"] != "merge":
+        return spiral_dz(g, u), 0.0
+    L, W, S = g["L_H"], g["WM"], g["S"]
+    sb, m = g["SIDE_REVS"], g["MERGE_REVS"]
+    if u < sb:
+        return spiral_dz(g, u, L), S
+    h0 = spiral_dz(g, sb, L)
+
+    def merged(f):                     # height gained over the first f of the merge
+        if abs(S) < 1e-9:
+            return 2 * L * m * f
+        return 2 * W * L * m / S * math.log((W + S) / (W + S * (1 - f)))
+    if u < sb + m:
+        f = (u - sb) / m
+        return h0 + merged(f), S * (1 - f)
+    return h0 + merged(1.0) + g["P"] * (u - sb - m), 0.0
+
+
+def where(g, rev):
+    """Phase, height above the first layer and the left arm's extra radius at a bed revolution."""
+    c0, n_sp = g["C0"], g["SPIRAL"]
+    if rev < c0:
+        return "circle", 0.0, g["S"] if g["MODE"] == "merge" else 0.0
+    if rev < c0 + n_sp:
+        dz, off = spiral(g, rev - c0)
+        ph = "spiral"
+        if g["MODE"] == "merge":
+            u = rev - c0
+            ph = "side" if u < g["SIDE_REVS"] else "merge" if u < g["SIDE_REVS"] + g["MERGE_REVS"] else "spiral"
+        return ph, dz, off
+    dz, off = spiral(g, n_sp)
+    return "final circle", dz, off
 
 
 def plan(g):
@@ -230,8 +299,8 @@ def plan(g):
     omega_needed = v_surface / g["R"]
     omega = min(omega_needed, g["MAX_VB"])
     n = g["NL"]
-    circle = 1.0 / n
-    total_revs = 2 * circle + g["SPIRAL"]
+    circle = g["C1"]
+    total_revs = g["C0"] + g["SPIRAL"] + g["C1"]
     rev_s = 2 * math.pi / omega
     warn = []
     if omega < omega_needed:
@@ -261,8 +330,9 @@ def plan(g):
             warn.append(f"{a['side']}: line width {a['W']:g} mm is outside about 1 to 1.5 x its "
                         f"{a['nozzle']:g} mm nozzle.")
         prime_dist = math.hypot(g["PRIME_MM"], g["PRIME_Z"] - g["FIRST"])
-        per[tl] = {"z_first": z_first, "z_top": z_first + spiral_dz(g, g["SPIRAL"]),
-                   "prime_xy": pt(a["R"] + g["PRIME_MM"]), "print_xy": pt(a["R"]),
+        r0 = a["R"] + (g["S"] if (g["MODE"] == "merge" and tl != min(g["arms"])) else 0.0)
+        per[tl] = {"z_first": z_first, "z_top": z_first + spiral(g, g["SPIRAL"])[0], "pt": pt,
+                   "prime_xy": pt(r0 + g["PRIME_MM"]), "print_xy": pt(r0),
                    "prime_z": a["Z0"] + g["PRIME_Z"], "prime_speed": prime_dist / g["PRIME_S"],
                    "flow": a["E"] * fil_area * a["FLOW_K"]}
     return {"fil_area": fil_area, "flow": flow, "v_surface": v_surface, "omega": omega,
@@ -273,7 +343,7 @@ def plan(g):
 
 def show(g, k):
     names = " + ".join(f"{a['side']} ({a['nozzle']:g} mm)" for a in g["arms"].values())
-    mode = {"layered": "layered", "side": "side by side"}[g["MODE"]] if g["N"] == 2 else "one arm"
+    mode = {"layered": "layered", "side": "side by side", "merge": "side by side, then merging into layered"}[g["MODE"]] if g["N"] == 2 else "one arm"
     print(f"\nCylinder test: {names}, {mode}")
     print(f"  Bed {k['omega']:.3f} rad/s ({math.degrees(k['omega']):.1f} deg/s), {k['rev_s']:.1f} s per rev, "
           f"{k['v_surface']:.1f} mm/s at R {g['R']:g}   [ceiling {g['MAX_VB']:.3f}]")
@@ -282,16 +352,29 @@ def show(g, k):
         kk = f" x FLOW_K {a['FLOW_K']:g}" if a["FLOW_K"] != 1 else ""
         print(f"  {a['side']:5}: E {a['E']:.2f} mm/s{kk} -> {q['flow']:.1f} mm3/s, bead {a['W']:g} x {g['L_H']:g} mm;"
               f"  Z0 {a['Z0']:.2f}, first {q['z_first']:.2f}, top {q['z_top']:.2f};"
-              f"  R {a['R']:g} at X {q['print_xy'][0]:.1f} Y {q['print_xy'][1]:.1f}")
+              f"  R {a['R'] + (g['S'] if g['MODE'] == 'merge' and tl == max(g['arms']) else 0):g}"
+              + (f" -> {a['R']:g}" if g["MODE"] == "merge" and tl == max(g["arms"]) else "")
+              + f" at X {q['print_xy'][0]:.1f} Y {q['print_xy'][1]:.1f}")
     print(f"  1. Prime: {g['PRIME_MM']:g} mm move-in over {g['PRIME_S']:g} s from {g['PRIME_Z']:g} mm above Z0; "
           f"bed {k['omega'] / 2:.3f} rad/s, extruders at half E")
-    print(f"  2. Circle: {k['circle']:g} rev flat at the first layer"
-          + (" (each arm half the circle)" if g["NL"] == 2 else
-             " (each arm its own full ring, side by side)" if g["N"] == 2 else ""))
+    print(f"  2. Circle: {g['C0']:g} rev flat at the first layer"
+          + (" (each arm its own full ring, side by side)" if g["MODE"] in ("side", "merge") else
+             " (each arm half the circle)" if g["NL"] == 2 else ""))
+    if g["MODE"] == "merge":
+        sb, m = g["SIDE_REVS"], g["MERGE_REVS"]
+        h_sb, h_m = spiral(g, sb)[0], spiral(g, sb + m)[0]
+        print(f"  3a. Side by side: {sb:g} rev at {g['L_H']:g} mm/rev, left ring {g['S']:g} mm outside"
+              f"  (to {h_sb:.2f} mm)")
+        print(f"  3b. Merge: {m:g} rev, left ring slides in to the right's, rise grows to {g['P']:g} mm/rev"
+              f"  (to {h_m:.2f} mm)")
     ramp = (f", easing in over {g['RAMP_STEPS'] * g['RAMP_EVERY']:g} rev ({g['P'] / g['RAMP_STEPS']:.2f} mm/rev "
             f"more every {g['RAMP_EVERY']:g} rev)" if g["RAMP_STEPS"] > 1 else "")
-    print(f"  3/4. Spiral: {g['SPIRAL']:g} rev from rev {k['circle']:g}, rising {g['P']:g} mm/rev{ramp}")
-    print(f"  5. Final circle: {k['circle']:g} rev flat at the top")
+    if g["MODE"] == "merge":
+        rest = g["SPIRAL"] - g["SIDE_REVS"] - g["MERGE_REVS"]
+        print(f"  3c/4. Layered spiral: {rest:g} rev at {g['P']:g} mm/rev")
+    else:
+        print(f"  3/4. Spiral: {g['SPIRAL']:g} rev from rev {g['C0']:g}, rising {g['P']:g} mm/rev{ramp}")
+    print(f"  5. Final circle: {g['C1']:g} rev flat at the top")
     if g["WAVE"]:
         how = (f"{g['WAVES_PER_REV']:g} waves per rev, locked to the bed" if "WAVES_PER_REV" in g
                else f"period {g['WAVE_T']:g} s ({k['rev_s'] / g['WAVE_T']:.1f} waves per rev)")
@@ -407,37 +490,42 @@ def run(g, k, cell):
         rate[tl] = a["E"]
         cell.gcode(f"EXTRUDE_ON T={tl} RATE={rate[tl]:.3f} TIMEOUT={WATCHDOG_S}")
     a0 = cell.tt.get_angle()
-    c = k["circle"]
+    c = g["C0"]
     print(f"2. Circle: {c:g} rev, bed {k['omega']:.3f} rad/s, extruders at E, start angle {a0:.1f} deg")
     live = {"rev": 0.0, "z": {tl: per[tl]["z_first"] for tl in arms},
-            "xy": {tl: per[tl]["print_xy"] for tl in arms}, "dev": {tl: [] for tl in arms}}
+            "xy": {tl: per[tl]["print_xy"] for tl in arms}, "dev": {tl: [] for tl in arms},
+            "efac": {tl: 1.0 for tl in arms}}
     os.makedirs(os.path.join(ROOT, "runs"), exist_ok=True)
     log_path = os.path.join(ROOT, "runs", time.strftime("cylinder_test_%Y%m%d_%H%M%S.csv"))
     threading.Thread(target=throttle, args=(g, cell, live, log_path), daemon=True).start()
     print(f"   logging to {log_path}")
     n_sp, phase = g["SPIRAL"], "circle"
     last_z = dict(live["z"])
+    last_xy = dict(live["xy"])
+    left = max(arms) if len(arms) == 2 else None
     while True:
         rev = (cell.tt.get_angle() - a0) / 360.0
         live["rev"] = rev
         if rev >= k["total_revs"]:
             break
-        if rev < c:
-            dz, ph = 0.0, "circle"
-        elif rev < c + n_sp:
-            dz, ph = spiral_dz(g, rev - c), "spiral"
-        else:
-            dz, ph = spiral_dz(g, n_sp), "final circle"
+        ph, dz, off = where(g, rev)
         if ph != phase:
-            print({"spiral": f"3. Spiral: {n_sp:g} rev at P {g['P']:g} mm/rev",
-                   "final circle": f"5. Final circle: {c:g} rev at the top"}[ph] + f"  (rev {rev:.2f})")
+            print({"side": f"3a. Side by side: {g['SIDE_REVS']:g} rev",
+                   "merge": f"3b. Merge: left ring sliding in over {g['MERGE_REVS']:g} rev",
+                   "spiral": f"3. Spiral at P {g['P']:g} mm/rev",
+                   "final circle": f"5. Final circle: {g['C1']:g} rev at the top"}[ph] + f"  (rev {rev:.2f})")
             phase = ph
         for tl in arms:
             z = per[tl]["z_first"] + dz
-            if abs(z - last_z[tl]) >= 0.02:
-                cell.move(tl, *per[tl]["print_xy"], guard(tl, z), speed=10, wait=False)
-                last_z[tl] = z
-                live["z"][tl] = z
+            xy = per[tl]["print_xy"]
+            if g["MODE"] == "merge" and tl == left:
+                r = arms[tl]["R"] + off
+                xy = per[tl]["pt"](r)
+                live["efac"][tl] = r / arms[tl]["R"]          # longer ring: a little more filament
+            if abs(z - last_z[tl]) >= 0.02 or math.dist(xy, last_xy[tl]) >= 0.02:
+                cell.move(tl, *xy, guard(tl, z), speed=10, wait=False)
+                last_z[tl], last_xy[tl] = z, xy
+                live["z"][tl], live["xy"][tl] = z, xy
         time.sleep(0.05)
 
     # 6-8
@@ -449,7 +537,7 @@ def run(g, k, cell):
     report_deviation(g, live)
     print("7. Move away")
     for tl in arms:
-        cell.move(tl, *per[tl]["print_xy"], guard(tl, last_z[tl] + 10), speed=20, wait=True)
+        cell.move(tl, *last_xy[tl], guard(tl, last_z[tl] + 10), speed=20, wait=True)
     for tl in arms:
         cell.move(tl, *PARK, speed=v, wait=True)
     cell.tt.stop_rotation()
@@ -474,13 +562,14 @@ def throttle(g, cell, live, log_path):
                 ph = (2 * math.pi * g["WAVES_PER_REV"] * live["rev"] if "WAVES_PER_REV" in g
                       else 2 * math.pi * now / g["WAVE_T"])
                 scale = 1 + amp * SHAPES[g["SHAPE"]](ph)
-                for tl in arms:
-                    try:
-                        cell.gcode(f"EXTRUDE_SCALE T={tl} PERCENT={100 * scale:.1f}")
-                    except Exception as ex:
-                        print(f"  throttle command failed: {ex}")
             else:
                 scale = 1.0
+            if amp or g["MODE"] == "merge":
+                for tl in arms:
+                    try:
+                        cell.gcode(f"EXTRUDE_SCALE T={tl} PERCENT={100 * scale * live['efac'][tl]:.1f}")
+                    except Exception as ex:
+                        print(f"  throttle command failed: {ex}")
             cols = []
             for t in arms:
                 try:
@@ -492,9 +581,9 @@ def throttle(g, cell, live, log_path):
                     dxy = math.dist(p[:2], live["xy"][t])
                     live["dev"][t].append((live["rev"], dz, dxy))
                     cols.append(f"{live['z'][t]:.3f},{p[0]:.3f},{p[1]:.3f},{p[2]:.3f},{dz:.3f},{dxy:.3f},"
-                                f"{arms[t]['E'] * scale:.3f}")
+                                f"{arms[t]['E'] * scale * live['efac'][t]:.3f}")
                 else:
-                    cols.append(f"{live['z'][t]:.3f},,,,,,{arms[t]['E'] * scale:.3f}")
+                    cols.append(f"{live['z'][t]:.3f},,,,,,{arms[t]['E'] * scale * live['efac'][t]:.3f}")
             if tick % 10 == 0:                         # hot-end temperature once a second
                 for t in arms:
                     try:
