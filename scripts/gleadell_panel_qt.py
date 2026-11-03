@@ -7,8 +7,6 @@
 A start-up window opens straight away and shows each part as it loads; missing
 optional parts are listed there, and an error that stops the panel opening is
 shown there instead of the program just closing.
-
-The old Tk panel (gleadell_panel.py) is untouched and still works.
 """
 import logging
 import os

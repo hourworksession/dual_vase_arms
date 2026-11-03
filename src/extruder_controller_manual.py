@@ -42,7 +42,7 @@ class ManualExtruderController:
 
     def set_temperature(self, tool: int, temp: float, wait: bool = False) -> None:
         """Set target temperature. tool=0 → right_hotend, tool=1 → left_hotend
-        (EXTRUDE_TEMP macro in config/klipper/extrude_control.cfg)."""
+        (EXTRUDE_TEMP macro in Klipper Configurations/extrude_control.cfg)."""
         if tool not in (0, 1):
             raise ValueError(f"Invalid tool index: {tool}")
         self.send_gcode(f"EXTRUDE_TEMP T={tool} TARGET={temp} WAIT={1 if wait else 0}",

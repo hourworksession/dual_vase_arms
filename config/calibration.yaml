@@ -19,7 +19,7 @@
 #                                 180 -> arm +X points along world -X
 #
 # The values below are the measured anchors currently hard-coded in
-# scripts/control_panel.py (_run_demo): TT_CX/TT_CY and the first-layer Z.
+# (old Tk panel, removed 3 Nov 2026): TT_CX/TT_CY and the first-layer Z.
 # They are the *authoritative* geometry -- the idealised +-700 mm base
 # positions in system.yaml are nominal and are intentionally NOT used here.
 #

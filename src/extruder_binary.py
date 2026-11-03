@@ -1,7 +1,7 @@
 """Binary extruder control: on at a fixed rate, or off.
 
 Thin wrapper over the EXTRUDE_ON / EXTRUDE_OFF macros in
-config/klipper/extrude_control.cfg. All state lives in Klipper; this class
+'Klipper Configurations/extrude_control.cfg'. All state lives in Klipper; this class
 only sends commands and re-sends the keepalive. Use this as the failsafe
 mode when the streamed controller is not trusted.
 

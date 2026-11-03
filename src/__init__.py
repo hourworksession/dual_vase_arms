@@ -1,1 +1,1 @@
-# dual_arm_printer source package
+# cell control: arm, turntable and extruder controllers, and the rehearsal test bed

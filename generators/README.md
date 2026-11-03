@@ -28,8 +28,7 @@ add a folder that lives elsewhere (e.g. a cloned repo) with **Add folder…**.
    steps (no browser window opens). Top-level numbers such as `RADIUS = 25` or
    `layers = 40` become editable parameters automatically.
 
-3. **`build_steps()`** returning `(steps, settings)`. This is the older convention in
-   `src/dual_arm_printer/slicing/fullcontrol_runner.py`.
+3. **`build_steps()`** returning `(steps, settings)` (an older convention, still accepted).
 
 4. **A `.gcode` file** from any slicer or script. Line widths are worked out from
    the E values.
