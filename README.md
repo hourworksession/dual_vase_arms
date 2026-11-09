@@ -12,8 +12,11 @@ Working branch: `lab-merged`. Run everything from the repo root.
       hardware/          arm.py, turntable.py, extruder.py (Klipper macros), extruder_binary.py, extruder_legacy.py
       config.py          load_config() for config/settings.yaml
       runs/              the printing tests: cylinder.py, square_indexing.py, square_polar.py
+      program.py         speed-and-time programs: tracks of (speed, seconds) per device, a Player and a simulator
+      shapes.py          outlines compiled into programs (cylinder, rounded square, rounded polygon) and manual actions
     src/rehearsal/       the LLM rehearsal test bed (docs/rehearsal_testbed.md)
     notebooks/           the same processes laid out part by part: 00 cell control, 01 rounded square, 02 column and ironing
+    ui/web/              the browser panel: python3 ui/web/server.py --sim  then open http://localhost:8000
     ui/cell_studio/      the Qt studio (simulators, 3D view, generators);  ui/panels/  gleadell_panel_qt.py, extruder_test_panel.py
     tools/               extrude.py (terminal extruder control), cali_jog.py (centre and Z0 jog)
     scripts/             toolpath libraries used by Cell Studio: slicer, planner, rules, features, spiralfit;  cellcam/

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cell panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#0f1115;--panel:#161920;--panel2:#1d2129;--line:#262b35;--text:#e8eaf0;--muted:#8b93a7;--accent:#4cc9f0;--warm:#f4a261;--good:#57cc99;--bad:#ef476f;--right:#4cc9f0;--left:#f4a261;--bed:#c77dff;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:"IBM Plex Sans",system-ui,sans-serif;font-size:14px}
+  header{display:flex;align-items:center;gap:18px;padding:12px 20px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{font-size:16px;font-weight:600;margin:0;letter-spacing:.3px}
+  .pill{padding:3px 10px;border-radius:999px;font-size:12px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+  .pill.on{color:var(--good);border-color:var(--good)}
+  .stop{margin-left:auto;background:var(--bad);color:#fff;border:0;border-radius:10px;padding:12px 26px;font-weight:600;font-size:15px;cursor:pointer;letter-spacing:.5px}
+  .stop:hover{filter:brightness(1.1)}
+  main{display:grid;grid-template-columns:360px 1fr;gap:14px;padding:14px 20px;min-height:calc(100vh - 57px)}
+  .col{display:flex;flex-direction:column;gap:14px;min-width:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+  .card h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin:0 0 10px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+  label{color:var(--muted);font-size:12px}
+  input[type=number],select{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:7px 9px;width:84px;font-family:"IBM Plex Mono",monospace;font-size:13px}
+  input[type=number]:focus,select:focus{outline:1px solid var(--accent)}
+  select{width:auto}
+  button{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 12px;cursor:pointer;font-family:inherit;font-size:13px}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);color:#07202a;border-color:var(--accent);font-weight:600}
+  button.warm{border-color:var(--warm);color:var(--warm)}
+  button:disabled{opacity:.4;cursor:default}
+  .mono{font-family:"IBM Plex Mono",monospace}
+  .arm{border-left:3px solid var(--right);padding-left:10px;margin-bottom:12px}
+  .arm.left{border-color:var(--left)}
+  .arm .name{font-weight:600;display:flex;gap:10px;align-items:baseline}
+  .arm .name small{color:var(--muted);font-weight:400}
+  .pad{display:grid;grid-template-columns:repeat(3,44px) 16px repeat(1,44px);grid-auto-rows:44px;gap:5px;margin-top:8px}
+  .pad button{padding:0;font-size:15px}
+  .pad .z{grid-column:5}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:13px}
+  .kv span:nth-child(odd){color:var(--muted)}
+  .tabs{display:flex;gap:4px;margin-bottom:10px}
+  .tabs button.on{background:var(--accent);color:#07202a;border-color:var(--accent);font-weight:600}
+  #view{width:100%;height:420px;border-radius:10px;background:#0a0c10;display:block}
+  #timeline{width:100%;height:150px;display:block;border-radius:10px;background:#0a0c10}
+  .progress{height:8px;background:var(--panel2);border-radius:4px;overflow:hidden;margin:8px 0}
+  .progress div{height:100%;background:var(--good);transition:width .4s linear}
+  .log{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--muted);max-height:160px;overflow:auto;white-space:pre-wrap;line-height:1.5}
+  .legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:6px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
+  .err{color:var(--bad);font-size:12px}
+  @media (max-width:1000px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Cell panel</h1>
+    <span class="pill" :class="{on: connected}">{{ connected ? (state.sim ? 'simulators' : 'cell') : 'no link' }}</span>
+    <span class="pill mono">bed {{ fmt(state.bed && state.bed.deg, 1) }}°</span>
+    <span class="pill mono" v-for="(a, t) in state.arms" :key="t">{{ a.side }} {{ a.pose ? a.pose.map(v => v.toFixed(1)).join(' ') : '—' }}<template v-if="a.temp !== null && a.temp !== undefined"> · {{ a.temp }} °C</template></span>
+    <span class="pill" v-if="prog && prog.running" style="color:var(--good);border-color:var(--good)">running {{ prog.t }} / {{ prog.total }} s</span>
+    <button class="stop" @click="stopAll">STOP</button>
+  </header>
+
+  <main>
+    <!-- ================= left: manual ================= -->
+    <div class="col">
+      <div class="card">
+        <h2>Arms · coordinates</h2>
+        <div class="arm" v-for="(a, t) in state.arms" :key="t" :class="{left: t == 1}">
+          <div class="name">{{ a.side }} <small>{{ a.nozzle }} mm nozzle · Z0 {{ a.z0 }}</small></div>
+          <div class="row">
+            <label>step</label><input type="number" v-model.number="jog.step" step="0.5" min="0.1">
+            <label>mm</label>
+            <label>speed</label><input type="number" v-model.number="jog.speed" step="5" min="1">
+            <label>mm/s</label>
+            <button @click="park(t)">park</button>
+          </div>
+          <div class="pad">
+            <span></span><button @click="jogArm(t, 0, 1, 0)">+Y</button><span></span><span></span><button class="z" @click="jogArm(t, 0, 0, 1)">+Z</button>
+            <button @click="jogArm(t, -1, 0, 0)">−X</button><span></span><button @click="jogArm(t, 1, 0, 0)">+X</button><span></span><button class="z" @click="jogArm(t, 0, 0, -1)">−Z</button>
+            <span></span><button @click="jogArm(t, 0, -1, 0)">−Y</button><span></span><span></span><span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Bed · speed and time</h2>
+        <div class="row">
+          <input type="number" v-model.number="bed.speed" step="1"> <label>deg/s for</label>
+          <input type="number" v-model.number="bed.seconds" step="1" min="0"> <label>s</label>
+          <button class="primary" @click="bedRun">run</button>
+          <button @click="post('/api/bed/stop')">stop</button>
+        </div>
+        <div class="row"><label>0 s runs until stopped · {{ (bed.speed * bed.seconds).toFixed(0) }}° in total · positive turns clockwise from above</label></div>
+      </div>
+
+      <div class="card">
+        <h2>Extruders · speed and time</h2>
+        <div class="arm" v-for="(a, t) in state.arms" :key="'e'+t" :class="{left: t == 1}">
+          <div class="name">{{ a.side }} <small>{{ a.temp !== null && a.temp !== undefined ? a.temp + ' °C' : '' }}</small></div>
+          <div class="row">
+            <input type="number" v-model.number="ext[t].temp" step="5"> <label>°C</label>
+            <button class="warm" @click="post('/api/extruder/'+t+'/heat', {temp: ext[t].temp})">heat</button>
+            <button @click="post('/api/extruder/'+t+'/heat', {temp: 0})">off</button>
+          </div>
+          <div class="row">
+            <input type="number" v-model.number="ext[t].rate" step="0.5" min="0"> <label>mm/s for</label>
+            <input type="number" v-model.number="ext[t].seconds" step="1" min="0.1"> <label>s</label>
+            <button class="primary" @click="post('/api/extruder/'+t, {rate: ext[t].rate, seconds: ext[t].seconds})">extrude</button>
+            <button @click="post('/api/extruder/'+t+'/off')">stop</button>
+          </div>
+          <div class="row"><label>{{ (ext[t].rate * ext[t].seconds).toFixed(1) }} mm of filament</label></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Log</h2>
+        <div class="log">{{ (state.log || []).slice().reverse().join('\n') }}</div>
+      </div>
+    </div>
+
+    <!-- ================= right: shapes ================= -->
+    <div class="col">
+      <div class="card">
+        <h2>Shape → program</h2>
+        <div class="tabs">
+          <button v-for="k in kinds" :key="k.id" :class="{on: shape.kind === k.id}" @click="shape.kind = k.id; compile()">{{ k.label }}</button>
+          <span style="flex:1"></span>
+          <label>arms</label>
+          <button :class="{on: hasArm(0)}" @click="toggleArm(0)">right</button>
+          <button :class="{on: hasArm(1)}" @click="toggleArm(1)">left</button>
+        </div>
+        <div class="grid2">
+          <div class="row" v-if="shape.kind === 'cylinder'"><label>radius</label><input type="number" v-model.number="shape.R" @change="compile"><label>mm</label></div>
+          <div class="row" v-else><label>side</label><input type="number" v-model.number="shape.side" @change="compile"><label>mm</label></div>
+          <div class="row" v-if="shape.kind !== 'cylinder'"><label>fillet</label><input type="number" v-model.number="shape.rf" @change="compile"><label>mm</label></div>
+          <div class="row" v-if="shape.kind === 'rounded_polygon'"><label>sides</label><input type="number" v-model.number="shape.n" min="3" step="1" @change="compile"></div>
+          <div class="row"><label>bead speed</label><input type="number" v-model.number="shape.V" step="1" @change="compile"><label>mm/s</label></div>
+          <div class="row"><label>width × height</label><input type="number" v-model.number="shape.W" step="0.1" @change="compile"><input type="number" v-model.number="shape.L_H" step="0.1" @change="compile"><label>mm</label></div>
+          <div class="row"><label>flow K</label><input type="number" v-model.number="shape.flow_k" step="0.05" @change="compile"></div>
+          <div class="row"><label>loops</label><input type="number" v-model.number="shape.flat_first" step="0.5" min="0" @change="compile" title="flat loops first"><label>flat +</label><input type="number" v-model.number="shape.loops" step="1" min="0" @change="compile" title="spiral loops"><label>spiral +</label><input type="number" v-model.number="shape.flat_last" step="0.5" min="0" @change="compile" title="flat loops last"><label>flat</label></div>
+          <div class="row"><label>pitch</label><input type="number" v-model.number="shape.pitch" step="0.1" placeholder="auto" @change="compile"><label>mm/loop (blank = arms × height)</label></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button @click="compile">preview</button>
+          <button class="primary" :disabled="!preview || (prog && prog.running)" @click="runProgram">run on the cell</button>
+          <span class="mono" v-if="preview" style="color:var(--muted)">{{ preview.total }} s · {{ segCount }} segments</span>
+          <span class="err" v-if="error">{{ error }}</span>
+        </div>
+        <div class="progress" v-if="prog && prog.total"><div :style="{width: (100 * prog.t / prog.total) + '%'}"></div></div>
+      </div>
+
+      <div class="card">
+        <h2>Preview · disc, toolpath, nozzles</h2>
+        <canvas id="view"></canvas>
+        <div class="legend"><span><i style="background:var(--right)"></i>right</span><span><i style="background:var(--left)"></i>left</span><span><i style="background:var(--bed)"></i>bed frame path</span><span>drag to orbit · wheel to zoom</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Timeline · speed over time, one lane per track</h2>
+        <canvas id="timeline"></canvas>
+        <div class="legend"><span><i style="background:var(--bed)"></i>bed deg/s</span><span><i style="background:var(--right)"></i>right extruder mm/s</span><span><i style="background:var(--left)"></i>left extruder mm/s</span><span>arm lanes: Z height</span></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script type="importmap">
+{"imports": {"three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+<script src="https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js"></script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const { createApp, reactive, computed, onMounted } = Vue;
+const COLORS = { right: 0x4cc9f0, left: 0xf4a261, bed: 0xc77dff };
+
+createApp({
+  setup() {
+    const state = reactive({ arms: {}, bed: {}, log: [], sim: true });
+    const connected = Vue.ref(false);
+    const prog = Vue.ref(null);
+    const preview = Vue.ref(null);
+    const error = Vue.ref('');
+    const jog = reactive({ step: 1, speed: 20 });
+    const bed = reactive({ speed: 20, seconds: 5 });
+    const ext = reactive({ 0: { temp: 215, rate: 3, seconds: 5 }, 1: { temp: 215, rate: 3, seconds: 5 } });
+    const kinds = [{ id: 'cylinder', label: 'cylinder' }, { id: 'rounded_square', label: 'rounded square' }, { id: 'rounded_polygon', label: 'rounded polygon' }];
+    const shape = reactive({ kind: 'rounded_square', arms: [0], R: 60, side: 80, rf: 10, n: 6, V: 8, W: 1.0, L_H: 0.6, flow_k: 1.3, loops: 3, flat_first: 1, flat_last: 1, pitch: null, prime_s: 5, step_deg: 2 });
+    const segCount = computed(() => preview.value ? Object.values(preview.value.program.tracks).reduce((n, t) => n + t.length, 0) : 0);
+
+    async function api(path, body, method) {
+      const r = await fetch(path, { method: method || (body === undefined ? 'GET' : 'POST'), headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
+      return r.json();
+    }
+    async function post(path, body) { error.value = ''; try { return await api(path, body || {}); } catch (e) { error.value = e.message; } }
+    const hasArm = t => shape.arms.includes(t);
+    function toggleArm(t) { shape.arms = hasArm(t) ? shape.arms.filter(a => a !== t) : [...shape.arms, t].sort(); if (!shape.arms.length) shape.arms = [t]; compile(); }
+    const jogArm = (t, x, y, z) => post(`/api/arm/${t}/jog`, { dx: x * jog.step, dy: y * jog.step, dz: z * jog.step, speed: jog.speed });
+    const park = t => post(`/api/arm/${t}/park`);
+    const bedRun = () => post('/api/bed', { deg_per_s: bed.speed, seconds: bed.seconds });
+    const stopAll = () => post('/api/stop');
+    async function compile() {
+      error.value = '';
+      try { preview.value = await api('/api/program/compile', { ...shape, pitch: shape.pitch || null }); draw(); }
+      catch (e) { error.value = e.message; if (!connected.value) { preview.value = mockPreview(); draw(); } }
+    }
+    const runProgram = () => preview.value && post('/api/program/run', { program: preview.value.program });
+    const fmt = (v, d) => (v === null || v === undefined) ? '—' : Number(v).toFixed(d);
+
+    async function poll() {
+      try { Object.assign(state, await api('/api/state')); connected.value = true; prog.value = state.program; }
+      catch (e) { connected.value = false; if (!Object.keys(state.arms).length) Object.assign(state, mockState()); }
+      drawNozzles();
+    }
+
+    // ---------- three.js
+    let renderer, scene, camera, controls, pathGroup, nozzles = {};
+    function initView() {
+      const canvas = document.getElementById('view');
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      scene = new THREE.Scene(); scene.background = new THREE.Color(0x0a0c10);
+      camera = new THREE.PerspectiveCamera(40, 2, 1, 5000); camera.position.set(220, -260, 220); camera.up.set(0, 0, 1);
+      controls = new OrbitControls(camera, canvas); controls.target.set(0, 0, 20);
+      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+      const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(200, -300, 400); scene.add(sun);
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(150, 150, 6, 96), new THREE.MeshStandardMaterial({ color: 0x1d2129, metalness: 0.2, roughness: 0.8 }));
+      disc.rotation.x = Math.PI / 2; disc.position.z = -3; scene.add(disc);
+      const grid = new THREE.PolarGridHelper(150, 8, 6, 64, 0x2a3140, 0x222835); grid.rotation.x = Math.PI / 2; grid.position.z = 0.1; scene.add(grid);
+      pathGroup = new THREE.Group(); scene.add(pathGroup);
+      for (const [t, c] of [[0, COLORS.right], [1, COLORS.left]]) {
+        const cone = new THREE.Mesh(new THREE.ConeGeometry(4, 14, 24), new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.25 }));
+        cone.rotation.x = Math.PI / 2; cone.visible = false; nozzles[t] = cone; scene.add(cone);
+      }
+      const resize = () => { const w = canvas.clientWidth, h = canvas.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); };
+      new ResizeObserver(resize).observe(canvas); resize();
+      (function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
+    }
+    function draw() {
+      if (!pathGroup || !preview.value) return;
+      pathGroup.clear();
+      for (const [t, arm] of Object.entries(preview.value.arms)) {
+        const pts = arm.bed_frame.map(p => new THREE.Vector3(p[0], p[1], p[2] - zBase(t)));
+        pathGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: t == 0 ? COLORS.right : COLORS.left })));
+      }
+      drawTimeline();
+    }
+    function zBase(t) { const a = state.arms[t]; return a ? a.z0 : 0; }       // show heights above the disc
+    function drawNozzles() {
+      for (const [t, cone] of Object.entries(nozzles)) {
+        const a = state.arms[t]; if (!a || !a.pose) { cone.visible = false; continue; }
+        // nozzle in the disc frame: along the arm's print direction at its current radius; height above its Z0
+        const ang = (a.angle || 0) * Math.PI / 180;
+        const r = Math.hypot(a.pose[0] - a.cx, a.pose[1] - a.cy);
+        const dir = t == 0 ? 0 : Math.PI;                          // the two arms face each other across the disc
+        cone.position.set(r * Math.cos(dir), r * Math.sin(dir), (a.pose[2] - a.z0) + 7);
+        cone.visible = true;
+      }
+    }
+    // ---------- timeline canvas
+    function drawTimeline() {
+      const c = document.getElementById('timeline'); const ctx = c.getContext('2d');
+      const W = c.width = c.clientWidth * devicePixelRatio, H = c.height = c.clientHeight * devicePixelRatio;
+      ctx.clearRect(0, 0, W, H); if (!preview.value) return;
+      const tracks = preview.value.program.tracks, total = preview.value.total;
+      const names = ['bed', 'ext0', 'ext1', 'arm0', 'arm1'].filter(k => tracks[k]);
+      const lane = H / names.length, pad = 6 * devicePixelRatio, left = 54 * devicePixelRatio;
+      const col = { bed: '#c77dff', ext0: '#4cc9f0', ext1: '#f4a261', arm0: '#4cc9f0', arm1: '#f4a261' };
+      ctx.font = `${11 * devicePixelRatio}px IBM Plex Mono`;
+      names.forEach((k, i) => {
+        const y0 = i * lane + pad, h = lane - 2 * pad;
+        const vals = tracks[k].map(s => Array.isArray(s.value) ? s.value[2] : s.value);
+        const vmin = Math.min(...vals), vmax = Math.max(...vals), span = (vmax - vmin) || 1;
+        ctx.fillStyle = '#8b93a7'; ctx.fillText(k === 'arm0' ? 'right Z' : k === 'arm1' ? 'left Z' : k === 'ext0' ? 'right ext' : k === 'ext1' ? 'left ext' : 'bed', 4 * devicePixelRatio, y0 + h / 2 + 4 * devicePixelRatio);
+        let t = 0; ctx.fillStyle = col[k]; ctx.globalAlpha = 0.85;
+        tracks[k].forEach((s, j) => {
+          const x = left + (W - left) * t / total, w = Math.max(1, (W - left) * s.dur / total);
+          const v = vals[j], hh = Math.max(2, h * (k.startsWith('arm') ? (v - vmin) / span : v / (vmax || 1)));
+          ctx.fillRect(x, y0 + h - hh, w, hh); t += s.dur;
+        });
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = '#8b93a7'; ctx.fillText(vmax.toFixed(1), W - 44 * devicePixelRatio, y0 + 10 * devicePixelRatio);
+      });
+      if (prog.value && prog.value.running) { const x = left + (W - left) * prog.value.t / total; ctx.fillStyle = '#57cc99'; ctx.fillRect(x, 0, 2 * devicePixelRatio, H); }
+    }
+    // ---------- mock data so the page shows itself without a server (and in the shared preview)
+    function mockState() {
+      return { sim: true, bed: { deg: 0 }, log: ['no server reached: showing a mock. Start ui/web/server.py --sim'],
+        arms: { 0: { side: 'right', nozzle: 1, z0: 105.8, angle: 135, cx: 510, cy: -19, pose: [481.7, 9.4, 115.8], temp: null },
+                1: { side: 'left', nozzle: 1, z0: 109.8, angle: 135, cx: 505, cy: -1.7, pose: [476.7, 26.6, 119.8], temp: null } } };
+    }
+    function mockPreview() {
+      const S = shape.kind === 'cylinder' ? shape.R : shape.side / 2, rf = shape.rf, d = S - rf, pts = [];
+      const r = th => { if (shape.kind === 'cylinder') return S; let u = th % 90; if (u > 45) u = 90 - u; u *= Math.PI / 180; const u1 = Math.atan2(d, S); if (u <= u1) return S / Math.cos(u); const F = d * Math.SQRT2, du = Math.PI / 4 - u; return F * Math.cos(du) + Math.sqrt(Math.max(rf * rf - (F * Math.sin(du)) ** 2, 0)); };
+      const loops = shape.flat_first + shape.loops + shape.flat_last;
+      for (let i = 0; i <= loops * 180; i++) { const th = i * 2, z = 0.6 + (shape.pitch || shape.L_H) * Math.max(0, Math.min(shape.loops, th / 360 - shape.flat_first)); pts.push([r(th) * Math.cos(th * Math.PI / 180), r(th) * Math.sin(th * Math.PI / 180), z + 105.8]); }
+      const segs = (v, n) => Array.from({ length: n }, () => ({ value: v, dur: 1 }));
+      return { total: 60, program: { tracks: { bed: Array.from({ length: 60 }, (_, i) => ({ value: 8 + 4 * Math.sin(i / 2), dur: 1 })), ext0: segs(1.5, 60), arm0: pts.filter((_, i) => i % 6 === 0).map(p => ({ value: p, dur: 1 })) } }, arms: { 0: { bed_frame: pts } } };
+    }
+
+    onMounted(() => { initView(); poll(); setInterval(poll, 500); compile(); setInterval(() => drawTimeline(), 1000); });
+    return { state, connected, prog, preview, error, jog, bed, ext, kinds, shape, segCount, post, hasArm, toggleArm, jogArm, park, bedRun, stopAll, compile, runProgram, fmt };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

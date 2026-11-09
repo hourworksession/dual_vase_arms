@@ -12,3 +12,5 @@ openpyxl>=3.1    # rehearsal batch workbook
 PySide6>=6.6     # cell studio and the extruder test panel
 pillow>=10       # experiments/voron0 labels
 # automation1 (Aerotech) comes with the Automation1 software, not from pip
+fastapi>=0.110
+uvicorn>=0.29
