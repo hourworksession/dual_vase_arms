@@ -29,8 +29,10 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     RF      fillet (corner) radius, mm, bead centreline                      (default 10)
     L_H     bead height (layer height), mm                                   (default 0.5)
     E       filament speed, mm/s                  (required, unless E_MIN and E_MAX, or VB, are given)
-    VB      bed speed on the corners, rad/s, instead of E: E is worked out so the bead is laid at
-            that speed on a fillet of radius RF (E = VB x RF x W x L_H / (filament area x FLOW_K))
+    VB      bed speed on the corners, rad/s. Without E: E is worked out so the bead is laid at that
+            speed on a fillet of radius RF (E = VB x RF x W x L_H / (filament area x FLOW_K)).
+            With E: the bed runs at VB on the corners and the extruders are scaled by VB x RF / v
+            there so the bead stays W x L_H (v = the bead speed E gives)
     V_LINE  arm speed on the straights, mm/s. Default: the bead speed v that E gives (so E, bed and
             arm all agree). Set it higher (or lower) and the extruders are scaled by V_LINE / v on
             the straights so the bead stays W x L_H; the E to bed relationship then acts only on
@@ -135,9 +137,7 @@ def parse(argv):
         vals["E"] = (vals["E_MIN"] + vals["E_MAX"]) / 2
     vals.setdefault("L_H", 0.5)
     rf = vals.get("RF", SQUARE_COMMON["RF"])
-    if "VB" in vals:                                       # corner bed speed given: work out E from it
-        if "E" in vals or "E_MIN" in vals:
-            raise SystemExit("Give VB or E (or E_MIN/E_MAX), not both")
+    if "VB" in vals and "E" not in vals:                   # corner bed speed alone: work out E from it
         if "T" not in vals:
             raise SystemExit("VB needs T")
         lead = 0 if int(vals["T"]) in (0, 2) else 1
@@ -288,11 +288,15 @@ def plan(g):
     line_efac = v_line / v_surface                            # extruder scale on the straights
     omega_needed = v_surface / lead["R"]                      # cylinder relationship at R = fillet radius
     corner_arm_per_rad = max(a["D"] for a in g["arms"].values()) * math.sqrt(2)
-    omega = min(omega_needed, g["MAX_VB"], arm_speed / corner_arm_per_rad)
-    if omega < omega_needed - 1e-9:
+    omega_want = g["VB"] if "VB" in g else omega_needed       # VB with E: the bed speed you asked for
+    omega = min(omega_want, g["MAX_VB"], arm_speed / corner_arm_per_rad)
+    if omega < omega_want - 1e-9:
         why = "MAX_VB" if omega == g["MAX_VB"] else f"the arm's {arm_speed:.0f} mm/s ceiling on the corner move"
-        warn.append(f"Corners: bed capped at {omega:.3f} rad/s by {why}; the bead needs {omega_needed:.3f}. "
-                    f"Extruders are scaled to x {omega / omega_needed:.2f} on the corners to match.")
+        warn.append(f"Corners: bed capped at {omega:.3f} rad/s by {why} (asked {omega_want:.3f}).")
+    if abs(omega - omega_needed) > 1e-9:
+        warn.append(f"Corners: bed {omega:.3f} rad/s lays the bead at {omega * lead['R']:.1f} mm/s; E alone would "
+                    f"want {omega_needed:.3f}. Extruders are scaled to x {omega / omega_needed:.2f} on the corners "
+                    "so the bead stays W x L_H.")
     if abs(g["P"] - g["NL"] * g["L_H"]) > 1e-6:
         warn.append(f"P {g['P']:g} is not n x L_H = {g['NL'] * g['L_H']:g}: beads will be "
                     f"{g['P'] / g['NL']:.2f} mm tall but the flow is sized for {g['L_H']:g} mm.")
