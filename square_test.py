@@ -59,6 +59,14 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     STOP_LEAD  stop the bed this many degrees before the corner's 90 (its deceleration), deg (0);
             the arm finishes any part of the fillet the bed did not give, at V_LINE
     RATE_MIN  below this filament rate (mm/s) the tool is switched off rather than crawled (0.1)
+    RATE_HZ   how often the extruder rate may be re-sent to Klipper, per second (5). Extruder
+            commands run on their own thread, so the motion loop never waits on Moonraker.
+    BED_MOVE  1 (default): each corner is ONE 90 deg incremental move (the controller plans the
+            accel, cruise and decel and lands on 90 exactly). 0: free-run at VB and stop on the
+            measured angle, as before (the simulator only has this one).
+    BED_ACC   bed acceleration/deceleration to ask the Aerotech for, deg/s2 (0 = leave the axis as
+            configured). The spin-up from rest is the pause you see at each corner start: at
+            45 deg/s, 500 deg/s2 is 0.09 s, the default ramp may be ten times that.
 
 Flags: --dry-run (plan only), --sim (cell studio's simulators), --yes (no prompt),
        --cold (no extrusion, hot-end check skipped: arm and bed moves only).
@@ -97,10 +105,10 @@ from cylinder_test import (Abort, BASE_ARM_SPEED, COMMON, DEFAULTS, NOZZLE, PARK
                            SIDE, WATCHDOG_S, Cell, abort, ramp_loss, report_deviation, spiral_dz)
 
 SQUARE_COMMON = {**COMMON, "RF": 10.0, "BED_DIR": -1.0, "CORNER_LEAD_S": 0.15, "BLEND": 2.0, "STOP_LEAD": 0.0,
-                 "V_LINE": 8.0, "RATE_MIN": 0.1}
+                 "V_LINE": 8.0, "RATE_MIN": 0.1, "BED_ACC": 0.0, "BED_MOVE": 1.0, "RATE_HZ": 5.0}
 TICK = 0.05                      # main loop period, s
 SETTLE_S = 3.0                   # max wait for the bed to come to rest after a corner
-RATE_TOL = 0.03                  # re-send EXTRUDE_ON when the rate moves by more than this fraction
+RATE_TOL = 0.05                  # re-send EXTRUDE_ON when the rate moves by more than this fraction
 
 
 # ----------------------------------------------------------------------
@@ -117,7 +125,7 @@ def parse(argv):
     known = {"T", "SIDE", "RF", "L_H", "E", "P", "W", "FLOW_K", "Z0", "W_L", "FLOW_K_L", "Z0_L", "VB", "V_LINE",
              "MAX_VB", "MAX_VT", "FIRST", "SPIRAL", "LOOPS", "HEIGHT", "PRIME_MM", "PRIME_S", "PRIME_Z", "FIL",
              "MIN_TEMP", "ANGLE", "CX", "CY", "ANGLE_L", "CX_L", "CY_L", "DR", "DR_L", "RAMP_STEPS", "RAMP_EVERY",
-             "BED_DIR", "CORNER_LEAD_S", "BLEND", "STOP_LEAD", "RATE_MIN"}
+             "BED_DIR", "CORNER_LEAD_S", "BLEND", "STOP_LEAD", "RATE_MIN", "BED_ACC", "BED_MOVE", "RATE_HZ"}
     unknown = sorted(set(vals) - known)
     if unknown:
         hint = ""
@@ -287,6 +295,9 @@ def plan(g):
         rate_line = a["K"] * v_line                           # filament mm/s on the straights
         rate_corner = a["K"] * a["R"] * omega                 # ... on the corners at full bed speed
         peak = max(rate_line, rate_corner) * fil_area * a["FLOW_K"]
+        if rate_line < 0.5 or rate_corner < 0.5:
+            warn.append(f"{a['side']}: filament rate {min(rate_line, rate_corner):.2f} mm/s is very low; the extruder "
+                        "may not deliver evenly below about 0.5 mm/s. Raise V_LINE / VB or the bead.")
         if peak > 30:
             warn.append(f"{a['side']}: {peak:.0f} mm3/s is above what a Revo HF usually melts (about 30); "
                         "expect under-extrusion. Lower V_LINE (and VB).")
@@ -354,32 +365,42 @@ def run(g, k, cell, cold=False):
     v = k["arm_speed"]
     lead = arms[min(arms)]
     L = g["L"]
-    rate = {tl: 0.0 for tl in arms}        # filament mm/s currently commanded per tool
+    rate = {tl: 0.0 for tl in arms}        # filament mm/s wanted per tool (set by the motion loop)
     sent = {tl: None for tl in arms}       # what Klipper was last told (None = off)
-    rate_lock = threading.Lock()
+    sent_at = {tl: 0.0 for tl in arms}
 
     def gcode(s):
         if not cold:
             return cell.gcode(s)
 
-    def set_rate(tl, r, force=False):
-        """EXTRUDE_ON at r mm/s (or EXTRUDE_OFF below RATE_MIN), only when it changed by RATE_TOL."""
-        with rate_lock:
-            rate[tl] = r
-            if r < g["RATE_MIN"]:
-                if sent[tl] is not None or force:
-                    gcode(f"EXTRUDE_OFF T={tl}")
-                    sent[tl] = None
-                return
-            if force or sent[tl] is None or abs(r - sent[tl]) > RATE_TOL * sent[tl]:
-                gcode(f"EXTRUDE_ON T={tl} RATE={r:.3f} TIMEOUT={WATCHDOG_S}")
-                sent[tl] = r
+    def set_rate(tl, r):
+        """Ask for r mm/s of filament; the extruder thread sends it. Never blocks the motion loop."""
+        rate[tl] = r
 
-    def keepalive():                       # the watchdog wants EXTRUDE_ON at least every TIMEOUT/2
-        while not cell.stop_keep.wait(WATCHDOG_S / 2.5):
+    def extruder_thread():
+        """EXTRUDE_ON at the wanted rate (EXTRUDE_OFF below RATE_MIN) when it changes by RATE_TOL,
+        at most RATE_HZ times a second, and at least every WATCHDOG_S / 2.5 for the watchdog."""
+        period = 1.0 / g["RATE_HZ"]
+        while not cell.stop_keep.wait(period / 2):
+            now = time.monotonic()
             for tl in arms:
-                if sent[tl] is not None:
-                    set_rate(tl, rate[tl], force=True)
+                r = rate[tl]
+                if r < g["RATE_MIN"]:
+                    if sent[tl] is not None:
+                        try:
+                            gcode(f"EXTRUDE_OFF T={tl}")
+                        except Exception as ex:
+                            print(f"  extruder command failed: {ex}")
+                        sent[tl], sent_at[tl] = None, now
+                    continue
+                due = (sent[tl] is None or abs(r - sent[tl]) > RATE_TOL * sent[tl]) and now - sent_at[tl] >= period
+                due = due or (sent[tl] is not None and now - sent_at[tl] >= WATCHDOG_S / 2.5)
+                if due:
+                    try:
+                        gcode(f"EXTRUDE_ON T={tl} RATE={r:.3f} TIMEOUT={WATCHDOG_S}")
+                        sent[tl], sent_at[tl] = r, now
+                    except Exception as ex:
+                        print(f"  extruder command failed: {ex}")
 
     def guard(tl, z):
         if z < arms[tl]["Z0"] - 1e-6:
@@ -404,6 +425,9 @@ def run(g, k, cell, cold=False):
                             f"(python3 extrude.py heat {a['side']} 215 --wait).")
     gcode("EXTRUDE_OFF")
     cell.tt.stop_rotation()
+    incremental = bool(g["BED_MOVE"]) and hasattr(cell.tt, "rotate_relative")
+    if g["BED_ACC"] > 0:
+        set_bed_ramp(cell.tt, g["BED_ACC"])
     print("Approach: each arm to park, safe height, above its prime point, down to the prime start")
     for tl in arms:
         px, py = per[tl]["prime_xy"]
@@ -415,8 +439,8 @@ def run(g, k, cell, cold=False):
     # 1. Prime: bed still, half the straight-line rate, run in along the line of the first side
     print(f"1. Prime: bed still, extruders at half the straight-line rate, moving in over {g['PRIME_S']:g} s")
     for tl in arms:
-        set_rate(tl, per[tl]["rate_line"] / 2, force=True)
-    threading.Thread(target=keepalive, daemon=True).start()
+        set_rate(tl, per[tl]["rate_line"] / 2)
+    threading.Thread(target=extruder_thread, daemon=True).start()
     for tl in arms:
         move(tl, per[tl]["start"], per[tl]["z_first"], per[tl]["prime_speed"], wait=False)
     t_start = time.monotonic()
@@ -485,11 +509,15 @@ def run(g, k, cell, cold=False):
             b_end = 90.0 * min(1.0, (s_end - s) / arc)       # a partial corner if the print ends in it
             live["seg"] = f"corner {kq % 4}"
             t_begin = total                                   # where the bed is as this corner begins
-            cell.tt.rotate_velocity(omega_dps)
+            if incremental:                                   # one planned move: ramps and lands on b_end
+                cell.tt.rotate_relative(b_end - g["STOP_LEAD"], omega_dps, wait=False)
+            else:
+                cell.tt.rotate_velocity(omega_dps)
             v_cmd = min(v, max(10.0, 1.5 * max(q["corner_speed"] for q in per.values())))
             last = {tl: None for tl in arms}
             stopped, t_stop = False, None
             prev_total, prev_t = total, time.monotonic()
+            t_begin_t = prev_t
             w_filt = 0.0                                      # measured bed speed, deg/s, lightly smoothed
             while True:
                 now_t = time.monotonic()
@@ -500,11 +528,15 @@ def run(g, k, cell, cold=False):
                 w_filt = 0.5 * w_filt + 0.5 * max(0.0, w_raw)
                 for tl, a in arms.items():                    # extruder proportional to the bed
                     set_rate(tl, a["K"] * a["R"] * math.radians(w_filt))
-                if not stopped and b + omega_dps * TICK >= b_end - g["STOP_LEAD"]:
+                if not stopped and not incremental and b + omega_dps * TICK >= b_end - g["STOP_LEAD"]:
                     cell.tt.stop_rotation()                    # from here the arm keeps following the bed
                     stopped, t_stop = True, now_t              # through its deceleration, no parking
+                if incremental and not stopped and b >= b_end - g["STOP_LEAD"] - max(2.0, omega_dps * TICK):
+                    stopped, t_stop = True, now_t              # in its own deceleration now
                 if stopped and (abs(total - prev_total) < 0.01 or now_t - t_stop > SETTLE_S):
                     break                                      # bed at rest (or SETTLE_S is up)
+                if incremental and now_t - t_begin_t > (b_end / omega_dps) * 3 + SETTLE_S:
+                    raise Abort("the bed did not complete its corner move")
                 lead_deg = (w_filt if stopped else omega_dps) * g["CORNER_LEAD_S"]
                 bl = min(b + max(0.0, lead_deg), b_end)
                 for tl, a in arms.items():
@@ -555,6 +587,19 @@ def run(g, k, cell, cold=False):
         cell.move(tl, *PARK, speed=v, wait=True)
     cell.tt.stop_rotation()
     print("7. Bed stopped. Done.")
+
+
+def set_bed_ramp(tt, acc_dps2):
+    """Ask the Aerotech for a linear ramp at acc_dps2 (accel and decel). Best effort: the
+    Automation1 call names differ between versions, so a failure only prints a note."""
+    try:
+        import automation1 as a1
+        ms = tt.controller.runtime.commands.motion_setup
+        ms.setupaxisramptype([tt.axis], a1.RampType.Linear)
+        ms.setupaxisrampvalue([tt.axis], a1.RampMode.Rate, acc_dps2)
+        print(f"  bed ramp set to {acc_dps2:g} deg/s2 (linear)")
+    except Exception as ex:
+        print(f"  could not set the bed ramp ({ex}); the axis keeps its configured ramp")
 
 
 def logger(g, cell, live, log_path, cold):

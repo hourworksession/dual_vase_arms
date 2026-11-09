@@ -268,6 +268,19 @@ class SimTurntable:
     def stop_rotation(self):
         self.rotate_velocity(0.0)
 
+    def rotate_relative(self, angle_deg, speed_dps, wait=True):
+        """Incremental move: runs at speed_dps for the time the angle takes, then stops (no ramp)."""
+        if not self._connected:
+            raise RuntimeError("Turntable not connected.")
+        dur = abs(angle_deg) / max(abs(speed_dps), 1e-6)
+        self.rotate_velocity(speed_dps if angle_deg >= 0 else -speed_dps)
+        record("turntable", "move_relative", (round(angle_deg, 3), round(speed_dps, 3)))
+        if wait:
+            time.sleep(dur)
+            self.stop_rotation()
+        else:
+            threading.Timer(dur, self.stop_rotation).start()
+
 
 class SimExtruder:
     def __init__(self, host=None, port=None):
