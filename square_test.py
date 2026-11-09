@@ -79,10 +79,10 @@ Geometry (per arm, in that arm's frame; C = turntable centre, n = unit vector at
 Sequence, with n arms:  1. Prime (bed still).  2. Flat: 1/n loop at the first layer (two arms:
 together the full outline).  3. Spiral: Z rises P per loop.  4. Final flat 1/n loop.
 5. Extruders off.  6. Lift 10 mm and park.  7. Bed stopped.
-Corner to straight: the bed is stopped one tick early, the arm's last corner move and the next
-side's move are queued together with a blend radius, so the arm does not stop between them; the
-only pause is the bed's own deceleration (STOP_LEAD moves it earlier, the arm then finishes the
-fillet with the bed at rest).
+Corner to straight: the bed is stopped one tick early and the arm keeps following the measured
+bed angle through the bed's deceleration; the fillet's last part (if the bed stops short) and the
+next side are then queued behind it with a blend radius, so the arm never parks. STOP_LEAD stops
+the bed earlier still, the arm finishing more of the fillet with the bed at rest.
 Nothing is commanded below an arm's Z0. Ctrl+C aborts: extruders off, bed stop, arms lift.
 Every run logs to runs/square_test_*.csv.
 """
@@ -496,17 +496,25 @@ def run(g, k, cell, cold=False):
                 live["efac"][tl] = k["corner_efac"]
             t_begin = total                                   # where the bed is as this corner begins
             cell.tt.rotate_velocity(omega_dps)
-            lead_deg = omega_dps * g["CORNER_LEAD_S"]
             v_cmd = min(v, max(10.0, 1.5 * max(q["corner_speed"] for q in per.values())))
             last = {tl: None for tl in arms}
+            stopped, t_stop = False, None
+            prev_total, prev_t = total, time.monotonic()
             while True:
+                now_t = time.monotonic()
                 total = cell.tt.get_angle() - a0
                 b = max(0.0, total - t_begin)                  # fillet progress = bed progress
                 live["bed"] = total
-                if b + omega_dps * TICK >= b_end - g["STOP_LEAD"]:
-                    cell.tt.stop_rotation()
-                    break
-                bl = min(b + lead_deg, b_end)
+                w_meas = (total - prev_total) / max(now_t - prev_t, 1e-3)   # bed speed as measured, deg/s
+                if not stopped and b + omega_dps * TICK >= b_end - g["STOP_LEAD"]:
+                    cell.tt.stop_rotation()                    # from here the arm keeps following the bed
+                    stopped, t_stop = True, now_t              # through its deceleration, no parking
+                if stopped and (abs(total - prev_total) < 0.01 or now_t - t_stop > SETTLE_S):
+                    break                                      # bed at rest (or SETTLE_S is up)
+                # send the arm a little ahead of the bed: by the commanded speed while the bed is
+                # driven, by the measured speed once it is decelerating
+                lead_deg = (w_meas if stopped else omega_dps) * g["CORNER_LEAD_S"]
+                bl = min(b + max(0.0, lead_deg), b_end)
                 for tl, a in arms.items():
                     xy = corner_pt(g, a, bl, kq, total + (bl - b))
                     z = z_at(tl, s + arc * bl / 90.0)
@@ -515,17 +523,8 @@ def run(g, k, cell, cold=False):
                         last[tl] = (xy, z)
                     live["xy"][tl], live["z"][tl] = corner_pt(g, a, b, kq, total), z_at(tl, s + arc * b / 90.0)
                 live["rev"] = (s + arc * b / 90.0) / L
-                time.sleep(TICK)
-            # let the bed come to rest, then read where it actually stopped
-            t_settle = time.monotonic()
-            prev = cell.tt.get_angle()
-            while time.monotonic() - t_settle < SETTLE_S:      # checked every 20 ms
-                time.sleep(0.02)
-                now = cell.tt.get_angle()
-                if abs(now - prev) < 0.01:
-                    break
-                prev = now
-            total = cell.tt.get_angle() - a0
+                prev_total, prev_t = total, now_t
+                time.sleep(TICK if not stopped else 0.02)
             live["bed"] = total
             b_bed = max(0.0, min(b_end, total - t_begin))
             if b_end - b_bed > 0.05:                          # bed stopped short: the arm finishes the fillet alone
