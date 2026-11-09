@@ -54,12 +54,19 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
             z up, x towards y), +1 if anticlockwise.  Default -1: measured on the cell, 9 Nov 2026.
             Wrong sign: every corner swings the nozzle across to the opposite corner, and the print
             comes out as a circle of radius (S - RF) sqrt2 with the square inside it.
-    CORNER_LEAD_S  how far ahead of the measured bed angle the arm is sent on corners, s (0.15)
+    CORNER_LEAD_S  starting lead: how far ahead of the measured bed angle the arm is sent on corners,
+            s (0.15). Then closed loop: each tick the arm's REPORTED position is placed on the corner
+            path and the lead is corrected by LEAD_GAIN x (bed angle - arm angle), so the nozzle sits
+            on the bed's angle whatever the arm's latency. A lagging arm draws the fillet rotated about
+            the axis, i.e. shifted into the next side.
+    LEAD_GAIN  that correction gain per tick (0.5). 0 = fixed lead.
+    CORNER_FLOOR  the corner extruder rate never drops below this fraction of the straight-line rate
+            (0.3), so the flow does not have to restart from nothing at the hand-over to the side.
     BLEND   blend radius for the streamed corner moves, mm                   (default 2)
     STOP_LEAD  stop the bed this many degrees before the corner's 90 (its deceleration), deg (0);
             the arm finishes any part of the fillet the bed did not give, at V_LINE
     RATE_MIN  below this filament rate (mm/s) the tool is switched off rather than crawled (0.1)
-    RATE_HZ   how often the extruder rate may be re-sent to Klipper, per second (5). Extruder
+    RATE_HZ   how often the extruder rate may be re-sent to Klipper, per second (10). Extruder
             commands run on their own thread, so the motion loop never waits on Moonraker.
     BED_MOVE  1 (default): each corner is ONE 90 deg incremental move (the controller plans the
             accel, cruise and decel and lands on 90 exactly). 0: free-run at VB and stop on the
@@ -106,7 +113,8 @@ from cylinder_test import (Abort, BASE_ARM_SPEED, COMMON, DEFAULTS, NOZZLE, PARK
                            SIDE, WATCHDOG_S, Cell, abort, ramp_loss, report_deviation, spiral_dz)
 
 SQUARE_COMMON = {**COMMON, "RF": 10.0, "BED_DIR": -1.0, "CORNER_LEAD_S": 0.15, "BLEND": 2.0, "STOP_LEAD": 0.0,
-                 "V_LINE": 8.0, "RATE_MIN": 0.1, "BED_ACC": 0.0, "BED_MOVE": 1.0, "RATE_HZ": 5.0}
+                 "V_LINE": 8.0, "RATE_MIN": 0.1, "BED_ACC": 0.0, "BED_MOVE": 1.0, "RATE_HZ": 10.0,
+                 "CORNER_FLOOR": 0.3, "LEAD_GAIN": 0.5}
 TICK = 0.05                      # main loop period, s
 SETTLE_S = 3.0                   # max wait for the bed to come to rest after a corner
 RATE_TOL = 0.05                  # re-send EXTRUDE_ON when the rate moves by more than this fraction
@@ -126,7 +134,8 @@ def parse(argv):
     known = {"T", "SIDE", "RF", "L_H", "E", "P", "W", "FLOW_K", "Z0", "W_L", "FLOW_K_L", "Z0_L", "VB", "V_LINE",
              "MAX_VB", "MAX_VT", "FIRST", "SPIRAL", "LOOPS", "HEIGHT", "PRIME_MM", "PRIME_S", "PRIME_Z", "FIL",
              "MIN_TEMP", "ANGLE", "CX", "CY", "ANGLE_L", "CX_L", "CY_L", "DR", "DR_L", "RAMP_STEPS", "RAMP_EVERY",
-             "BED_DIR", "CORNER_LEAD_S", "BLEND", "STOP_LEAD", "RATE_MIN", "BED_ACC", "BED_MOVE", "RATE_HZ"}
+             "BED_DIR", "CORNER_LEAD_S", "BLEND", "STOP_LEAD", "RATE_MIN", "BED_ACC", "BED_MOVE", "RATE_HZ",
+             "CORNER_FLOOR", "LEAD_GAIN"}
     unknown = sorted(set(vals) - known)
     if unknown:
         hint = ""
@@ -238,6 +247,26 @@ def corner_pt(g, a, b_deg, k=0, total=None):
     d, r, dr = a["D"], a["R"], g["DIR"]
     ph = math.radians(dr * b_deg)
     return to_world(a, (d + r * math.cos(ph), dr * d + r * math.sin(ph)), _phi(g, k, total))
+
+
+def corner_progress(g, a, xy, k, t_begin):
+    """Where on corner k's path the arm actually is: fillet progress (deg) from the corner's start,
+    for a corner that began with the bed at t_begin. Inverse of corner_pt.
+
+    corner_pt(b, k, t_begin + b) = C + Rot(phi) F0 + R e(BED_DIR x res), res = t_begin - 90 k, so the
+    arm runs on a circle of radius |F0| about Cc = C + R e(BED_DIR res); its angle there is phi."""
+    (cx, cy), n, t = frame(a)
+    res = t_begin - 90.0 * k
+    e = math.radians(g["BED_DIR"] * res)
+    cc = (cx + a["R"] * (math.cos(e) * n[0] + math.sin(e) * t[0]),
+          cy + a["R"] * (math.cos(e) * n[1] + math.sin(e) * t[1]))
+    dx, dy = xy[0] - cc[0], xy[1] - cc[1]
+    u, v = dx * n[0] + dy * n[1], dx * t[0] + dy * t[1]         # in (n, t) coordinates
+    ang = math.degrees(math.atan2(v, u))
+    ang0 = math.degrees(math.atan2(g["DIR"] * a["D"], a["D"]))  # angle of F0 at phi = 0
+    total_arm = g["BED_DIR"] * (ang - ang0 - g["DIR"] * 90.0 * k)   # phi = BED_DIR total + DIR 90 k
+    b_arm = (total_arm - t_begin + 180.0) % 360.0 - 180.0
+    return b_arm
 
 
 def _phi(g, k, total):
@@ -470,6 +499,7 @@ def run(g, k, cell, cold=False):
     seg = 0
     total = 0.0                            # bed angle since the start, deg (measured)
     phase = "flat"
+    lead_adj = {tl: 0.0 for tl in arms}    # learned extra lead per arm, deg (carried corner to corner)
     while s < s_end - 1e-6:
         kq = seg // 2                      # quarter turns the bed has made before this segment
         ph = phase_name(g, s / L)
@@ -518,6 +548,7 @@ def run(g, k, cell, cold=False):
                 cell.tt.rotate_velocity(omega_dps)
             v_cmd = min(v, max(10.0, 1.5 * max(q["corner_speed"] for q in per.values())))
             last = {tl: None for tl in arms}
+            lag = {tl: [] for tl in arms}
             stopped, t_stop = False, None
             prev_total, prev_t = total, time.monotonic()
             t_begin_t = prev_t
@@ -529,8 +560,9 @@ def run(g, k, cell, cold=False):
                 live["bed"] = total
                 w_raw = (total - prev_total) / max(now_t - prev_t, 1e-3)
                 w_filt = 0.5 * w_filt + 0.5 * max(0.0, w_raw)
-                for tl, a in arms.items():                    # extruder proportional to the bed
-                    set_rate(tl, a["K"] * a["R"] * math.radians(w_filt))
+                for tl, a in arms.items():                    # extruder proportional to the bed, floored
+                    set_rate(tl, max(a["K"] * a["R"] * math.radians(w_filt),
+                                     g["CORNER_FLOOR"] * per[tl]["rate_line"]))
                 if not stopped and not incremental and b + omega_dps * TICK >= b_end - g["STOP_LEAD"]:
                     cell.tt.stop_rotation()                    # from here the arm keeps following the bed
                     stopped, t_stop = True, now_t              # through its deceleration, no parking
@@ -540,9 +572,20 @@ def run(g, k, cell, cold=False):
                     break                                      # bed at rest (or SETTLE_S is up)
                 if incremental and now_t - t_begin_t > (b_end / omega_dps) * 3 + SETTLE_S:
                     raise Abort("the bed did not complete its corner move")
-                lead_deg = (w_filt if stopped else omega_dps) * g["CORNER_LEAD_S"]
-                bl = min(b + max(0.0, lead_deg), b_end)
+                if b > 0.5 and g["LEAD_GAIN"] > 0:            # close the loop on where the arm really is
+                    for tl, a in arms.items():
+                        try:
+                            pose = cell.pose(tl)
+                        except Exception:
+                            pose = None
+                        if pose:
+                            b_arm = corner_progress(g, a, pose[:2], kq, t_begin)
+                            lag[tl].append(b - b_arm)
+                            lead_adj[tl] += g["LEAD_GAIN"] * (b - b_arm)
+                            lead_adj[tl] = max(-10.0, min(45.0, lead_adj[tl]))
                 for tl, a in arms.items():
+                    lead_deg = (w_filt if stopped else omega_dps) * g["CORNER_LEAD_S"] + lead_adj[tl]
+                    bl = min(b + max(0.0, lead_deg), b_end)
                     xy = corner_pt(g, a, bl, kq, total + (bl - b))
                     z = z_at(tl, s + arc * bl / 90.0)
                     if last[tl] is None or math.dist(xy, last[tl][0]) >= 0.05 or abs(z - last[tl][1]) >= 0.02:
@@ -553,6 +596,13 @@ def run(g, k, cell, cold=False):
                 prev_total, prev_t = total, now_t
                 time.sleep(TICK if not stopped else 0.02)
             live["bed"] = total
+            for tl in arms:                                   # bed at rest: straight-line rate from here
+                set_rate(tl, per[tl]["rate_line"])
+            if any(lag.values()):
+                worst = max(abs(x) for v in lag.values() for x in v[len(v) // 3:] or v)
+                if worst > 3.0:
+                    print(f"  corner {kq % 4}: arm lagged the bed by up to {worst:.1f} deg after settling in "
+                          f"(lead now {', '.join(f'{lead_adj[t]:+.1f}' for t in arms)} deg)")
             b_bed = max(0.0, min(b_end, total - t_begin))
             if b_end - b_bed > 0.05:                          # bed stopped short: the arm finishes the fillet alone
                 print(f"  bed stopped {b_end - b_bed:.2f} deg short on corner {kq % 4}; the arm finishes the fillet")
