@@ -23,8 +23,8 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     T       0 = right, 1 = left, 2 = both                                    (required)
     SIDE    outside side length of the square, mm (bead centreline)          (required)
     RF      fillet (corner) radius, mm, bead centreline                      (default 10)
-    L_H     bead height (layer height), mm                                   (default 0.6)
-    W       line width, mm                                                   (default 1.2, both arms)
+    L_H     bead height (layer height), mm                                   (default 0.5)
+    W       line width, mm                                                   (default 1.0, both arms)
     FLOW_K  measured / planned plastic from a test print
     V_LINE  arm speed on the straights, mm/s. Pick one the arm starts and stops cleanly at (default 8)
     VB      bed speed on the corners, rad/s (default V_LINE / RF: the fillet moves under the nozzle
@@ -135,7 +135,7 @@ def parse(argv):
     missing = [k for k in ("T", "SIDE") if k not in vals]
     if missing:
         raise SystemExit("Missing: " + ", ".join(missing) + "\n\n" + __doc__.split("Values")[0])
-    vals.setdefault("L_H", 0.6)                            # 1.2 mm nozzle: 1.2 x 0.6 mm bead
+    vals.setdefault("L_H", 0.5)
     t = int(vals["T"])
     if t not in (0, 1, 2):
         raise SystemExit("T must be 0 (right), 1 (left) or 2 (both)")
