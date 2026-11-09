@@ -100,7 +100,7 @@ sys.path[:0] = [ROOT, os.path.join(ROOT, "src"), os.path.join(ROOT, "scripts")]
 from cylinder_test import (Abort, BASE_ARM_SPEED, COMMON, DEFAULTS, NOZZLE, PARK, SAFE_Z, SHAPES,  # noqa: E402
                            SIDE, WATCHDOG_S, Cell, abort, ramp_loss, report_deviation, spiral_dz)
 
-SQUARE_COMMON = {**COMMON, "RF": 10.0, "BED_DIR": 1.0, "CORNER_LEAD_S": 0.15, "BLEND": 2.0, "STOP_LEAD": 0.0}
+SQUARE_COMMON = {**COMMON, "RF": 10.0, "BED_DIR": -1.0, "CORNER_LEAD_S": 0.15, "BLEND": 2.0, "STOP_LEAD": 0.0}
 TICK = 0.05                      # main loop period, s
 SETTLE_S = 3.0                   # max wait for the bed to come to rest after a corner
 
