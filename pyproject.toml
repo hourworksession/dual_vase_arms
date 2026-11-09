@@ -30,3 +30,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[project.scripts]
+cell-cylinder = "cell.runs.cylinder:main"
+cell-square-polar = "cell.runs.square_polar:main"
+cell-square-indexing = "cell.runs.square_indexing:main"

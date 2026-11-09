@@ -2,7 +2,7 @@
 """Cell Studio: the rebuilt control panel for the dual arm cell (Qt).
 
     pip install PySide6 pyyaml
-    python scripts/gleadell_panel_qt.py
+    python ui/panels/gleadell_panel_qt.py
 
 A start-up window opens straight away and shows each part as it loads; missing
 optional parts are listed there, and an error that stops the panel opening is
@@ -14,8 +14,9 @@ import sys
 import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)                       # slicer.py, planner.py
-sys.path.insert(0, os.path.dirname(HERE))      # src/, config_loader.py
+ROOT = os.path.dirname(os.path.dirname(HERE))   # repo root (this file is in ui/panels/)
+for _p in (os.path.join(ROOT, "scripts"), os.path.join(ROOT, "ui"), os.path.join(ROOT, "src"), ROOT):
+    sys.path.insert(0, _p)                      # slicer/planner, cell_studio, the cell package, config/
 
 from PySide6.QtWidgets import QApplication     # only Qt first, so the window can open at once
 

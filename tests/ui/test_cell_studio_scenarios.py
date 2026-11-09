@@ -5,11 +5,11 @@ Each scenario plays one person at the cell doing one job, the way people
 actually use it (including the mistakes). It checks what the program told the
 machine and the user against what should happen, and reports any flaw.
 
-    QT_QPA_PLATFORM=offscreen python tests/test_cell_studio_scenarios.py
+    QT_QPA_PLATFORM=offscreen python tests/ui/test_cell_studio_scenarios.py
     (add --json results.json to save the table)
 
 Runs without the cell: every device is the simulator in
-scripts/cell_studio/sim_hardware.py, which can drop links, refuse connections
+ui/cell_studio/sim_hardware.py, which can drop links, refuse connections
 and hold an E-stop like the real devices.
 """
 
@@ -21,8 +21,10 @@ import time
 import traceback
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, os.path.join(ROOT, "ui"))
+sys.path.insert(0, os.path.join(ROOT, "src"))
 sys.path.insert(0, ROOT)
 
 import logging

@@ -5,7 +5,7 @@ check a new home position without anything moving. Motion is instantaneous,
 the turntable integrates its commanded velocity, heaters ramp towards target.
 
 The simulator also behaves like the real devices when things go wrong, so the
-scenario tests in tests/test_cell_studio_scenarios.py can exercise faults:
+scenario tests in tests/ui/test_cell_studio_scenarios.py can exercise faults:
 
 * an xArm in E-stop rejects motion with a non-zero code until it is reconnected
   (the real SDK returns codes rather than raising);

@@ -15,11 +15,13 @@ Type moves like  x+1  y-0.5  z-0.1  (or just -0.1 for Z), up to 5 mm a step, at 
 Finding the axis: put a pen dot on the disc under the nozzle and press r. If the dot is
 still under the nozzle you are on the axis; if not, jog HALF way towards where it went
 and repeat. Start values can be overridden: CX= CY= Z0=.
-The same jog is  python3 cylinder_test.py T=1 --find-centre.
+The same jog is  python3 cylinder_test.py T=1 --find-centre  (or python3 -m cell.runs.cylinder ...).
 """
+import os
 import sys
 
-import cylinder_test
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+from cell.runs import cylinder as cylinder_test  # noqa: E402
 
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:]]

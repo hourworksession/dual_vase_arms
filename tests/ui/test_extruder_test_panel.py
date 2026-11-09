@@ -1,4 +1,4 @@
-"""Headless check of scripts/extruder_test_panel.py against its simulated Klipper."""
+"""Headless check of ui/panels/extruder_test_panel.py against its simulated Klipper."""
 import os
 import sys
 import time
@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ui", "panels"))
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import extruder_test_panel as etp  # noqa: E402

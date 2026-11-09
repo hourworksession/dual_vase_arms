@@ -6,46 +6,57 @@ driving the extruders. Part of the PhD on LLM-driven, agentic toolpath generatio
 
 Working branch: `lab-merged`. Run everything from the repo root.
 
-## Printing tests: `cylinder_test.py`
+## Layout
 
-The current way to print on the cell: prime, opening circle, spiral, closing circle, on one
-arm or both.
+    src/cell/            the package everything imports (`import cell`)
+      hardware/          arm.py, turntable.py, extruder.py (Klipper macros), extruder_binary.py, extruder_legacy.py
+      config.py          load_config() for config/settings.yaml
+      runs/              the printing tests: cylinder.py, square_indexing.py, square_polar.py
+    src/rehearsal/       the LLM rehearsal test bed (docs/rehearsal_testbed.md)
+    notebooks/           the same processes laid out part by part: 00 cell control, 01 rounded square, 02 column and ironing
+    ui/cell_studio/      the Qt studio (simulators, 3D view, generators);  ui/panels/  gleadell_panel_qt.py, extruder_test_panel.py
+    tools/               extrude.py (terminal extruder control), cali_jog.py (centre and Z0 jog)
+    scripts/             toolpath libraries used by Cell Studio: slicer, planner, rules, features, spiralfit;  cellcam/
+    tests/               geometry/ (pure maths), rehearsal/, ui/ (Qt, needs PySide6);  python3 -m pytest tests
+    config/ generators/ cad/ experiments/ simulation/ docs/ Klipper Configurations/   as before
+
+`cylinder_test.py`, `square_test.py` and `square_polar_test.py` at the root are one-line shims onto
+`src/cell/runs/`, so the usual commands still work. `pip install -e .` once and `import cell` works
+from anywhere (the notebooks and shims add `src/` to the path themselves, so it is optional).
+
+## Printing tests (`src/cell/runs/`)
+
+Cylinder: prime, opening circle, spiral, closing circle, one arm or both.
 
     python3 cylinder_test.py T=2 R=60 VB=0.55 FLOW_K=1.3 REVS=40 MODE=layered --dry-run
 
 - `T=0` right, `T=1` left, `T=2` both. `MODE=layered`, `side` or `merge` for two arms.
 - `E=` (filament mm/s, bed follows) or `VB=` (bed rad/s, extruders follow).
 - Throttle tests: `E_MIN`, `E_MAX`, `WAVE_T` or `WAVES_PER_REV`, `SHAPE=sine|square|triangle`.
-- Per-arm calibration lives in `DEFAULTS` at the top (Z0, centre, left radius trim `DR`).
-- Every run logs to `runs/cylinder_test_<time>.csv` (commanded vs reported arm position,
-  flow, hot-end temperature). The full list of settings is at the top of the file.
+- Per-arm calibration lives in `DEFAULTS` at the top of `cylinder.py` (Z0, centre, left radius trim `DR`).
 
-Always `--dry-run` first. `--sim` runs against simulated hardware.
+Rounded square, bed as master (nothing stops; the arm only moves radially, the bed speed follows
+the outline, the extruder follows the measured bed speed):
+
+    python3 square_polar_test.py T=0 SIDE=80 RF=10 L_H=0.6 FLOW_K=1.3 V=8 BED_ACC=500 LOOPS=10 --dry-run
+
+Rounded square by indexing (straights with the bed still, fillets by 90 deg bed moves), kept for comparison:
+
+    python3 square_test.py T=0 SIDE=80 RF=10 L_H=0.6 FLOW_K=1.3 V_LINE=8 VB=0.5 LOOPS=10 --dry-run
+
+Every run logs to `runs/<test>_<time>.csv`. The full list of settings is at the top of each file.
+Always `--dry-run` first. `--sim` runs against Cell Studio's simulators; `--cold` moves without plastic.
 
 ## Calibration and extruders
 
 | File | What it does |
 | --- | --- |
-| `cali_jog.py` | Jog each arm to the turntable centre (X/Y/Z); prints CX, CY, Z0 |
+| `tools/cali_jog.py` | Jog each arm to the turntable centre (X/Y/Z); prints CX, CY, Z0 |
 | `cylinder_test.py --find-z0` | Paper-drag touch-off for an arm's zero height |
-| `extrude.py` | Terminal extruder control: heat, purge, on/off, flow (`python3 -i extrude.py`) |
-| `scripts/extruder_test_panel.py` | Small Qt panel for the same |
+| `tools/extrude.py` | Terminal extruder control: heat, purge, on/off, flow (`python3 -i tools/extrude.py`) |
+| `ui/panels/extruder_test_panel.py` | Small Qt panel for the same |
+| `notebooks/00_cell_control.ipynb` | The same from a notebook: jog, bed, heat, purge, STOP |
 | `Klipper Configurations/` | The Pi's Klipper configs; `extrude_control.cfg` runs both extruders as G-code axes A/B (see its README) |
-
-## Other parts
-
-| Folder | What it is |
-| --- | --- |
-| `scripts/cell_studio/` | The Qt control panel (`python3 scripts/gleadell_panel_qt.py`); base for the coming panel refresh |
-| `scripts/` (`slicer.py`, `planner.py`, `features.py`, `rules.py`, ...) | Slicer, motion planner and print rules used by Cell Studio |
-| `generators/` | FullControl generator scripts Cell Studio can run |
-| `scripts/cellcam/` | Camera Pi stream server with an alignment crosshair (see its README) |
-| `src/` | Arm, turntable and extruder controllers; `src/rehearsal/` is the LLM test bed (`docs/rehearsal_testbed.md`) |
-| `experiments/voron0/` | FullControl experiments printed on a Voron 0.2 first (e.g. `wall_imprint_v1.py`) |
-| `cad/` | Part geometry (hopper) |
-| `config/` | Cell settings, calibration, print rules, rehearsal configs |
-| `simulation/assets/` | Arm and tool meshes used by Cell Studio's 3D view |
-| `tests/` | `python3 -m pytest tests` |
 
 Older code (the Tk panels, the `dual_arm_printer` package, the PyBullet twin, early
 one-off scripts) was removed on 3 Nov 2026; it is all still in the git history

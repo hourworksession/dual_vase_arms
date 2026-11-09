@@ -3,9 +3,9 @@
 A small stand-alone window, separate from cell studio, for bench testing the
 two independent extruders through the EXTRUDE_* macros:
 
-    python3 scripts/extruder_test_panel.py                 # Moonraker from config/settings.yaml
-    python3 scripts/extruder_test_panel.py --host 10.0.0.5 # override the Pi address
-    python3 scripts/extruder_test_panel.py --sim           # no hardware, simulated Klipper
+    python3 ui/panels/extruder_test_panel.py                 # Moonraker from config/settings.yaml
+    python3 ui/panels/extruder_test_panel.py --host 10.0.0.5 # override the Pi address
+    python3 ui/panels/extruder_test_panel.py --sim           # no hardware, simulated Klipper
 
 Per tool: heat, ON/OFF at a set rate, live flow scale, fixed-length push.
 ALL OFF (button, Space or Esc) jumps the command queue. The watchdog
@@ -22,8 +22,8 @@ import sys
 import threading
 import time
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path[:0] = [ROOT, os.path.join(ROOT, "src")]
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # repo root (ui/panels/)
+sys.path[:0] = [ROOT, os.path.join(ROOT, "src"), os.path.join(ROOT, "ui")]
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal                       # noqa: E402
 from PySide6.QtGui import QFont, QKeySequence, QShortcut                      # noqa: E402
@@ -44,7 +44,7 @@ NEEDED = ["heater_generic right_hotend", "heater_generic left_hotend",
 class MoonrakerLink:
     def __init__(self, host: str, port: int):
         import requests
-        from extruder_controller_manual import ManualExtruderController
+        from cell.hardware.extruder import ManualExtruderController
         self.ext = ManualExtruderController(host, port)
         self.base = f"http://{host}:{port}"
         self.http = requests.Session()
@@ -392,7 +392,7 @@ def main(argv=None):
     if a.sim:
         link, addr = SimLink(), "simulated"
     else:
-        from config_loader import load_config
+        from cell.config import load_config
         mr = (load_config() or {}).get("moonraker", {})
         host, port = a.host or mr.get("host", "127.0.0.1"), a.port or int(mr.get("port", 7125))
         link, addr = MoonrakerLink(host, port), f"{host}:{port}"

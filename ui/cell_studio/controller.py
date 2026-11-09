@@ -1,6 +1,6 @@
 """Machine logic for the cell, independent of any widgets.
 
-Ported from scripts/gleadell_panel.py. In the default "one move" extrusion mode
+Ported from the old Tkinter gleadell_panel.py. In the default "one move" extrusion mode
 the cylinder print sends the same moves, speeds, poses and extrusion in the same
 order as the Tk panel. The plumbing changed:
 
@@ -8,7 +8,7 @@ order as the Tk panel. The plumbing changed:
 * root.after(0) -> ``ui.post``
 * messagebox    -> ``ui.info/warn/error`` (non-blocking, so the E-stop stays reachable)
 
-Safety and usability changes, all found by tests/test_cell_studio_scenarios.py:
+Safety and usability changes, all found by tests/ui/test_cell_studio_scenarios.py:
 * Start checks the job first (revolutions, radius, speeds...) and shows a
   pre-flight summary, warning when the extrusion time no longer matches the
   rotation time or live offsets are non-zero. Filament is always recalculated.
@@ -38,8 +38,9 @@ from . import home_config
 logger = logging.getLogger("control_panel")
 
 REPO_ROOT = home_config.REPO_ROOT
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+for _p in (REPO_ROOT, os.path.join(REPO_ROOT, "src")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 # key: (label, unit, decimals, step, section, tooltip, live, minimum)
 PARAM_META = {
@@ -78,7 +79,7 @@ def _mmss(t):
 class CellController:
     def __init__(self, ui: UiBridge):
         self.ui = ui
-        from config_loader import load_config
+        from cell.config import load_config
         self.cfg = load_config()
         self.hw_connected = False
         self.left = self.right = self.turntable = self.extruder = None
@@ -337,11 +338,11 @@ class CellController:
             return {'arm': SimArm, 'turntable': SimTurntable, 'extruder': SimExtruder}[which]
         try:
             if which == 'arm':
-                from src.arm_controller import ArmController as cls
+                from cell.hardware.arm import ArmController as cls
             elif which == 'turntable':
-                from src.turntable_controller import TurntableController as cls
+                from cell.hardware.turntable import TurntableController as cls
             else:
-                from src.extruder_controller import ExtruderController as cls
+                from cell.hardware.extruder_legacy import ExtruderController as cls
             return cls
         except ImportError as e:
             pkg = {'arm': "xarm-python-sdk", 'turntable': "Aerotech Automation1 (pyautomation)",

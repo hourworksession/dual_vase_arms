@@ -25,7 +25,7 @@ import sys
 import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(HERE))        # scripts/ (for slicer etc. if a generator wants them)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "scripts"))   # scripts/ (slicer etc. if a generator wants them)
 os.environ.setdefault("MPLBACKEND", "Agg")       # plt.show() does nothing
 
 sys.path.insert(0, HERE)

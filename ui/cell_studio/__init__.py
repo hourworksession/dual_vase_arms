@@ -1,6 +1,6 @@
 """Cell Studio: the Qt rebuild of the Gleadall dual arm control panel.
 
-Launch with ``python scripts/gleadell_panel_qt.py``.
+Launch with ``python ui/panels/gleadell_panel_qt.py``.
 
 Layout
 ------

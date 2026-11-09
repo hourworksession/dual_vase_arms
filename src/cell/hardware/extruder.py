@@ -2,7 +2,7 @@
 ("Klipper Configurations/printer.cfg": kinematics none, two heater_generic
 hot ends, EXTRUDE_* macros).
 
-NOT used by the cell studio panel yet: the panel's src/extruder_controller.py
+NOT used by the cell studio panel yet: the panel's cell/hardware/extruder_legacy.py
 targets the old config ([extruder] + [heater_bed], one G1 X E move for both).
 Switch the panel over only after the new config passes its bench test.
 """

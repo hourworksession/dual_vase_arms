@@ -280,7 +280,7 @@ def arm_rpy(cfg: PlannerConfig, i: int, world, tang, tilt_deg: float) -> Tuple[f
         return hit
     try:
         import numpy as np
-        from cell_studio.arm_model import rpy_matrix, matrix_to_pose
+        from cell_studio.arm_model import rpy_matrix, matrix_to_pose   # ui/ on sys.path
     except Exception:
         return base
     # directions in the planner frame, then into arm i's frame (a yaw)

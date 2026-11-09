@@ -38,7 +38,7 @@ import sys
 import threading
 import time
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repo root (this file is in tools/)
 sys.path[:0] = [ROOT, os.path.join(ROOT, "src")]
 
 MIN_TEMP = 190.0          # C, refuse to move filament below this
@@ -127,7 +127,7 @@ def connect(host: str | None = None, port: int | None = None, sim: bool = False)
         _link = _Sim()
         print("Connected to the SIMULATOR (no hardware).")
         return
-    from config_loader import load_config
+    from cell.config import load_config
     mr = (load_config() or {}).get("moonraker", {})
     host, port = host or mr.get("host", "127.0.0.1"), port or int(mr.get("port", 7125))
     _link = _Moonraker(host, port)

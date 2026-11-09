@@ -5,7 +5,7 @@ Thin wrapper over the EXTRUDE_ON / EXTRUDE_OFF macros in
 only sends commands and re-sends the keepalive. Use this as the failsafe
 mode when the streamed controller is not trusted.
 
-    ext = ManualExtruderController(host)   # src.extruder_controller_manual
+    ext = ManualExtruderController(host)   # cell.hardware.extruder
     eb = ExtruderBinary(ext, timeout_s=5.0)
     eb.on(0, 3.0)        # tool 0 at 3 mm/s
     eb.on(1, 2.5)

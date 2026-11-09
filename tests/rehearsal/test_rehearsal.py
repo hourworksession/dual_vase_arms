@@ -7,7 +7,7 @@ import urllib.request
 
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src"))
 
 from rehearsal.agents import PROPOSAL_SCHEMA, Agent, mock_policy  # noqa: E402
 from rehearsal.engine import Rehearsal  # noqa: E402
@@ -15,7 +15,7 @@ from rehearsal.llm import MockClient, OpenRouterClient, parse_json_object  # noq
 from rehearsal.referee import check  # noqa: E402
 from rehearsal.world import World  # noqa: E402
 
-ROOT = os.path.join(os.path.dirname(__file__), "..")
+ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 SCEN = os.path.join(ROOT, "config", "rehearsal", "hopper_P2_s0.5.yaml")
 SYS = os.path.join(ROOT, "config", "system.yaml")
 

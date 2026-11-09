@@ -33,8 +33,8 @@ Mainsail's X position climbs while extruding; X drives nothing and can be ignore
 
 ## Test panel (instead of typing the console commands)
 
-    python3 scripts/extruder_test_panel.py            # Pi address from config/settings.yaml
-    python3 scripts/extruder_test_panel.py --sim      # practise without hardware
+    python3 ui/panels/extruder_test_panel.py            # Pi address from config/settings.yaml
+    python3 ui/panels/extruder_test_panel.py --sim      # practise without hardware
 
 Per tool: heat, ON/OFF at a rate, flow slider, push a length. ALL OFF (button, Space or Esc)
 skips any queued commands. Untick Keepalive to check the 5 s watchdog stops a tool by itself.
