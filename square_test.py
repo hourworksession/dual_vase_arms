@@ -55,10 +55,10 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
             the arm's side of the square sits at SIDE/2 from the axis in direction ANGLE
     DR (and DR_L)  outline trim, mm: offsets the whole outline outwards (side and fillet both grow).
             Left default 1.0 as in cylinder_test.py
-    BED_DIR +1 if a positive bed velocity turns the disc ANTICLOCKWISE seen from above (xArm frames
-            are z up, x towards y), -1 if clockwise                           (default +1)
-            Wrong sign: the second side is laid on the far side of the disc instead of on top of
-            the first. Check with a --cold run (LOOPS=1) before any plastic goes down.
+    BED_DIR -1 if a positive bed velocity turns the disc CLOCKWISE seen from above (xArm frames are
+            z up, x towards y), +1 if anticlockwise.  Default -1: measured on the cell, 9 Nov 2026.
+            Wrong sign: every corner swings the nozzle across to the opposite corner, and the print
+            comes out as a circle of radius (S - RF) sqrt2 with the square inside it.
     CORNER_LEAD_S  how far ahead of the measured bed angle the arm is sent on corners, s (0.15)
     BLEND   blend radius for the streamed corner moves, mm                   (default 2)
     STOP_LEAD  stop the bed this many degrees before the corner's 90 (its deceleration), deg (0);
@@ -100,7 +100,7 @@ sys.path[:0] = [ROOT, os.path.join(ROOT, "src"), os.path.join(ROOT, "scripts")]
 from cylinder_test import (Abort, BASE_ARM_SPEED, COMMON, DEFAULTS, NOZZLE, PARK, SAFE_Z, SHAPES,  # noqa: E402
                            SIDE, WATCHDOG_S, Cell, abort, ramp_loss, report_deviation, spiral_dz)
 
-SQUARE_COMMON = {**COMMON, "RF": 10.0, "BED_DIR": 1.0, "CORNER_LEAD_S": 0.15, "BLEND": 2.0, "STOP_LEAD": 0.0}
+SQUARE_COMMON = {**COMMON, "RF": 10.0, "BED_DIR": -1.0, "CORNER_LEAD_S": 0.15, "BLEND": 2.0, "STOP_LEAD": 0.0}
 TICK = 0.05                      # main loop period, s
 SETTLE_S = 3.0                   # max wait for the bed to come to rest after a corner
 
