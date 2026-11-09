@@ -18,3 +18,5 @@ build/
 runs/
 scripts/motion_debug.csv
 scripts/cells_*.json
+notebooks/runs/
+notebooks/.ipynb_checkpoints/
