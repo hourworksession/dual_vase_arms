@@ -79,6 +79,10 @@ Geometry (per arm, in that arm's frame; C = turntable centre, n = unit vector at
 Sequence, with n arms:  1. Prime (bed still).  2. Flat: 1/n loop at the first layer (two arms:
 together the full outline).  3. Spiral: Z rises P per loop.  4. Final flat 1/n loop.
 5. Extruders off.  6. Lift 10 mm and park.  7. Bed stopped.
+Corner to straight: the bed is stopped one tick early, the arm's last corner move and the next
+side's move are queued together with a blend radius, so the arm does not stop between them; the
+only pause is the bed's own deceleration (STOP_LEAD moves it earlier, the arm then finishes the
+fillet with the bed at rest).
 Nothing is commanded below an arm's Z0. Ctrl+C aborts: extruders off, bed stop, arms lift.
 Every run logs to runs/square_test_*.csv.
 """
@@ -515,10 +519,10 @@ def run(g, k, cell, cold=False):
             # let the bed come to rest, then read where it actually stopped
             t_settle = time.monotonic()
             prev = cell.tt.get_angle()
-            while time.monotonic() - t_settle < SETTLE_S:
-                time.sleep(0.1)
+            while time.monotonic() - t_settle < SETTLE_S:      # checked every 20 ms
+                time.sleep(0.02)
                 now = cell.tt.get_angle()
-                if abs(now - prev) < 0.02:
+                if abs(now - prev) < 0.01:
                     break
                 prev = now
             total = cell.tt.get_angle() - a0
@@ -533,11 +537,12 @@ def run(g, k, cell, cold=False):
                     b = b_bed + (b_end - b_bed) * i / n_pts
                     for tl, a in arms.items():
                         move(tl, corner_pt(g, a, b, kq, total), z_at(tl, s + arc * b / 90.0), k["v_surface"],
-                             wait=(i == n_pts), blend=g["BLEND"])
+                             wait=False, blend=g["BLEND"])
                     live["rev"] = (s + arc * b / 90.0) / L
             else:
-                for tl, a in arms.items():                   # exact end of the corner move, waited
-                    move(tl, corner_pt(g, a, b_end, kq, total), z_at(tl, s + arc * b_end / 90.0), v_cmd, wait=True)
+                for tl, a in arms.items():                   # exact end of the corner move, queued and blended:
+                    move(tl, corner_pt(g, a, b_end, kq, total), z_at(tl, s + arc * b_end / 90.0), v_cmd,
+                         wait=False, blend=g["BLEND"])       # the next side's move follows at once, no stop
             for tl, a in arms.items():
                 live["efac"][tl] = 1.0
                 live["xy"][tl], live["z"][tl] = corner_pt(g, a, b_end, kq, total), z_at(tl, s + arc * b_end / 90.0)
