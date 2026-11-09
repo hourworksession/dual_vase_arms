@@ -1,55 +1,50 @@
 """Rounded-square test on one or both arms: prime, flat loop, spiral, final flat loop.
 
-Same bead, flow and bed relationship as cylinder_test.py (which this imports), but the outline
-is a square with filleted corners:
-  * straights: bed STOPPED, the arm moves along the side at the bead's surface speed (or V_LINE)
-  * corners:   bed ON at the cylinder relationship with R = the fillet radius (omega = v / RF),
-               while the arm makes a small compensating move so the fillet is laid about the
-               corner's own centre (the fillet centre is not on the turntable axis, so the arm
-               cannot simply hold still; see "Geometry" below).
+Same bead and cell link as cylinder_test.py (which this imports), but the outline is a square with
+filleted corners, and the EXTRUDER FOLLOWS WHATEVER IS MOVING:
+  * straights: bed STOPPED, the arm moves along the side at V_LINE; the extruder runs at the rate
+               that lays a W x L_H bead at V_LINE
+  * corners:   bed ON at VB (rad/s) while the arm makes the compensating move that keeps the fillet
+               about the corner's own centre; the extruder rate is set every tick in proportion to
+               the MEASURED bed speed (rate = bead per mm x RF x omega), so it ramps with the bed and
+               stops when the bed stops. Same bead on the corner as on the straight, whatever VB is.
 Every corner turns the bed 90 deg, so after each corner the next side of the square sits exactly
-where the last one was in the arm's frame: the arm draws the SAME straight line and the SAME
-corner move every segment, the bed indexes the part under it.
+where the last one was in the arm's frame: the arm draws the SAME straight line and the SAME corner
+move every segment, the bed indexes the part under it.
 
 Run from the repo root (test Klipper config loaded, hot ends hot):
 
-    python3 square_test.py T=0 SIDE=80 RF=10 E=12 L_H=0.8 P=0.8 --dry-run           # right arm
-    python3 square_test.py T=1 SIDE=80 RF=10 E=12 L_H=0.6 --dry-run                 # left arm
-    python3 square_test.py T=2 SIDE=80 RF=10 VB=0.55 L_H=0.6 LOOPS=20 --dry-run     # both arms
-    python3 square_test.py T=0 SIDE=80 RF=10 VB=0.55 V_LINE=20 LOOPS=20 --dry-run     # corners by VB at RF,
-                                                                                     # straights at 20 mm/s
-    python3 square_test.py T=0 SIDE=80 RF=10 E=12 LOOPS=2 --cold                     # moves only, no plastic:
-                                                                                     # check BED_DIR first!
-    python3 square_test.py T=0 SIDE=80 RF=10 E_MIN=8 E_MAX=16 WAVE_T=1 SHAPE=square LOOPS=10
+    python3 square_test.py T=0 SIDE=80 RF=10 L_H=0.6 LOOPS=20 --dry-run                 # right arm, defaults
+    python3 square_test.py T=0 SIDE=80 RF=10 L_H=0.6 V_LINE=8 VB=0.4 LOOPS=20            # slower corners
+    python3 square_test.py T=2 SIDE=80 RF=10 L_H=0.6 V_LINE=8 VB=0.55 FLOW_K=1.3 LOOPS=20  # both arms
+    python3 square_test.py T=0 SIDE=80 RF=10 LOOPS=2 --cold                               # moves only
 
 Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys override the left.
     T       0 = right, 1 = left, 2 = both                                    (required)
     SIDE    outside side length of the square, mm (bead centreline)          (required)
     RF      fillet (corner) radius, mm, bead centreline                      (default 10)
     L_H     bead height (layer height), mm                                   (default 0.5)
-    E       filament speed, mm/s                  (required, unless E_MIN and E_MAX, or VB, are given)
-    VB      bed speed on the corners, rad/s. Without E: E is worked out so the bead is laid at that
-            speed on a fillet of radius RF (E = VB x RF x W x L_H / (filament area x FLOW_K)).
-            With E: the bed runs at VB on the corners and E runs as set (no throttling); the plan
-            reports how far the corner bead speed is from the one E would want
-    V_LINE  arm speed on the straights, mm/s. Default: the bead speed v that E gives (so E, bed and
-            arm all agree). Set it to run the straights faster or slower with E unchanged (no
-            throttling); the E to bed relationship then acts only on the corners. Capped by MAX_VT.
-    P       Z rise per loop of the outline, mm                     (default n x L_H, n = arms used)
-    W       line width, mm                                   (default 1.0, both arms)
+    W       line width, mm                                                   (default 1.0, both arms)
     FLOW_K  measured / planned plastic from a test print
+    V_LINE  arm speed on the straights, mm/s. Pick one the arm starts and stops cleanly at (default 8)
+    VB      bed speed on the corners, rad/s (default V_LINE / RF: the fillet moves under the nozzle
+            at the same speed as the straights). Lower it to let the bed index cleanly; the extruder
+            slows with it, so the bead stays the same
+    The filament rate is never set directly: it is W x L_H / (filament area x FLOW_K) mm of filament
+    per mm of bead, times the speed of whatever is moving (arm on the straights, bed x RF on the
+    corners, measured). E=... is accepted only as a way of giving V_LINE (the speed that E would lay
+    the bead at).
+    P       Z rise per loop of the outline, mm                     (default n x L_H, n = arms used)
     Z0      zero height, nozzle touching the disc            (defaults as cylinder_test.py)
-    E_L, W_L, FLOW_K_L, Z0_L   left arm in T=2 (same nozzle: same E, W, FLOW_K as the right unless set)
+    W_L, FLOW_K_L, Z0_L   left arm in T=2 (same nozzle: same W and FLOW_K as the right unless set)
     MAX_VB  bed speed ceiling on the corners, rad/s                           (default 3.1416)
     MAX_VT  arm speed ceiling, % of 100 mm/s                                 (default 100)
     FIRST   first layer above Z0, mm                                         (default L_H)
     SPIRAL  spiral loops (default 3);  LOOPS  total loops;  HEIGHT  wall height above the first
             layer, mm (sets SPIRAL = HEIGHT / P, wins over LOOPS)
     RAMP_STEPS, RAMP_EVERY   ease into the spiral exactly as cylinder_test.py (5 steps every 0.125 loop)
-    E_MIN, E_MAX, WAVE_T or WAVES_PER_LOOP   throttle between E_MIN and E_MAX (every arm used)
-    SHAPE   throttle waveform: sine, square or triangle                      (default sine)
     PRIME_MM, PRIME_S, PRIME_Z   prime move-in mm, time s, start height above Z0 mm (15, 5, 2)
-            The prime runs in along the line of the first side (a tangent tail outside the fillet).
+            The prime runs in along the line of the first side at half the straight-line rate.
     FIL     filament diameter, mm (1.75);  MIN_TEMP  refuse below this, C (190)
     ANGLE, CX, CY (and _L)   print direction and turntable centre in each arm's frame (as cylinder):
             the arm's side of the square sits at SIDE/2 from the axis in direction ANGLE
@@ -62,7 +57,8 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
     CORNER_LEAD_S  how far ahead of the measured bed angle the arm is sent on corners, s (0.15)
     BLEND   blend radius for the streamed corner moves, mm                   (default 2)
     STOP_LEAD  stop the bed this many degrees before the corner's 90 (its deceleration), deg (0);
-            the arm finishes any part of the fillet the bed did not give
+            the arm finishes any part of the fillet the bed did not give, at V_LINE
+    RATE_MIN  below this filament rate (mm/s) the tool is switched off rather than crawled (0.1)
 
 Flags: --dry-run (plan only), --sim (cell studio's simulators), --yes (no prompt),
        --cold (no extrusion, hot-end check skipped: arm and bed moves only).
@@ -74,18 +70,17 @@ Geometry (per arm, in that arm's frame; C = turntable centre, n = unit vector at
     corner:    C + R n + Rot(BED_DIR x beta) (d n + dir d t),  beta 0..90 deg = measured bed angle
                since the corner began. A quarter circle of radius d sqrt2 about C + R n; in the BED
                frame it is the fillet of radius R about the corner centre.
-    Arm speed on the corner = d sqrt2 x omega with omega = v / R (or VB); capped by MAX_VT (then the
-    bed is slowed to match). The extruders run at E throughout; EXTRUDE_SCALE is only ever sent for a
-    requested E_MIN/E_MAX wave.
+    Arm speed on the corner = d sqrt2 x VB; capped by MAX_VT (then the bed is slowed to match).
 Sequence, with n arms:  1. Prime (bed still).  2. Flat: 1/n loop at the first layer (two arms:
 together the full outline).  3. Spiral: Z rises P per loop.  4. Final flat 1/n loop.
 5. Extruders off.  6. Lift 10 mm and park.  7. Bed stopped.
 Corner to straight: the bed is stopped one tick early and the arm keeps following the measured
-bed angle through the bed's deceleration; the fillet's last part (if the bed stops short) and the
-next side are then queued behind it with a blend radius, so the arm never parks. STOP_LEAD stops
-the bed earlier still, the arm finishing more of the fillet with the bed at rest.
+bed angle through the bed's deceleration, the extruder slowing with it; the fillet's last part (if
+the bed stops short) and the next side are then queued behind it with a blend radius.
+Extruder commands are EXTRUDE_ON T= RATE= (re-sent whenever the rate changes, and at least every
+2 s for the watchdog) and EXTRUDE_OFF; EXTRUDE_SCALE is never used.
 Nothing is commanded below an arm's Z0. Ctrl+C aborts: extruders off, bed stop, arms lift.
-Every run logs to runs/square_test_*.csv.
+Every run logs to runs/square_test_*.csv (commanded rate per arm included).
 """
 from __future__ import annotations
 
@@ -98,12 +93,14 @@ import time
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [ROOT, os.path.join(ROOT, "src"), os.path.join(ROOT, "scripts")]
 
-from cylinder_test import (Abort, BASE_ARM_SPEED, COMMON, DEFAULTS, NOZZLE, PARK, SAFE_Z, SHAPES,  # noqa: E402
+from cylinder_test import (Abort, BASE_ARM_SPEED, COMMON, DEFAULTS, NOZZLE, PARK, SAFE_Z,  # noqa: E402
                            SIDE, WATCHDOG_S, Cell, abort, ramp_loss, report_deviation, spiral_dz)
 
-SQUARE_COMMON = {**COMMON, "RF": 10.0, "BED_DIR": -1.0, "CORNER_LEAD_S": 0.15, "BLEND": 2.0, "STOP_LEAD": 0.0}
+SQUARE_COMMON = {**COMMON, "RF": 10.0, "BED_DIR": -1.0, "CORNER_LEAD_S": 0.15, "BLEND": 2.0, "STOP_LEAD": 0.0,
+                 "V_LINE": 8.0, "RATE_MIN": 0.1}
 TICK = 0.05                      # main loop period, s
 SETTLE_S = 3.0                   # max wait for the bed to come to rest after a corner
+RATE_TOL = 0.03                  # re-send EXTRUDE_ON when the rate moves by more than this fraction
 
 
 # ----------------------------------------------------------------------
@@ -114,38 +111,23 @@ def parse(argv):
             flags.add(a)
         elif "=" in a:
             k, v = a.split("=", 1)
-            k = k.strip().upper()
-            if k == "SHAPE":
-                v = v.strip().lower()
-                if v not in SHAPES:
-                    raise SystemExit(f"SHAPE must be one of {', '.join(SHAPES)}")
-                vals[k] = v
-            else:
-                vals[k] = float(v)
+            vals[k.strip().upper()] = float(v)
         else:
             raise SystemExit(f"Not understood: {a!r} (use KEY=value, e.g. SIDE=80)")
-    known = {"T", "SIDE", "RF", "L_H", "E", "P", "W", "FLOW_K", "Z0", "E_L", "W_L", "FLOW_K_L", "Z0_L", "VB",
-             "MAX_VB", "MAX_VT", "FIRST", "SPIRAL", "LOOPS", "HEIGHT", "E_MIN", "E_MAX", "WAVE_T", "WAVES_PER_LOOP",
-             "SHAPE", "PRIME_MM", "PRIME_S", "PRIME_Z", "FIL", "MIN_TEMP", "ANGLE", "CX", "CY", "ANGLE_L", "CX_L",
-             "CY_L", "DR", "DR_L", "RAMP_STEPS", "RAMP_EVERY", "BED_DIR", "CORNER_LEAD_S", "BLEND", "STOP_LEAD",
-             "V_LINE"}
+    known = {"T", "SIDE", "RF", "L_H", "E", "P", "W", "FLOW_K", "Z0", "W_L", "FLOW_K_L", "Z0_L", "VB", "V_LINE",
+             "MAX_VB", "MAX_VT", "FIRST", "SPIRAL", "LOOPS", "HEIGHT", "PRIME_MM", "PRIME_S", "PRIME_Z", "FIL",
+             "MIN_TEMP", "ANGLE", "CX", "CY", "ANGLE_L", "CX_L", "CY_L", "DR", "DR_L", "RAMP_STEPS", "RAMP_EVERY",
+             "BED_DIR", "CORNER_LEAD_S", "BLEND", "STOP_LEAD", "RATE_MIN"}
     unknown = sorted(set(vals) - known)
     if unknown:
-        raise SystemExit("Unknown setting(s): " + ", ".join(unknown) + "  (check the spelling; see the list at the top)")
-    if "E" not in vals and "E_MIN" in vals and "E_MAX" in vals:
-        vals["E"] = (vals["E_MIN"] + vals["E_MAX"]) / 2
-    vals.setdefault("L_H", 0.5)
-    rf = vals.get("RF", SQUARE_COMMON["RF"])
-    if "VB" in vals and "E" not in vals:                   # corner bed speed alone: work out E from it
-        if "T" not in vals:
-            raise SystemExit("VB needs T")
-        lead = 0 if int(vals["T"]) in (0, 2) else 1
-        w = vals.get("W", DEFAULTS[lead]["W"])
-        fil = math.pi * (vals.get("FIL", COMMON["FIL"]) / 2) ** 2
-        vals["E"] = vals["VB"] * rf * w * vals["L_H"] / (fil * vals.get("FLOW_K", COMMON["FLOW_K"]))
-    missing = [k for k in ("T", "SIDE", "E") if k not in vals]
+        hint = ""
+        if {"E_MIN", "E_MAX", "WAVE_T", "WAVES_PER_LOOP", "SHAPE", "E_L"} & set(unknown):
+            hint = "  (the extruder rate follows the motion here; waves and E_L are cylinder_test.py settings)"
+        raise SystemExit("Unknown setting(s): " + ", ".join(unknown) + hint)
+    missing = [k for k in ("T", "SIDE") if k not in vals]
     if missing:
         raise SystemExit("Missing: " + ", ".join(missing) + "\n\n" + __doc__.split("Values")[0])
+    vals.setdefault("L_H", 0.5)
     t = int(vals["T"])
     if t not in (0, 1, 2):
         raise SystemExit("T must be 0 (right), 1 (left) or 2 (both)")
@@ -172,15 +154,10 @@ def parse(argv):
         if vals["LOOPS"] < g["C0"] + g["C1"]:
             raise SystemExit("LOOPS is too small for the opening and closing flat loops")
         g["SPIRAL"] = vals["LOOPS"] - g["C0"] - g["C1"]
-    g["WAVE"] = "E_MIN" in vals and "E_MAX" in vals
-    if g["WAVE"]:
-        if not 0 < g["E_MIN"] <= g["E_MAX"]:
-            raise SystemExit("Need 0 < E_MIN <= E_MAX")
-        g.setdefault("WAVE_T", 1.0)
-        g.setdefault("SHAPE", "sine")
 
     arms = {}
     first = tools[0]
+    fil_area = math.pi * (g["FIL"] / 2) ** 2
     for tl in tools:
         sfx = "_L" if (t == 2 and tl == 1) else ""
         a = dict(DEFAULTS[tl])
@@ -189,22 +166,31 @@ def parse(argv):
                 if key in vals:
                     a[key] = vals[key]
             a["FLOW_K"] = g["FLOW_K"]
-            a["E"] = g["E"]
         else:
-            for key in ("W", "Z0", "CX", "CY", "ANGLE", "FLOW_K", "E", "DR"):
+            for key in ("W", "Z0", "CX", "CY", "ANGLE", "FLOW_K", "DR"):
                 if key + "_L" in vals:
                     a[key] = vals[key + "_L"]
-            for key in ("W", "FLOW_K", "E"):
+            for key in ("W", "FLOW_K"):
                 if key + "_L" not in vals:
                     a[key] = arms[first][key]
         dr = a.get("DR", 0.0)
         a["S"] = g["SIDE"] / 2 + dr                       # half side, bead centreline
         a["R"] = g["RF"] + dr                             # fillet radius, bead centreline
         a["D"] = a["S"] - a["R"]                          # half length of a straight
+        a["K"] = a["W"] * g["L_H"] / (fil_area * a["FLOW_K"])   # mm of filament per mm of bead
         a["T"], a["side"], a["nozzle"] = tl, SIDE[tl], NOZZLE[tl]
         arms[tl] = a
     g["arms"] = arms
     lead = arms[first]
+    if "E" in vals:                                        # E given: read it as the straight-line speed
+        if "V_LINE" in vals:
+            raise SystemExit("Give V_LINE or E, not both (E only sets the speed the bead would be laid at)")
+        g["V_LINE"] = vals["E"] / lead["K"]
+    if g["V_LINE"] <= 0:
+        raise SystemExit("V_LINE must be above 0")
+    g.setdefault("VB", g["V_LINE"] / lead["R"])           # same bead speed on the corners unless told otherwise
+    if g["VB"] <= 0:
+        raise SystemExit("VB must be above 0")
     g["L"] = 8 * lead["D"] + 2 * math.pi * lead["R"]     # outline length per loop (lead arm)
     return g, flags
 
@@ -274,31 +260,18 @@ def plan(g):
     """Every number the run will use, worked out before anything moves."""
     fil_area = math.pi * (g["FIL"] / 2) ** 2
     lead = g["arms"][min(g["arms"])]
-    flow = lead["E"] * fil_area * lead["FLOW_K"]
-    v_surface = flow / (lead["W"] * g["L_H"])                 # bead speed, straights and corners
     arm_speed = BASE_ARM_SPEED * g["MAX_VT"] / 100
     warn = []
-    v_line = g.get("V_LINE", v_surface)                       # arm speed on the straights
-    if v_line <= 0:
-        raise SystemExit("V_LINE must be above 0")
+    v_line = g["V_LINE"]
     if v_line > arm_speed:
-        raise SystemExit(f"The straights need the arm at {v_line:.1f} mm/s, above the arm ceiling "
-                         f"{arm_speed:.0f} mm/s (MAX_VT). Lower {'V_LINE' if 'V_LINE' in g else 'E'} or raise MAX_VT.")
-    line_efac = v_line / v_surface                            # straights: bead speed relative to E's (reported only)
-    if abs(line_efac - 1) > 1e-6:
-        warn.append(f"Straights: arm {v_line:.1f} mm/s against E's {v_surface:.1f}: about {1 / line_efac:.2f}x the "
-                    "plastic per mm there (no throttling; E runs as set).")
-    omega_needed = v_surface / lead["R"]                      # cylinder relationship at R = fillet radius
+        raise SystemExit(f"V_LINE {v_line:.1f} mm/s is above the arm ceiling {arm_speed:.0f} mm/s (MAX_VT).")
     corner_arm_per_rad = max(a["D"] for a in g["arms"].values()) * math.sqrt(2)
-    omega_want = g["VB"] if "VB" in g else omega_needed       # VB with E: the bed speed you asked for
-    omega = min(omega_want, g["MAX_VB"], arm_speed / corner_arm_per_rad)
-    if omega < omega_want - 1e-9:
+    omega = min(g["VB"], g["MAX_VB"], arm_speed / corner_arm_per_rad)
+    if omega < g["VB"] - 1e-9:
         why = "MAX_VB" if omega == g["MAX_VB"] else f"the arm's {arm_speed:.0f} mm/s ceiling on the corner move"
-        warn.append(f"Corners: bed capped at {omega:.3f} rad/s by {why} (asked {omega_want:.3f}).")
-    if abs(omega - omega_needed) > 1e-9:
-        warn.append(f"Corners: bed {omega:.3f} rad/s moves the bead at {omega * lead['R']:.1f} mm/s against E's "
-                    f"{v_surface:.1f}: about {v_surface / (omega * lead['R']):.2f}x the plastic per mm there "
-                    "(no throttling; E runs as set).")
+        warn.append(f"Corners: bed capped at {omega:.3f} rad/s by {why} (asked {g['VB']:.3f}). "
+                    "The extruder follows the bed, so the bead is unchanged; the corners just take longer.")
+    v_corner = omega * lead["R"]                              # bead speed on the fillet at full bed speed
     if abs(g["P"] - g["NL"] * g["L_H"]) > 1e-6:
         warn.append(f"P {g['P']:g} is not n x L_H = {g['NL'] * g['L_H']:g}: beads will be "
                     f"{g['P'] / g['NL']:.2f} mm tall but the flow is sized for {g['L_H']:g} mm.")
@@ -311,10 +284,12 @@ def plan(g):
     per = {}
     for tl, a in g["arms"].items():
         z_first = a["Z0"] + g["FIRST"]
-        e_peak = (g["E_MAX"] / g["E"]) * a["E"] if g["WAVE"] else a["E"]
-        if e_peak * fil_area > 30:
-            warn.append(f"{a['side']}: {e_peak * fil_area:.0f} mm3/s (E {e_peak:.1f}) is above what a Revo HF "
-                        "usually melts (about 30); expect under-extrusion there.")
+        rate_line = a["K"] * v_line                           # filament mm/s on the straights
+        rate_corner = a["K"] * a["R"] * omega                 # ... on the corners at full bed speed
+        peak = max(rate_line, rate_corner) * fil_area * a["FLOW_K"]
+        if peak > 30:
+            warn.append(f"{a['side']}: {peak:.0f} mm3/s is above what a Revo HF usually melts (about 30); "
+                        "expect under-extrusion. Lower V_LINE (and VB).")
         if g["L_H"] > 0.75 * a["nozzle"] + 1e-9:
             warn.append(f"{a['side']}: L_H {g['L_H']:g} mm is over 75 % of its {a['nozzle']:g} mm nozzle "
                         f"(max {0.75 * a['nozzle']:.2f}).")
@@ -328,12 +303,13 @@ def plan(g):
         per[tl] = {"z_first": z_first, "z_top": z_first + height(g, total_loops), "start": start, "end": end,
                    "corner_far": corner_pt(g, a, 45.0, 0, 45.0), "prime_xy": prime_xy,
                    "prime_z": a["Z0"] + g["PRIME_Z"], "prime_speed": prime_dist / g["PRIME_S"],
-                   "flow": a["E"] * fil_area * a["FLOW_K"], "corner_speed": a["D"] * math.sqrt(2) * omega}
-    return {"fil_area": fil_area, "flow": flow, "v_surface": v_surface, "v_line": v_line, "line_efac": line_efac,
-            "omega": omega, "omega_needed": omega_needed, "corner_efac": omega / omega_needed, "t_straight": t_straight, "t_corner": t_corner, "loop_s": loop_s,
-            "total_loops": total_loops, "arm_speed": arm_speed, "warnings": warn, "per": per,
-            "filament_mm": sum(a["E"] for a in g["arms"].values())
-            * (total_loops * 4 * (t_straight * line_efac + t_corner * omega / omega_needed) + g["PRIME_S"] / 2)}
+                   "rate_line": rate_line, "rate_corner": rate_corner,
+                   "flow": rate_line * fil_area * a["FLOW_K"], "corner_speed": a["D"] * math.sqrt(2) * omega}
+    fil_mm = sum(q["rate_line"] * t_straight * 4 + q["rate_corner"] * t_corner * 4 for q in per.values())
+    return {"fil_area": fil_area, "v_line": v_line, "v_corner": v_corner, "omega": omega,
+            "t_straight": t_straight, "t_corner": t_corner, "loop_s": loop_s, "total_loops": total_loops,
+            "arm_speed": arm_speed, "warnings": warn, "per": per,
+            "filament_mm": fil_mm * total_loops + sum(q["rate_line"] / 2 for q in per.values()) * g["PRIME_S"]}
 
 
 def show(g, k):
@@ -342,29 +318,27 @@ def show(g, k):
     print(f"\nRounded square test: {names}, {'layered' if g['N'] == 2 else 'one arm'}")
     print(f"  Outline {g['SIDE']:g} mm square, fillet R {g['RF']:g}: straights {2 * lead['D']:.1f} mm, "
           f"corners {math.pi / 2 * lead['R']:.1f} mm, loop {g['L']:.1f} mm")
-    print(f"  Bead {k['v_surface']:.1f} mm/s at E.  Corners: bed {k['omega']:.3f} rad/s "
-          f"({math.degrees(k['omega']):.1f} deg/s) at R {lead['R']:g} [ceiling {g['MAX_VB']:.3f}], "
-          f"{k['t_corner']:.1f} s per corner.  Straights: arm {k['v_line']:.1f} mm/s, bed still, "
-          f"{k['t_straight']:.1f} s per side"
-          + ".  Extruders at E throughout (no throttling)")
+    print(f"  Straights: arm {k['v_line']:.1f} mm/s, bed still, {k['t_straight']:.1f} s per side.  "
+          f"Corners: bed {k['omega']:.3f} rad/s ({math.degrees(k['omega']):.1f} deg/s) [ceiling {g['MAX_VB']:.3f}], "
+          f"bead {k['v_corner']:.1f} mm/s at R {lead['R']:g}, {k['t_corner']:.1f} s per corner")
+    print("  Extruder follows the motion: rate = bead per mm x arm speed on the straights, x RF x measured bed "
+          "speed on the corners")
     for tl, a in g["arms"].items():
         q = k["per"][tl]
         kk = f" x FLOW_K {a['FLOW_K']:g}" if a["FLOW_K"] != 1 else ""
-        print(f"  {a['side']:5}: E {a['E']:.2f} mm/s{kk} -> {q['flow']:.1f} mm3/s, bead {a['W']:g} x {g['L_H']:g} mm;"
+        print(f"  {a['side']:5}: bead {a['W']:g} x {g['L_H']:g} mm{kk} = {a['K']:.3f} mm filament per mm;"
+              f"  rate {q['rate_line']:.2f} mm/s on the straights ({q['flow']:.1f} mm3/s), "
+              f"{q['rate_corner']:.2f} on the corners at full bed speed;"
               f"  Z0 {a['Z0']:.2f}, first {q['z_first']:.2f}, top {q['z_top']:.2f}")
         print(f"         side X {q['start'][0]:.1f} Y {q['start'][1]:.1f} -> X {q['end'][0]:.1f} Y {q['end'][1]:.1f};"
               f"  corner move out to X {q['corner_far'][0]:.1f} Y {q['corner_far'][1]:.1f} at {q['corner_speed']:.0f} mm/s")
     print(f"  1. Prime: {g['PRIME_MM']:g} mm move-in along the first side over {g['PRIME_S']:g} s from "
-          f"{g['PRIME_Z']:g} mm above Z0; bed still, extruders at half E")
+          f"{g['PRIME_Z']:g} mm above Z0; bed still, extruders at half the straight-line rate")
     print(f"  2. Flat: {g['C0']:g} loop at the first layer" + (" (each arm half the outline)" if g["N"] == 2 else ""))
     ramp = (f", easing in over {g['RAMP_STEPS'] * g['RAMP_EVERY']:g} loop ({g['P'] / g['RAMP_STEPS']:.2f} mm/loop "
             f"more every {g['RAMP_EVERY']:g} loop)" if g["RAMP_STEPS"] > 1 else "")
     print(f"  3. Spiral: {g['SPIRAL']:g} loops, rising {g['P']:g} mm/loop{ramp}")
     print(f"  4. Final flat: {g['C1']:g} loop at the top")
-    if g["WAVE"]:
-        how = (f"{g['WAVES_PER_LOOP']:g} waves per loop, locked to the outline" if "WAVES_PER_LOOP" in g
-               else f"period {g['WAVE_T']:g} s ({k['loop_s'] / g['WAVE_T']:.1f} waves per loop)")
-        print(f"  Throttle: {g['SHAPE']}, E x {g['E_MIN'] / g['E']:.2f} to x {g['E_MAX'] / g['E']:.2f}, {how}")
     print(f"  5-7. Extruders off after {k['total_loops']:g} loops, lift 10 mm, park, bed stopped")
     print(f"  Bed turns +{math.degrees(k['omega']):.1f} deg/s on corners; BED_DIR {g['BED_DIR']:+d} "
           f"(outline traversed {'anticlockwise' if g['DIR'] > 0 else 'clockwise'} in the arm's frame)")
@@ -377,24 +351,40 @@ def show(g, k):
 # ----------------------------------------------------------------------
 def run(g, k, cell, cold=False):
     arms, per = g["arms"], k["per"]
-    rate = {tl: a["E"] / 2 for tl, a in arms.items()}
     v = k["arm_speed"]
     lead = arms[min(arms)]
     L = g["L"]
+    rate = {tl: 0.0 for tl in arms}        # filament mm/s currently commanded per tool
+    sent = {tl: None for tl in arms}       # what Klipper was last told (None = off)
+    rate_lock = threading.Lock()
 
     def gcode(s):
         if not cold:
             return cell.gcode(s)
 
+    def set_rate(tl, r, force=False):
+        """EXTRUDE_ON at r mm/s (or EXTRUDE_OFF below RATE_MIN), only when it changed by RATE_TOL."""
+        with rate_lock:
+            rate[tl] = r
+            if r < g["RATE_MIN"]:
+                if sent[tl] is not None or force:
+                    gcode(f"EXTRUDE_OFF T={tl}")
+                    sent[tl] = None
+                return
+            if force or sent[tl] is None or abs(r - sent[tl]) > RATE_TOL * sent[tl]:
+                gcode(f"EXTRUDE_ON T={tl} RATE={r:.3f} TIMEOUT={WATCHDOG_S}")
+                sent[tl] = r
+
+    def keepalive():                       # the watchdog wants EXTRUDE_ON at least every TIMEOUT/2
+        while not cell.stop_keep.wait(WATCHDOG_S / 2.5):
+            for tl in arms:
+                if sent[tl] is not None:
+                    set_rate(tl, rate[tl], force=True)
+
     def guard(tl, z):
         if z < arms[tl]["Z0"] - 1e-6:
             raise Abort(f"Refused: {arms[tl]['side']} Z {z:.2f} is below its zero height {arms[tl]['Z0']:.2f}")
         return z
-
-    def keepalive():
-        while not cell.stop_keep.wait(WATCHDOG_S / 2.5):
-            for tl in arms:
-                gcode(f"EXTRUDE_ON T={tl} RATE={rate[tl]:.3f} TIMEOUT={WATCHDOG_S}")
 
     def move(tl, xy, z, speed, wait, blend=None):
         r, pt, yw = cell.orient[tl]
@@ -422,10 +412,10 @@ def run(g, k, cell, cold=False):
         cell.move(tl, px, py, guard(tl, per[tl]["prime_z"] + 20), speed=v, wait=True)
         cell.move(tl, px, py, guard(tl, per[tl]["prime_z"]), speed=min(v, 20), wait=True)
 
-    # 1. Prime: bed still, half E, run in along the line of the first side
-    print(f"1. Prime: bed still, extruders at half E, moving in over {g['PRIME_S']:g} s")
+    # 1. Prime: bed still, half the straight-line rate, run in along the line of the first side
+    print(f"1. Prime: bed still, extruders at half the straight-line rate, moving in over {g['PRIME_S']:g} s")
     for tl in arms:
-        gcode(f"EXTRUDE_ON T={tl} RATE={rate[tl]:.3f} TIMEOUT={WATCHDOG_S}")
+        set_rate(tl, per[tl]["rate_line"] / 2, force=True)
     threading.Thread(target=keepalive, daemon=True).start()
     for tl in arms:
         move(tl, per[tl]["start"], per[tl]["z_first"], per[tl]["prime_speed"], wait=False)
@@ -440,16 +430,12 @@ def run(g, k, cell, cold=False):
         print("  (an arm did not report arrival within prime time + 3 s; carrying on)")
 
     # 2-4. The outline, segment by segment: straight (bed still), corner (bed on), x4 per loop
-    for tl, a in arms.items():
-        rate[tl] = a["E"]
-        gcode(f"EXTRUDE_ON T={tl} RATE={rate[tl]:.3f} TIMEOUT={WATCHDOG_S}")
     a0 = cell.tt.get_angle()
     live = {"rev": 0.0, "seg": "", "bed": 0.0, "z": {tl: per[tl]["z_first"] for tl in arms},
-            "xy": {tl: per[tl]["start"] for tl in arms}, "dev": {tl: [] for tl in arms},
-            "efac": {tl: 1.0 for tl in arms}}
+            "xy": {tl: per[tl]["start"] for tl in arms}, "dev": {tl: [] for tl in arms}, "rate": rate}
     os.makedirs(os.path.join(ROOT, "runs"), exist_ok=True)
     log_path = os.path.join(ROOT, "runs", time.strftime("square_test_%Y%m%d_%H%M%S.csv"))
-    threading.Thread(target=throttle, args=(g, cell, live, log_path, cold), daemon=True).start()
+    threading.Thread(target=logger, args=(g, cell, live, log_path, cold), daemon=True).start()
     print(f"2. Flat loop: start angle {a0:.1f} deg, straights {k['v_line']:.1f} mm/s;  logging to {log_path}")
     s_end = k["total_loops"] * L
     omega_dps = math.degrees(k["omega"])
@@ -465,12 +451,13 @@ def run(g, k, cell, cold=False):
                   + f"  (loop {s / L:.2f})")
             phase = ph
         if seg % 2 == 0:
-            # ---- straight: bed still, one move along the side, Z climbing linearly
+            # ---- straight: bed still, one move along the side at V_LINE, extruder at the line rate
             length = min(2 * lead["D"], s_end - s)
             frac = length / (2 * lead["D"])
             live["seg"] = f"side {kq % 4}"
             targets = {}
             for tl, a in arms.items():
+                set_rate(tl, per[tl]["rate_line"])
                 xy = straight_pt(g, a, frac * 2 * a["D"], kq, total)
                 targets[tl] = (xy, z_at(tl, s + length))
                 move(tl, xy, targets[tl][1], k["v_line"], wait=False)
@@ -492,7 +479,8 @@ def run(g, k, cell, cold=False):
                 time.sleep(TICK)
             s += length
         else:
-            # ---- corner: bed on; the arm follows the MEASURED bed angle round the corner move
+            # ---- corner: bed on; the arm follows the MEASURED bed angle round the corner move and
+            #      the extruder rate follows the MEASURED bed speed (ramps up, ramps down, stops)
             arc = math.pi / 2 * lead["R"]
             b_end = 90.0 * min(1.0, (s_end - s) / arc)       # a partial corner if the print ends in it
             live["seg"] = f"corner {kq % 4}"
@@ -502,20 +490,22 @@ def run(g, k, cell, cold=False):
             last = {tl: None for tl in arms}
             stopped, t_stop = False, None
             prev_total, prev_t = total, time.monotonic()
+            w_filt = 0.0                                      # measured bed speed, deg/s, lightly smoothed
             while True:
                 now_t = time.monotonic()
                 total = cell.tt.get_angle() - a0
                 b = max(0.0, total - t_begin)                  # fillet progress = bed progress
                 live["bed"] = total
-                w_meas = (total - prev_total) / max(now_t - prev_t, 1e-3)   # bed speed as measured, deg/s
+                w_raw = (total - prev_total) / max(now_t - prev_t, 1e-3)
+                w_filt = 0.5 * w_filt + 0.5 * max(0.0, w_raw)
+                for tl, a in arms.items():                    # extruder proportional to the bed
+                    set_rate(tl, a["K"] * a["R"] * math.radians(w_filt))
                 if not stopped and b + omega_dps * TICK >= b_end - g["STOP_LEAD"]:
                     cell.tt.stop_rotation()                    # from here the arm keeps following the bed
                     stopped, t_stop = True, now_t              # through its deceleration, no parking
                 if stopped and (abs(total - prev_total) < 0.01 or now_t - t_stop > SETTLE_S):
                     break                                      # bed at rest (or SETTLE_S is up)
-                # send the arm a little ahead of the bed: by the commanded speed while the bed is
-                # driven, by the measured speed once it is decelerating
-                lead_deg = (w_meas if stopped else omega_dps) * g["CORNER_LEAD_S"]
+                lead_deg = (w_filt if stopped else omega_dps) * g["CORNER_LEAD_S"]
                 bl = min(b + max(0.0, lead_deg), b_end)
                 for tl, a in arms.items():
                     xy = corner_pt(g, a, bl, kq, total + (bl - b))
@@ -531,11 +521,13 @@ def run(g, k, cell, cold=False):
             b_bed = max(0.0, min(b_end, total - t_begin))
             if b_end - b_bed > 0.05:                          # bed stopped short: the arm finishes the fillet alone
                 print(f"  bed stopped {b_end - b_bed:.2f} deg short on corner {kq % 4}; the arm finishes the fillet")
+                for tl in arms:
+                    set_rate(tl, per[tl]["rate_line"])        # arm moving at V_LINE: line rate
                 n_pts = max(1, int(math.ceil((b_end - b_bed) / 90.0 * arc / 0.5)))
                 for i in range(1, n_pts + 1):
                     b = b_bed + (b_end - b_bed) * i / n_pts
                     for tl, a in arms.items():
-                        move(tl, corner_pt(g, a, b, kq, total), z_at(tl, s + arc * b / 90.0), k["v_surface"],
+                        move(tl, corner_pt(g, a, b, kq, total), z_at(tl, s + arc * b / 90.0), k["v_line"],
                              wait=False, blend=g["BLEND"])
                     live["rev"] = (s + arc * b / 90.0) / L
             else:
@@ -554,9 +546,6 @@ def run(g, k, cell, cold=False):
     # 5-7
     cell.stop_keep.set()
     gcode("EXTRUDE_OFF")
-    if g["WAVE"]:
-        for tl in arms:
-            gcode(f"EXTRUDE_SCALE T={tl} PERCENT=100")
     print(f"5. Extruders off after {s / L:.3f} loops ({seg} segments)")
     report_deviation(g, live)
     print("6. Move away")
@@ -568,36 +557,19 @@ def run(g, k, cell, cold=False):
     print("7. Bed stopped. Done.")
 
 
-def throttle(g, cell, live, log_path, cold):
-    """10 Hz: flow scale for the wave (if any); log time, loop, segment, bed angle, Z and flow."""
+def logger(g, cell, live, log_path, cold):
+    """10 Hz: log time, loop, segment, bed angle, commanded Z and rate, reported arm position."""
     arms = g["arms"]
-    amp = (g["E_MAX"] - g["E_MIN"]) / 2 / g["E"] if g["WAVE"] else 0.0
     t0 = time.monotonic()
-    sent = {tl: None for tl in arms}
     with open(log_path, "w", encoding="utf-8") as f:
-        f.write("t_s,loop,segment,bed_deg,scale_pct," + ",".join(
-            f"z_cmd_{s},x_act_{s},y_act_{s},z_act_{s},dz_{s},dxy_{s},e_{s}"
+        f.write("t_s,loop,segment,bed_deg," + ",".join(
+            f"z_cmd_{s},x_act_{s},y_act_{s},z_act_{s},dz_{s},dxy_{s},rate_{s}"
             for s in (arms[t]["side"] for t in arms))
             + "," + ",".join(f"temp_{arms[t]['side']}" for t in arms) + "\n")
         temps = {t: "" for t in arms}
         tick = 0
         while not cell.stop_keep.is_set():
             now = time.monotonic() - t0
-            if amp:
-                ph = (2 * math.pi * g["WAVES_PER_LOOP"] * live["rev"] if "WAVES_PER_LOOP" in g
-                      else 2 * math.pi * now / g["WAVE_T"])
-                scale = 1 + amp * SHAPES[g["SHAPE"]](ph)
-            else:
-                scale = 1.0
-            if amp and not cold:                           # EXTRUDE_SCALE only for a requested wave
-                for tl in arms:
-                    pct = round(100 * scale * live["efac"][tl], 1)
-                    if pct != sent[tl]:
-                        try:
-                            cell.gcode(f"EXTRUDE_SCALE T={tl} PERCENT={pct:.1f}")
-                            sent[tl] = pct
-                        except Exception as ex:
-                            print(f"  throttle command failed: {ex}")
             cols = []
             for t in arms:
                 try:
@@ -609,9 +581,9 @@ def throttle(g, cell, live, log_path, cold):
                     dxy = math.dist(p[:2], live["xy"][t])
                     live["dev"][t].append((live["rev"], dz, dxy))
                     cols.append(f"{live['z'][t]:.3f},{p[0]:.3f},{p[1]:.3f},{p[2]:.3f},{dz:.3f},{dxy:.3f},"
-                                f"{arms[t]['E'] * scale * live['efac'][t]:.3f}")
+                                f"{live['rate'][t]:.3f}")
                 else:
-                    cols.append(f"{live['z'][t]:.3f},,,,,,{arms[t]['E'] * scale * live['efac'][t]:.3f}")
+                    cols.append(f"{live['z'][t]:.3f},,,,,,{live['rate'][t]:.3f}")
             if tick % 10 == 0 and not cold:
                 for t in arms:
                     try:
@@ -619,7 +591,7 @@ def throttle(g, cell, live, log_path, cold):
                     except Exception:
                         temps[t] = ""
             cols = ",".join(cols) + "," + ",".join(temps[t] for t in arms)
-            f.write(f"{now:.3f},{live['rev']:.4f},{live['seg']},{live['bed']:.2f},{100 * scale:.1f},{cols}\n")
+            f.write(f"{now:.3f},{live['rev']:.4f},{live['seg']},{live['bed']:.2f},{cols}\n")
             tick += 1
             delay = t0 + tick * 0.1 - time.monotonic()
             if delay > 0:
