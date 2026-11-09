@@ -86,7 +86,8 @@ Corner to straight: the bed is stopped one tick early and the arm keeps followin
 bed angle through the bed's deceleration, the extruder slowing with it; the fillet's last part (if
 the bed stops short) and the next side are then queued behind it with a blend radius.
 Extruder commands are EXTRUDE_ON T= RATE= (re-sent whenever the rate changes, and at least every
-2 s for the watchdog) and EXTRUDE_OFF; EXTRUDE_SCALE is never used.
+2 s for the watchdog) and EXTRUDE_OFF. EXTRUDE_SCALE is reset to 100 for both tools at the start
+of every run (it is sticky in Klipper) and never used otherwise.
 Nothing is commanded below an arm's Z0. Ctrl+C aborts: extruders off, bed stop, arms lift.
 Every run logs to runs/square_test_*.csv (commanded rate per arm included).
 """
@@ -424,6 +425,8 @@ def run(g, k, cell, cold=False):
                 raise Abort(f"{a['side']} hot end is at {temp:.0f} C, below MIN_TEMP {g['MIN_TEMP']:.0f}. Heat it first "
                             f"(python3 extrude.py heat {a['side']} 215 --wait).")
     gcode("EXTRUDE_OFF")
+    for tl in (0, 1):                      # a stale EXTRUDE_SCALE from an earlier run would multiply every rate
+        gcode(f"EXTRUDE_SCALE T={tl} PERCENT=100")
     cell.tt.stop_rotation()
     incremental = bool(g["BED_MOVE"]) and hasattr(cell.tt, "rotate_relative")
     if g["BED_ACC"] > 0:
