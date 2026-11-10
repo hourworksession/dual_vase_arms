@@ -117,6 +117,22 @@ class _SimXArm:
             time.sleep(0.01)
         return 0
 
+    def set_mode(self, mode):
+        self.mode = mode
+        return 0
+
+    def set_state(self, state):
+        return 0
+
+    def set_servo_cartesian(self, mvpose, speed=None, mvacc=None, **_):
+        """Servo mode: go straight to the pose (the simulator teleports)."""
+        code = self._gate("servo")
+        if code:
+            return code
+        self.o._pose = [float(v) for v in mvpose[:6]]
+        WORLD.poses.setdefault(self.o.name, []).append((time.time(), tuple(self.o._pose)))
+        return 0
+
     def set_servo_angle(self, angle=None, speed=None, is_radian=False, wait=False, **_):
         code = self._gate("joint_move")
         if code:

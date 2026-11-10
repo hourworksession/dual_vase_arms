@@ -2,6 +2,7 @@
 
     python3 ui/web/server.py --sim            # simulators, no hardware
     python3 ui/web/server.py                  # the cell (config/settings.yaml)
+    python3 ui/web/server.py --servo          # arms streamed at 100 Hz in servo mode (smoother; firmware 1.6+)
     python3 ui/web/server.py --port 8080
 
 then open http://<cell pc>:8000 on any browser in the lab (a tablet works).
@@ -50,8 +51,9 @@ def log(msg):
 class Hub:
     """The one connection to the cell and the one running Player."""
 
-    def __init__(self, sim):
+    def __init__(self, sim, arm_mode="position"):
         self.sim = sim
+        self.arm_mode = arm_mode
         self.arms = {0: dict(DEFAULTS[0], T=0, side=SIDE[0]), 1: dict(DEFAULTS[1], T=1, side=SIDE[1])}
         self.cell = Cell({"arms": self.arms}, sim)
         self.player = None
@@ -71,7 +73,7 @@ class Hub:
         with self.lock:
             if self.player and self.player.running():
                 raise HTTPException(409, "something is already running; stop it first")
-            self.player = prg.Player(self.cell, p, z_floor=self.z_floor(), on_log=log)
+            self.player = prg.Player(self.cell, p, z_floor=self.z_floor(), on_log=log, arm_mode=self.arm_mode)
             self.last_program = p
             self.player.start()
             log(f"started: {p.name} ({p.total():.1f} s)")
@@ -89,7 +91,7 @@ class Hub:
         log("STOP: extruders off, bed stopped")
 
     def state(self):
-        st = {"sim": self.sim, "arms": {}, "bed": {"deg": None}, "program": self.player.status() if self.player else None,
+        st = {"sim": self.sim, "arm_mode": self.arm_mode, "arms": {}, "bed": {"deg": None}, "program": self.player.status() if self.player else None,
               "log": LOG[-30:]}
         try:
             st["bed"]["deg"] = round(self.cell.tt.get_angle(), 2)
@@ -319,10 +321,11 @@ def main(argv=None):
     global hub
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--sim", action="store_true", help="cell studio's simulators instead of the hardware")
+    ap.add_argument("--servo", action="store_true", help="stream arm poses at 100 Hz in xArm servo mode (firmware 1.6+) instead of queued moves")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--host", default="0.0.0.0")
     a = ap.parse_args(argv)
-    hub = Hub(a.sim)
+    hub = Hub(a.sim, "servo" if a.servo else "position")
     import uvicorn
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 

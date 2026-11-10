@@ -15,6 +15,16 @@ every couple of degrees. Anything can be previewed before it is run, because a p
 
 Players: `Player` drives a connected Cell (real or simulated) from a Program; `simulate()` walks a
 Program in pure maths and returns where every device is at each tick, for previews and tests.
+
+Two ways to drive the arms (Player(arm_mode=...)):
+    "position"  (default) each arm segment is one queued set_position with a blend radius, 20 Hz.
+                Robust, but each call is a planned move, so the path is a chain of short moves.
+    "servo"     xArm servo mode (set_mode(1), set_servo_cartesian): the Player interpolates along
+                the segment and streams a pose every 10 ms; the controller goes straight to each
+                one with no planning, so the motion is as smooth as the stream. Needs firmware
+                1.6 or later. The Player refuses a segment that would ask for more than
+                SERVO_MAX_STEP mm between two poses, and puts the arm back in position mode at
+                the end or on abort.
 """
 from __future__ import annotations
 
@@ -24,8 +34,10 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-TICK = 0.05                         # player period, s
-ARM_BLEND = 2.0                     # blend radius for queued arm moves, mm
+TICK = 0.05                         # player period in position mode, s (20 Hz)
+SERVO_TICK = 0.01                   # player period in servo mode, s (100 Hz)
+ARM_BLEND = 2.0                     # blend radius for queued arm moves, mm (never more than half a segment)
+SERVO_MAX_STEP = 2.0                # mm the nozzle may be asked to jump between two servo poses
 EXTRUDE_TIMEOUT_MARGIN = 1.0        # EXTRUDE_ON TIMEOUT = segment time + this, so the watchdog never cuts a segment
 KINDS = ("bed", "ext0", "ext1", "arm0", "arm1")
 
@@ -158,10 +170,16 @@ class Player:
     At the end: bed stopped, extruders off. stop() aborts the same way at once.
     Progress and the last applied values are in .status()."""
 
-    def __init__(self, cell, prog, z_floor=None, on_log=None):
+    def __init__(self, cell, prog, z_floor=None, on_log=None, arm_mode="position", tick=None):
+        if arm_mode not in ("position", "servo"):
+            raise ValueError("arm_mode must be 'position' or 'servo'")
         self.cell, self.prog = cell, prog
+        self.arm_mode = arm_mode
+        self.tick = tick or (SERVO_TICK if arm_mode == "servo" else TICK)
         self.z_floor = z_floor or {}                 # {"arm0": z0, "arm1": z0}: refuse targets below these
         self.log = on_log or (lambda s: None)
+        self._seg_from = {}                          # servo: where each arm segment started
+        self._servo_arms = []                        # tools switched into servo mode
         self._stop = threading.Event()
         self._thread = None
         self.t0 = None
@@ -203,6 +221,50 @@ class Player:
                 fn()
             except Exception as ex:
                 self.log(f"stop: {ex}")
+        for t in list(self._servo_arms):                 # back to position mode, always
+            try:
+                a = self.cell.arms[t].arm
+                a.set_mode(0)
+                a.set_state(0)
+            except Exception as ex:
+                self.log(f"arm{t}: could not leave servo mode: {ex}")
+        self._servo_arms = []
+
+    def _servo_on(self):
+        for kind in self.prog.tracks:
+            if not kind.startswith("arm"):
+                continue
+            t = self._tool(kind)
+            a = self.cell.arms[t].arm
+            if not hasattr(a, "set_servo_cartesian"):
+                raise RuntimeError(f"arm{t}: this SDK/firmware has no set_servo_cartesian (needs 1.6+)")
+            a.set_mode(1)
+            a.set_state(0)
+            time.sleep(0.1)
+            self._servo_arms.append(t)
+            self._seg_from[kind] = tuple(self.cell.pose(t)[:3])
+
+    def _servo_pose(self, kind, seg, idx, into):
+        """Pose on the current segment at time `into`, and the check that the step is small."""
+        if self.idx[kind] != idx:                         # segment changed: it starts where the last one ended
+            self.idx[kind] = idx
+            self.applied[kind] = seg.value
+        a, b = self._seg_from[kind], seg.value
+        f = min(1.0, into / seg.dur)
+        pt = tuple(a[j] + (b[j] - a[j]) * f for j in range(3))
+        step = math.dist(a, b) * self.tick / seg.dur
+        if step > SERVO_MAX_STEP:
+            raise RuntimeError(f"{kind}: segment {idx} asks for {step:.2f} mm per {self.tick * 1000:.0f} ms tick "
+                               f"(limit {SERVO_MAX_STEP} mm): slow it down or split it")
+        return pt, f
+
+    def _apply_servo(self, kind, pt):
+        t = self._tool(kind)
+        floor = self.z_floor.get(kind)
+        if floor is not None and pt[2] < floor - 1e-6:
+            raise RuntimeError(f"{kind}: pose Z {pt[2]:.2f} is below its Z0 {floor:.2f}")
+        r, p, yw = self.cell.orient[t]
+        self.cell.arms[t].arm.set_servo_cartesian([pt[0], pt[1], pt[2], r, p, yw], speed=100, mvacc=2000)
 
     def _apply_bed(self, v):
         if abs(v) < 1e-9:
@@ -228,12 +290,16 @@ class Player:
         dist = math.dist(cur, target)
         speed = max(1.0, min(100.0, dist / max(dur, 1e-3)))
         r, p, yw = self.cell.orient[t]
-        self.cell.arms[t].arm.set_position(x, y, z, r, p, yw, speed=speed, wait=False, radius=ARM_BLEND)
+        blend = min(ARM_BLEND, dist / 2)                 # never round off more than half the segment
+        self.cell.arms[t].arm.set_position(x, y, z, r, p, yw, speed=speed, wait=False, radius=blend)
 
     def _run(self):
-        self.t0 = time.monotonic()
         total = self.prog.total()
+        n = 0
         try:
+            if self.arm_mode == "servo":
+                self._servo_on()
+            self.t0 = time.monotonic()
             while not self._stop.is_set():
                 t = time.monotonic() - self.t0
                 if t >= total:
@@ -248,6 +314,13 @@ class Player:
                             elif kind.startswith("ext"):
                                 self._apply_ext(kind, 0.0, 0.0)
                         continue
+                    if kind.startswith("arm") and self.arm_mode == "servo":
+                        prev_idx = self.idx[kind]
+                        if prev_idx is not None and prev_idx != idx:  # new segment starts where the last one ended
+                            self._seg_from[kind] = self.prog.tracks[kind].segs[prev_idx].value
+                        pt, f = self._servo_pose(kind, seg, idx, into)
+                        self._apply_servo(kind, pt)
+                        continue
                     if idx != self.idx[kind]:                        # new segment: apply it
                         self.idx[kind] = idx
                         self.applied[kind] = seg.value
@@ -259,7 +332,10 @@ class Player:
                             self._apply_arm(kind, seg.value, seg.dur)
                     elif kind.startswith("ext") and seg.value > 0 and time.monotonic() - self._ext_sent_at.get(kind, 0) > 2.0:
                         self._apply_ext(kind, seg.value, seg.dur - into)   # keep the watchdog fed
-                time.sleep(TICK)
+                n += 1
+                delay = self.t0 + n * self.tick - time.monotonic()   # absolute schedule: no drift at 100 Hz
+                if delay > 0:
+                    time.sleep(delay)
         except Exception as ex:
             self.error = str(ex)
             self.log(f"program stopped: {ex}")

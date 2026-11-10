@@ -56,7 +56,7 @@
 <div id="app">
   <header>
     <h1>Cell panel</h1>
-    <span class="pill" :class="{on: connected}">{{ connected ? (state.sim ? 'simulators' : 'cell') : 'no link' }}</span>
+    <span class="pill" :class="{on: connected}">{{ connected ? (state.sim ? 'simulators' : 'cell') : 'no link' }}<template v-if="state.arm_mode"> · arms {{ state.arm_mode }}</template></span>
     <span class="pill mono">bed {{ fmt(state.bed && state.bed.deg, 1) }}°</span>
     <span class="pill mono" v-for="(a, t) in state.arms" :key="t">{{ a.side }} {{ a.pose ? a.pose.map(v => v.toFixed(1)).join(' ') : '—' }}<template v-if="a.temp !== null && a.temp !== undefined"> · {{ a.temp }} °C</template></span>
     <span class="pill" v-if="prog && prog.running" style="color:var(--good);border-color:var(--good)">running {{ prog.t }} / {{ prog.total }} s</span>
