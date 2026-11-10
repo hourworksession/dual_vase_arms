@@ -18,7 +18,7 @@ def test_zone_compiles_to_bed_rotation_and_held_radius():
     arm = dict(DEFAULTS[1], T=1)
     r_face = 40 + arm["DR"]
     zones = [dict(pressure=0.3, x_start=-20, x_end=20, z_start=10, passes=range(0, 21, 10), motif="line", step=1)]
-    p = ir.compile_zones(arm, r_face, zones, iron_speed=5)
+    p = ir.compile_zones(arm, r_face, zones, mode="bed", iron_speed=5)
     rows = prg.simulate(p, tick=0.1)
     radii = [math.hypot(r["arm1"][0] - arm["CX"], r["arm1"][1] - arm["CY"]) for r in rows if r["arm1"]]
     assert abs(min(radii) - (r_face - 0.3)) < 0.05           # pressing
@@ -28,3 +28,17 @@ def test_zone_compiles_to_bed_rotation_and_held_radius():
     zs = [r["arm1"][2] - arm["Z0"] for r in rows if r["arm1"]]
     assert abs(min(zs) - 10) < 1e-6 and abs(max(zs) - 30) < 1e-6
     assert ir.check_zones(zones, 0.6, 25) == ["zone 1: ironing goes up to 30 mm, above the top of the wall (25 mm)"]
+
+
+def test_arm_mode_moves_the_arm_along_the_arc_with_the_bed_still():
+    arm = dict(DEFAULTS[1], T=1)
+    r_face = 40 + arm["DR"]
+    zones = [dict(pressure=0.3, x_start=-20, x_end=20, z_start=10, passes=[0], motif="line", step=1)]
+    p = ir.compile_zones(arm, r_face, zones, mode="arm", iron_speed=5)
+    assert "bed" not in p.tracks
+    rows = prg.simulate(p, tick=0.1)
+    pts = [r["arm1"] for r in rows if r["arm1"]]
+    angs = [math.degrees(math.atan2(q[1] - arm["CY"], q[0] - arm["CX"])) for q in pts]
+    assert abs((max(angs) - min(angs)) - math.degrees(40 / r_face)) < 1.0
+    radii = [math.hypot(q[0] - arm["CX"], q[1] - arm["CY"]) for q in pts]
+    assert abs(min(radii) - (r_face - 0.3)) < 0.05

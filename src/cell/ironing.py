@@ -6,10 +6,14 @@ each with its own range along the wall, start height, pressure, list of passes a
 approaches the wall straight on until it presses by `pressure`, sweeps back and forth, one pass
 per entry in `passes` (each shifted in z), then backs away before the next zone.
 
-On the cell the column is round and the bed can turn, so "along the wall" is BED ROTATION:
-arc length s on the face becomes a bed angle s / R_face, the nozzle holds its radius
-(R_face - pressure) and only does the z part of the motif. The pattern functions below are
-Nino's, with (x, y, z) replaced by (s, z): s = mm along the face, z = height.
+On the cell the column is round, so "along the wall" is an arc about the turntable axis. Two ways
+to make that motion, same zones, same motifs (mode= in compile_zones):
+    "arm"  Nino's way: the bed stays still and the arm does everything, moving along the arc at
+           the pressing radius in its own XYZ (the default)
+    "bed"  the bed turns the face past the nozzle (arc length / R_face as bed angle) and the arm
+           holds its radius and does only the z part of the motif
+The pattern functions below are Nino's, with (x, y, z) replaced by (s, z): s = mm along the
+face, z = height.
 
 Zone dict (Nino's format):
     pressure        mm the nozzle sits INSIDE the nominal face (negative = clear of it)
@@ -20,8 +24,8 @@ Zone dict (Nino's format):
                     "zigzag" -> amp   (mm, amplitude in z), pitch (mm, advance between vertices)
                     "spiral" -> r     (mm, loop radius, total height 2 r), pitch (mm per turn), seg (points per turn)
 
-compile_zones() turns a list of zones into a cell.program.Program: a bed track (deg/s, s) and an
-arm track ((x, y, z), s), both from IRON_SPEED along the pattern. Preview it with
+compile_zones() turns a list of zones into a cell.program.Program: an arm track ((x, y, z), s) and,
+in "bed" mode, a bed track (deg/s, s), both from IRON_SPEED along the pattern. Preview it with
 cell.program.simulate, run it with cell.program.Player, like any other program.
 """
 from __future__ import annotations
@@ -123,33 +127,44 @@ def check_zones(zones, z_bottom, z_top):
 
 
 # ---------------------------------------------------------------- the cell: bed turns, arm holds radius
-def compile_zones(arm, r_face, zones, *, iron_speed=5.0, safe_distance=5.0, approach_speed=2.0,
+def compile_zones(arm, r_face, zones, *, mode="arm", iron_speed=5.0, safe_distance=5.0, approach_speed=2.0,
                   travel_speed=20.0, bed_dir=-1, name="ironing"):
     """Nino's zone sequence as a Program for one arm pressing the face of a round column.
 
     arm:      the ironing arm's DEFAULTS entry (CX, CY, ANGLE, Z0)
     r_face:   radius of the face the nozzle sees (column radius + that arm's DR), mm
     zones:    list of zone dicts (see module docstring); x along the face = arc length, mm
+    mode:     "arm" (bed still, the arm moves along the arc in XYZ) or "bed" (the bed turns the
+              face past the nozzle, the arm holds its radius and does z)
     iron_speed: mm/s along the pattern; approach/back-off at approach_speed; between zones at travel_speed
-    bed_dir:  sign that makes +s turn the face past the nozzle the same way as +x did on Nino's wall
-              (only mirrors the pattern; -1 as measured on the cell)
-    Bed angles: s / r_face, so the bed track is the sequence of (deg/s, seconds) that walks the
-    pattern; the arm track holds radius r_face - pressure and follows z.
+    bed_dir:  "bed" mode only: sign that makes +s turn the face past the nozzle the same way as +x
+              did on Nino's wall (only mirrors the pattern; -1 as measured on the cell)
     """
-    prog = Program(name, f"{len(zones)} zones, {iron_speed:g} mm/s, safe {safe_distance:g} mm")
-    bed = prog.track("bed")
+    if mode not in ("arm", "bed"):
+        raise ValueError("mode must be 'arm' or 'bed'")
+    prog = Program(name, f"{len(zones)} zones, {mode} moves, {iron_speed:g} mm/s, safe {safe_distance:g} mm")
+    bed = prog.track("bed") if mode == "bed" else None
     tr = prog.track(f"arm{arm['T']}")
     z0 = arm["Z0"]
+    ang0 = math.radians(arm["ANGLE"])
 
     def deg(s):
         return bed_dir * math.degrees(s / r_face)
 
+    def point(r, s):
+        """Nozzle (x, y) in the arm's frame for radius r at arc length s along the face."""
+        if mode == "bed":
+            return arm_point(arm, r)                              # fixed direction; the bed brings s round
+        phi = ang0 + s / r_face                                   # s along the face = an angle about the axis
+        return (arm["CX"] + r * math.cos(phi), arm["CY"] + r * math.sin(phi))
+
     def seg(r, s_from, z_from, s_to, z_to, speed):
-        """One segment: bed from angle(s_from) to angle(s_to), nozzle from (r, z_from) to (r, z_to)."""
+        """One segment of the pattern from (s_from, z_from) to (s_to, z_to) at radius r."""
         length = math.hypot(s_to - s_from, z_to - z_from)
         dt = max(0.05, length / speed)
-        bed.add((deg(s_to) - deg(s_from)) / dt, dt)
-        x, y = arm_point(arm, r)
+        if bed is not None:
+            bed.add((deg(s_to) - deg(s_from)) / dt, dt)
+        x, y = point(r, s_to)
         tr.add((x, y, z0 + z_to), dt)
         return dt
 
@@ -161,23 +176,26 @@ def compile_zones(arm, r_face, zones, *, iron_speed=5.0, safe_distance=5.0, appr
         # move in front of the zone's start, backed off (bed turns to the zone, nozzle at safe radius)
         if s_cur is None:
             s_cur, z_cur = x_a, z_a
-            x, y = arm_point(arm, r_safe)
+            x, y = point(r_safe, x_a)
             tr.add((x, y, z0 + z_a), 1.0)
-            bed.add(0.0, 1.0)
+            if bed is not None:
+                bed.add(0.0, 1.0)
         else:
             seg(r_safe, s_cur, z_cur, x_a, z_a, travel_speed)
         # perpendicular approach to the face: only the radius changes
-        x, y = arm_point(arm, r_press)
+        x, y = point(r_press, x_a)
         dt = max(0.2, (r_safe - r_press) / approach_speed)
         tr.add((x, y, z0 + z_a), dt)
-        bed.add(0.0, dt)
+        if bed is not None:
+            bed.add(0.0, dt)
         # the passes
         s_cur, z_cur = x_a, z_a
         for s_to, z_to in zone_points(cfg):
             seg(r_press, s_cur, z_cur, s_to, z_to, iron_speed)
             s_cur, z_cur = s_to, z_to
         # back off perpendicular to the face, where the nozzle finished
-        x, y = arm_point(arm, r_safe)
+        x, y = point(r_safe, s_cur)
         tr.add((x, y, z0 + z_cur), dt)
-        bed.add(0.0, dt)
+        if bed is not None:
+            bed.add(0.0, dt)
     return prog
