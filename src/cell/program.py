@@ -48,6 +48,7 @@ VEL_TICK = 0.02                     # player period in velocity mode, s (50 Hz)
 VEL_KP = 4.0                        # position correction gain, 1/s: v = v_planned + KP x (planned - measured)
 VEL_MAX = 100.0                     # mm/s ceiling on the commanded arm velocity
 VEL_DEADMAN = 0.1                   # s a velocity command stays valid: a dropped stream stops the arm
+VEL_SETTLE = 0.5                    # s of Kp-only hold on an arm track's last point, so the arm settles ON it
 APPROACH_MM = 20.0                  # a first segment farther than this gets a planned approach first
 EXTRUDE_TIMEOUT_MARGIN = 1.0        # EXTRUDE_ON TIMEOUT = segment time + this, so the watchdog never cuts a segment
 KINDS = ("bed", "ext0", "ext1", "arm0", "arm1")
@@ -190,7 +191,8 @@ class Player:
         self.z_floor = z_floor or {}                 # {"arm0": z0, "arm1": z0}: refuse targets below these
         self.log = on_log or (lambda s: None)
         self._seg_from = {}                          # servo: where each arm segment started
-        self._servo_arms = []                        # tools switched into servo mode
+        self._servo_arms = []                        # tools switched into servo or velocity mode
+        self._settle = {}                            # velocity: arm track -> hold its last point until this time
         self.approach_z = approach_z                 # safe height for the approach to a far first segment
         self._stop = threading.Event()
         self._thread = None
@@ -301,6 +303,16 @@ class Player:
             v = [c * VEL_MAX / mag for c in v]
         self.cell.arms[t].arm.vc_set_cartesian_velocity([v[0], v[1], v[2], 0.0, 0.0, 0.0], duration=VEL_DEADMAN)
 
+    def _hold_velocity(self, kind, point):
+        """Kp-only: pull the arm onto `point` (the track's last point) and keep it there."""
+        t = self._tool(kind)
+        meas = tuple(self.cell.pose(t)[:3])
+        v = [VEL_KP * (point[j] - meas[j]) for j in range(3)]
+        mag = math.sqrt(sum(c * c for c in v))
+        if mag > VEL_MAX:
+            v = [c * VEL_MAX / mag for c in v]
+        self.cell.arms[t].arm.vc_set_cartesian_velocity([v[0], v[1], v[2], 0.0, 0.0, 0.0], duration=VEL_DEADMAN)
+
     def _servo_on(self):
         for kind in self.prog.tracks:
             if not kind.startswith("arm"):
@@ -376,7 +388,7 @@ class Player:
             self.t0 = time.monotonic()
             while not self._stop.is_set():
                 t = time.monotonic() - self.t0
-                if t >= total:
+                if t >= total + (VEL_SETTLE if self.arm_mode == "velocity" else 0.0):
                     break
                 for kind, track in self.prog.tracks.items():
                     idx, seg, into = track.at(t)
@@ -388,6 +400,12 @@ class Player:
                             elif kind.startswith("ext"):
                                 self._apply_ext(kind, 0.0, 0.0)
                             elif self.arm_mode == "velocity":
+                                self._settle[kind] = time.monotonic() + VEL_SETTLE
+                        if kind in self._settle:                          # velocity: hold the end point, then release
+                            if time.monotonic() < self._settle[kind]:
+                                self._hold_velocity(kind, track.segs[-1].value)
+                            else:
+                                del self._settle[kind]
                                 self.cell.arms[self._tool(kind)].arm.vc_set_cartesian_velocity([0, 0, 0, 0, 0, 0], duration=0.01)
                         continue
                     if kind.startswith("arm") and self.arm_mode == "velocity":

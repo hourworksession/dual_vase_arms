@@ -27,7 +27,8 @@ logger = logging.getLogger("cell_studio.sim")
 #   drop_after_moves: {"left": n} -> that arm raises after n more moves
 #   arm_code: {"right": 9} -> set_position returns this code (xArm error) without raising
 FAULTS = {"refuse_connect": set(), "drop_after_moves": {}, "arm_code": {},
-          "frame_error": {}}     # {"left": (dx, dy, dz)}: where that arm's frame REALLY is vs its calibration
+          "frame_error": {},     # {"left": (dx, dy, dz)}: where that arm's frame REALLY is vs its calibration
+          "vel_lag_s": 0.0}      # velocity mode: first-order lag of the arm's response to a commanded velocity
 LOG = []          # (time, device, command, detail)
 _log_lock = threading.Lock()
 
@@ -135,18 +136,33 @@ class _SimXArm:
         return 0
 
     def _integrate(self):
-        vel = getattr(self, "_vel", None)
-        if not vel:
-            return
+        """Advance the pose: the commanded velocity (zero once its duration has run out), reached
+        through a first-order lag of FAULTS["vel_lag_s"] if one is set."""
         now = time.time()
         t_prev = getattr(self, "_vel_t", now)
-        t_end = min(now, getattr(self, "_vel_until", now))
-        dt = max(0.0, t_end - t_prev)
-        if dt > 0:
-            self.o._pose = [self.o._pose[0] + vel[0] * dt, self.o._pose[1] + vel[1] * dt, self.o._pose[2] + vel[2] * dt] + list(self.o._pose[3:])
         self._vel_t = now
-        if now >= getattr(self, "_vel_until", now):
+        cmd = getattr(self, "_vel", None)
+        act = getattr(self, "_vel_act", [0.0, 0.0, 0.0])
+        if cmd and now >= getattr(self, "_vel_until", now):
+            cmd = None
             self._vel = None
+        if not cmd and not any(act):
+            return
+        tau = FAULTS["vel_lag_s"]
+        target = cmd or [0.0, 0.0, 0.0]
+        dt = max(0.0, now - t_prev)
+        steps = max(1, int(dt / 0.002))
+        h = dt / steps
+        pose = list(self.o._pose)
+        for _ in range(steps):
+            if tau > 0:
+                act = [a + (c - a) * min(1.0, h / tau) for a, c in zip(act, target)]
+            else:
+                act = list(target)
+            for j in range(3):
+                pose[j] += act[j] * h
+        self.o._pose = pose
+        self._vel_act = act if any(abs(a) > 1e-4 for a in act) else [0.0, 0.0, 0.0]
 
     def set_servo_cartesian(self, mvpose, speed=None, mvacc=None, **_):
         """Servo mode: go straight to the pose (the simulator teleports)."""
@@ -242,6 +258,8 @@ class SimArm:
     def get_pose(self):
         if FAULTS["drop_after_moves"].get(self.name) == 0:
             raise ConnectionError(f"{self.name} arm: connection lost")
+        if self.arm is not None:
+            self.arm._integrate()               # velocity mode: the pose moves between commands
         return list(self._pose)
 
     def get_joints(self):
