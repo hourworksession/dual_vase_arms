@@ -61,11 +61,16 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
             the axis, i.e. shifted into the next side.
     LEAD_GAIN  that correction gain per tick (0.5). 0 = fixed lead.
     SERVO   1: drive the arms in xArm servo mode, a pose every 10 ms (set_servo_cartesian, firmware
-            1.6+): the straights are streamed at V_LINE and on the corners the arm follows the measured
-            bed angle with almost no lag, so the fillets land where the bed is. 0 (default): queued
-            set_position moves at 20 Hz with a blend radius, as before. Poses are rate limited to 2 mm
-            per tick so a servo stream can never jerk; the arms go back to position mode at the end
-            or on abort.
+            1.6+), with the outline walked by TIME: the nozzle's progress along the outline runs at
+            V_LINE everywhere (sides and fillets alike) and each pose is the outline point for this
+            instant turned by the bed's MEASURED angle. The bed makes its 90 deg index as its own move
+            (ramps included) during each fillet; the arm starts the fillet tangentially while the bed
+            is still at rest, sweeps while it turns, and is back on the tangent of the next side as
+            it stops, so there is no reversal and no stop at the hand-over. The extruder rate is
+            constant. VB only sets how fast the index is made (default: fast enough to finish inside
+            the fillet's time). 0 (default): queued set_position moves at 20 Hz, the fillet tied to
+            the bed's progress, as before. Poses are rate limited to 2 mm per tick; the arms go back
+            to position mode at the end or on abort.
     SERVO_LEAD_S  lead ahead of the measured bed angle in servo mode, s (0.03)
     CORNER_FLOOR  the corner extruder rate never drops below this fraction of the straight-line rate
             (0.3), so the flow does not have to restart from nothing at the hand-over to the side.
@@ -548,6 +553,8 @@ def run(g, k, cell, cold=False):
     total = 0.0                            # bed angle since the start, deg (measured)
     phase = "flat"
     lead_adj = {tl: 0.0 for tl in arms}    # learned extra lead per arm, deg (carried corner to corner)
+    if servo:
+        s, seg, total = stream_outline(g, k, cell, arms, per, lead, L, s_end, a0, live, stream, set_rate, z_at, incremental)
     while s < s_end - 1e-6:
         kq = seg // 2                      # quarter turns the bed has made before this segment
         ph = phase_name(g, s / L)
@@ -704,6 +711,82 @@ def run(g, k, cell, cold=False):
         cell.move(tl, *PARK, speed=v, wait=True)
     cell.tt.stop_rotation()
     print("7. Bed stopped. Done.")
+
+
+def stream_outline(g, k, cell, arms, per, lead, L, s_end, a0, live, stream, set_rate, z_at, incremental):
+    """Servo mode: walk the outline by time at V_LINE, the bed indexing 90 deg on its own during each
+    fillet, every pose = outline point for this instant turned by the measured bed angle.
+
+    Returns (s, seg, total) at the end so the caller's bookkeeping carries on."""
+    v = k["v_line"]
+    tick = 0.01
+    d2 = 2 * lead["D"]                                   # a side, mm
+    arc = math.pi / 2 * lead["R"]                        # a fillet, mm
+    t_corner = arc / v
+    # bed index speed: VB if given, else fast enough to do 90 deg in ~70 % of the fillet's time (ramps)
+    bed_dps = math.degrees(g["VB"]) if "VB" in g and g["VB"] else 90.0 / (0.7 * t_corner)
+    bed_dps = min(bed_dps, math.degrees(g["MAX_VB"]))
+    for tl in arms:
+        set_rate(tl, per[tl]["rate_line"])               # constant: the bead speed is constant everywhere
+    print(f"   servo: outline at {v:g} mm/s everywhere, poses every {tick * 1000:.0f} ms; bed indexes 90 deg at "
+          f"{bed_dps:.1f} deg/s during each {t_corner:.1f} s fillet")
+    s = 0.0
+    seg = 0
+    corners_started = 0
+    total = cell.tt.get_angle() - a0
+    w_filt = 0.0
+    prev_total, prev_t = total, time.monotonic()
+    t0 = time.monotonic()
+    n = 0
+    phase = "flat"
+    while s < s_end - 1e-6:
+        now = time.monotonic()
+        total = cell.tt.get_angle() - a0
+        w_raw = (total - prev_total) / max(now - prev_t, 1e-3)
+        w_filt = 0.5 * w_filt + 0.5 * w_raw
+        prev_total, prev_t = total, now
+        total_lead = total + w_filt * g["SERVO_LEAD_S"]   # where the bed will be when the pose lands
+        s = min(s_end, v * (now - t0))
+        seg = int(s // (d2 + arc)) * 2                    # side k then corner k, per quarter
+        s_in = s - (seg // 2) * (d2 + arc)
+        kq = seg // 2
+        if s_in >= d2:                                    # in the fillet
+            seg += 1
+            b = 90.0 * (s_in - d2) / arc
+            if corners_started <= kq:                     # first tick of this fillet: start the bed's index
+                corners_started = kq + 1
+                if incremental:
+                    cell.tt.rotate_relative(90.0, bed_dps, wait=False)
+                else:
+                    cell.tt.rotate_velocity(bed_dps)      # free-run fallback: stopped when the fillet ends
+            live["seg"] = f"corner {kq % 4}"
+            for tl, a in arms.items():
+                xy = corner_pt(g, a, b, kq, total_lead)
+                stream(tl, xy, z_at(tl, s))
+                live["xy"][tl], live["z"][tl] = corner_pt(g, a, b, kq, total), z_at(tl, s)
+        else:
+            if not incremental and kq > 0 and corners_started == kq and total - 90.0 * (kq - 1) >= 90.0:
+                cell.tt.stop_rotation()                   # free-run fallback: the index is complete
+            live["seg"] = f"side {kq % 4}"
+            for tl, a in arms.items():
+                xy = straight_pt(g, a, s_in * a["D"] / lead["D"], kq, total_lead)
+                stream(tl, xy, z_at(tl, s))
+                live["xy"][tl], live["z"][tl] = straight_pt(g, a, s_in * a["D"] / lead["D"], kq, total), z_at(tl, s)
+        live["bed"], live["rev"] = total, s / L
+        ph = phase_name(g, s / L)
+        if ph != phase:
+            print({"spiral": f"3. Spiral at P {g['P']:g} mm/loop", "final flat": "4. Final flat loop"}[ph] + f"  (loop {s / L:.2f})")
+            phase = ph
+        n += 1
+        delay = t0 + n * tick - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+    if not incremental:
+        cell.tt.stop_rotation()
+    # how far is the bed from where the outline thinks it is? (it should be on a multiple of 90)
+    off = total - 90.0 * round(total / 90.0)
+    print(f"   servo: done; bed {off:+.2f} deg off its nearest index (absorbed by the measured-angle compensation)")
+    return s_end, seg + 1, total
 
 
 def set_bed_ramp(tt, acc_dps2):
