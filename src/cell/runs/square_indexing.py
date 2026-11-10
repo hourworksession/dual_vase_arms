@@ -60,6 +60,13 @@ Values (KEY=value, any order). In T=2 the plain keys are the RIGHT arm; *_L keys
             on the bed's angle whatever the arm's latency. A lagging arm draws the fillet rotated about
             the axis, i.e. shifted into the next side.
     LEAD_GAIN  that correction gain per tick (0.5). 0 = fixed lead.
+    SERVO   1: drive the arms in xArm servo mode, a pose every 10 ms (set_servo_cartesian, firmware
+            1.6+): the straights are streamed at V_LINE and on the corners the arm follows the measured
+            bed angle with almost no lag, so the fillets land where the bed is. 0 (default): queued
+            set_position moves at 20 Hz with a blend radius, as before. Poses are rate limited to 2 mm
+            per tick so a servo stream can never jerk; the arms go back to position mode at the end
+            or on abort.
+    SERVO_LEAD_S  lead ahead of the measured bed angle in servo mode, s (0.03)
     CORNER_FLOOR  the corner extruder rate never drops below this fraction of the straight-line rate
             (0.3), so the flow does not have to restart from nothing at the hand-over to the side.
     BLEND   blend radius for the streamed corner moves, mm                   (default 2)
@@ -114,8 +121,9 @@ from cell.runs.cylinder import (Abort, BASE_ARM_SPEED, COMMON, DEFAULTS, NOZZLE,
 
 SQUARE_COMMON = {**COMMON, "RF": 10.0, "BED_DIR": -1.0, "CORNER_LEAD_S": 0.15, "BLEND": 2.0, "STOP_LEAD": 0.0,
                  "V_LINE": 8.0, "RATE_MIN": 0.1, "BED_ACC": 0.0, "BED_MOVE": 1.0, "RATE_HZ": 10.0,
-                 "CORNER_FLOOR": 0.3, "LEAD_GAIN": 0.5}
-TICK = 0.05                      # main loop period, s
+                 "CORNER_FLOOR": 0.3, "LEAD_GAIN": 0.5, "SERVO": 0.0, "SERVO_LEAD_S": 0.03}
+TICK = 0.05                      # main loop period, s (position mode; servo mode runs at 0.01)
+SERVO_STEP = 2.0                 # mm a servo pose may move the nozzle per tick
 SETTLE_S = 3.0                   # max wait for the bed to come to rest after a corner
 RATE_TOL = 0.05                  # re-send EXTRUDE_ON when the rate moves by more than this fraction
 
@@ -135,7 +143,7 @@ def parse(argv):
              "MAX_VB", "MAX_VT", "FIRST", "SPIRAL", "LOOPS", "HEIGHT", "PRIME_MM", "PRIME_S", "PRIME_Z", "FIL",
              "MIN_TEMP", "ANGLE", "CX", "CY", "ANGLE_L", "CX_L", "CY_L", "DR", "DR_L", "RAMP_STEPS", "RAMP_EVERY",
              "BED_DIR", "CORNER_LEAD_S", "BLEND", "STOP_LEAD", "RATE_MIN", "BED_ACC", "BED_MOVE", "RATE_HZ",
-             "CORNER_FLOOR", "LEAD_GAIN"}
+             "CORNER_FLOOR", "LEAD_GAIN", "SERVO", "SERVO_LEAD_S"}
     unknown = sorted(set(vals) - known)
     if unknown:
         hint = ""
@@ -447,6 +455,44 @@ def run(g, k, cell, cold=False):
     def z_at(tl, s):
         return per[tl]["z_first"] + height(g, s / L)
 
+    servo = bool(g["SERVO"])
+    tick = 0.01 if servo else TICK
+    last_pose = {}
+
+    def stream(tl, xy, z, speed=None, blend=None):
+        """Send the arm towards (xy, z): a servo pose (rate limited to SERVO_STEP per tick) or a queued move."""
+        if not servo:
+            move(tl, xy, z, speed if speed is not None else v, wait=False, blend=blend)
+            return
+        tgt = (xy[0], xy[1], guard(tl, z))
+        cur = last_pose.get(tl) or tuple(cell.pose(tl)[:3])
+        d = math.dist(cur, tgt)
+        if d > SERVO_STEP:                                    # never ask for a jump: walk towards it
+            f = SERVO_STEP / d
+            tgt = tuple(c + (t - c) * f for c, t in zip(cur, tgt))
+        r, pt, yw = cell.orient[tl]
+        cell.arms[tl].arm.set_servo_cartesian([tgt[0], tgt[1], tgt[2], r, pt, yw], speed=100, mvacc=2000)
+        last_pose[tl] = tgt
+
+    def servo_on():
+        for tl in arms:
+            a = cell.arms[tl].arm
+            if not hasattr(a, "set_servo_cartesian"):
+                raise Abort(f"{arms[tl]['side']}: this SDK/firmware has no servo mode (needs 1.6+); run without SERVO=1")
+            a.set_mode(1)
+            a.set_state(0)
+            last_pose[tl] = tuple(cell.pose(tl)[:3])
+        time.sleep(0.1)
+
+    def servo_off():
+        for tl in arms:
+            try:
+                cell.arms[tl].arm.set_mode(0)
+                cell.arms[tl].arm.set_state(0)
+            except Exception as ex:
+                print(f"  {arms[tl]['side']}: could not leave servo mode: {ex}")
+        time.sleep(0.1)
+
     if not cold:
         for tl, a in arms.items():
             temp = cell.hot_end_temp(tl)
@@ -486,6 +532,8 @@ def run(g, k, cell, cold=False):
         print("  (an arm did not report arrival within prime time + 3 s; carrying on)")
 
     # 2-4. The outline, segment by segment: straight (bed still), corner (bed on), x4 per loop
+    if servo:
+        servo_on()
     a0 = cell.tt.get_angle()
     live = {"rev": 0.0, "seg": "", "bed": 0.0, "z": {tl: per[tl]["z_first"] for tl in arms},
             "xy": {tl: per[tl]["start"] for tl in arms}, "dev": {tl: [] for tl in arms}, "rate": rate}
@@ -517,9 +565,11 @@ def run(g, k, cell, cold=False):
                 set_rate(tl, per[tl]["rate_line"])
                 xy = straight_pt(g, a, frac * 2 * a["D"], kq, total)
                 targets[tl] = (xy, z_at(tl, s + length))
-                move(tl, xy, targets[tl][1], k["v_line"], wait=False)
+                if not servo:
+                    move(tl, xy, targets[tl][1], k["v_line"], wait=False)
             t0 = time.monotonic()
             dur = length / k["v_line"]
+            n_tick = 0
             while True:
                 el = time.monotonic() - t0
                 f = min(1.0, el / dur) if dur > 0 else 1.0
@@ -527,13 +577,22 @@ def run(g, k, cell, cold=False):
                 for tl, a in arms.items():
                     live["xy"][tl] = straight_pt(g, a, f * frac * 2 * a["D"], kq, total)
                     live["z"][tl] = z_at(tl, s + f * length)
-                arrived = all(math.dist(cell.pose(tl)[:3], (*targets[tl][0], targets[tl][1])) < 0.3 for tl in arms)
-                if arrived and el >= dur - 0.05:
-                    break
-                if el > dur + 3:
-                    print(f"  (an arm did not report arrival on side {kq % 4} within time + 3 s; carrying on)")
-                    break
-                time.sleep(TICK)
+                    if servo:                                  # streamed: the pose for this instant
+                        stream(tl, live["xy"][tl], live["z"][tl])
+                if servo:
+                    if f >= 1.0:
+                        break
+                else:
+                    arrived = all(math.dist(cell.pose(tl)[:3], (*targets[tl][0], targets[tl][1])) < 0.3 for tl in arms)
+                    if arrived and el >= dur - 0.05:
+                        break
+                    if el > dur + 3:
+                        print(f"  (an arm did not report arrival on side {kq % 4} within time + 3 s; carrying on)")
+                        break
+                n_tick += 1
+                delay = t0 + n_tick * tick - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
             s += length
         else:
             # ---- corner: bed on; the arm follows the MEASURED bed angle round the corner move and
@@ -563,10 +622,10 @@ def run(g, k, cell, cold=False):
                 for tl, a in arms.items():                    # extruder proportional to the bed, floored
                     set_rate(tl, max(a["K"] * a["R"] * math.radians(w_filt),
                                      g["CORNER_FLOOR"] * per[tl]["rate_line"]))
-                if not stopped and not incremental and b + omega_dps * TICK >= b_end - g["STOP_LEAD"]:
+                if not stopped and not incremental and b + omega_dps * tick >= b_end - g["STOP_LEAD"]:
                     cell.tt.stop_rotation()                    # from here the arm keeps following the bed
                     stopped, t_stop = True, now_t              # through its deceleration, no parking
-                if incremental and not stopped and b >= b_end - g["STOP_LEAD"] - max(2.0, omega_dps * TICK):
+                if incremental and not stopped and b >= b_end - g["STOP_LEAD"] - max(2.0, omega_dps * tick):
                     stopped, t_stop = True, now_t              # in its own deceleration now
                 if stopped and (abs(total - prev_total) < 0.01 or now_t - t_stop > SETTLE_S):
                     break                                      # bed at rest (or SETTLE_S is up)
@@ -584,17 +643,18 @@ def run(g, k, cell, cold=False):
                             lead_adj[tl] += g["LEAD_GAIN"] * (b - b_arm)
                             lead_adj[tl] = max(-10.0, min(45.0, lead_adj[tl]))
                 for tl, a in arms.items():
-                    lead_deg = (w_filt if stopped else omega_dps) * g["CORNER_LEAD_S"] + lead_adj[tl]
+                    lead_s = g["SERVO_LEAD_S"] if servo else g["CORNER_LEAD_S"]
+                    lead_deg = (w_filt if stopped else omega_dps) * lead_s + lead_adj[tl]
                     bl = min(b + max(0.0, lead_deg), b_end)
                     xy = corner_pt(g, a, bl, kq, total + (bl - b))
                     z = z_at(tl, s + arc * bl / 90.0)
-                    if last[tl] is None or math.dist(xy, last[tl][0]) >= 0.05 or abs(z - last[tl][1]) >= 0.02:
-                        move(tl, xy, z, v_cmd, wait=False, blend=g["BLEND"])
+                    if servo or last[tl] is None or math.dist(xy, last[tl][0]) >= 0.05 or abs(z - last[tl][1]) >= 0.02:
+                        stream(tl, xy, z, speed=v_cmd, blend=g["BLEND"])
                         last[tl] = (xy, z)
                     live["xy"][tl], live["z"][tl] = corner_pt(g, a, b, kq, total), z_at(tl, s + arc * b / 90.0)
                 live["rev"] = (s + arc * b / 90.0) / L
                 prev_total, prev_t = total, now_t
-                time.sleep(TICK if not stopped else 0.02)
+                time.sleep(tick if not stopped else min(tick, 0.02))
             live["bed"] = total
             for tl in arms:                                   # bed at rest: straight-line rate from here
                 set_rate(tl, per[tl]["rate_line"])
@@ -608,17 +668,19 @@ def run(g, k, cell, cold=False):
                 print(f"  bed stopped {b_end - b_bed:.2f} deg short on corner {kq % 4}; the arm finishes the fillet")
                 for tl in arms:
                     set_rate(tl, per[tl]["rate_line"])        # arm moving at V_LINE: line rate
-                n_pts = max(1, int(math.ceil((b_end - b_bed) / 90.0 * arc / 0.5)))
+                rest = (b_end - b_bed) / 90.0 * arc            # mm of fillet left
+                n_pts = max(1, int(math.ceil(rest / (k["v_line"] * tick if servo else 0.5))))
                 for i in range(1, n_pts + 1):
                     b = b_bed + (b_end - b_bed) * i / n_pts
                     for tl, a in arms.items():
-                        move(tl, corner_pt(g, a, b, kq, total), z_at(tl, s + arc * b / 90.0), k["v_line"],
-                             wait=False, blend=g["BLEND"])
+                        stream(tl, corner_pt(g, a, b, kq, total), z_at(tl, s + arc * b / 90.0), speed=k["v_line"], blend=g["BLEND"])
                     live["rev"] = (s + arc * b / 90.0) / L
+                    if servo:
+                        time.sleep(tick)
             else:
                 for tl, a in arms.items():                   # exact end of the corner move, queued and blended:
-                    move(tl, corner_pt(g, a, b_end, kq, total), z_at(tl, s + arc * b_end / 90.0), v_cmd,
-                         wait=False, blend=g["BLEND"])       # the next side's move follows at once, no stop
+                    stream(tl, corner_pt(g, a, b_end, kq, total), z_at(tl, s + arc * b_end / 90.0), speed=v_cmd,
+                           blend=g["BLEND"])                 # the next side's move follows at once, no stop
             for tl, a in arms.items():
                 live["xy"][tl], live["z"][tl] = corner_pt(g, a, b_end, kq, total), z_at(tl, s + arc * b_end / 90.0)
             residual = total - t_begin - b_end
@@ -631,6 +693,8 @@ def run(g, k, cell, cold=False):
     # 5-7
     cell.stop_keep.set()
     gcode("EXTRUDE_OFF")
+    if servo:
+        servo_off()
     print(f"5. Extruders off after {s / L:.3f} loops ({seg} segments)")
     report_deviation(g, live)
     print("6. Move away")
@@ -712,14 +776,26 @@ def main(argv=None):
             print("Not started.")
             return 1
     cell = Cell(g, sim)
+
+    def leave_servo():
+        if g["SERVO"]:
+            for tl in g["arms"]:
+                try:
+                    cell.arms[tl].arm.set_mode(0)
+                    cell.arms[tl].arm.set_state(0)
+                except Exception:
+                    pass
     try:
         run(g, k, cell, cold=cold)
         return 0
     except KeyboardInterrupt:
+        leave_servo()
         abort(cell, "Ctrl+C")
     except Abort as e:
+        leave_servo()
         abort(cell, str(e))
     except Exception as e:
+        leave_servo()
         abort(cell, f"error: {e}")
     return 1
 
