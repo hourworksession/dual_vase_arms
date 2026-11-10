@@ -73,7 +73,8 @@ class Hub:
         with self.lock:
             if self.player and self.player.running():
                 raise HTTPException(409, "something is already running; stop it first")
-            self.player = prg.Player(self.cell, p, z_floor=self.z_floor(), on_log=log, arm_mode=self.arm_mode)
+            self.player = prg.Player(self.cell, p, z_floor=self.z_floor(), on_log=log, arm_mode=self.arm_mode,
+                                     approach_z=SAFE_Z)
             self.last_program = p
             self.player.start()
             log(f"started: {p.name} ({p.total():.1f} s)")

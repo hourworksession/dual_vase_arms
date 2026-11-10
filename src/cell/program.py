@@ -38,6 +38,7 @@ TICK = 0.05                         # player period in position mode, s (20 Hz)
 SERVO_TICK = 0.01                   # player period in servo mode, s (100 Hz)
 ARM_BLEND = 2.0                     # blend radius for queued arm moves, mm (never more than half a segment)
 SERVO_MAX_STEP = 2.0                # mm the nozzle may be asked to jump between two servo poses
+APPROACH_MM = 20.0                  # a first segment farther than this gets a planned approach first
 EXTRUDE_TIMEOUT_MARGIN = 1.0        # EXTRUDE_ON TIMEOUT = segment time + this, so the watchdog never cuts a segment
 KINDS = ("bed", "ext0", "ext1", "arm0", "arm1")
 
@@ -170,7 +171,7 @@ class Player:
     At the end: bed stopped, extruders off. stop() aborts the same way at once.
     Progress and the last applied values are in .status()."""
 
-    def __init__(self, cell, prog, z_floor=None, on_log=None, arm_mode="position", tick=None):
+    def __init__(self, cell, prog, z_floor=None, on_log=None, arm_mode="position", tick=None, approach_z=None):
         if arm_mode not in ("position", "servo"):
             raise ValueError("arm_mode must be 'position' or 'servo'")
         self.cell, self.prog = cell, prog
@@ -180,6 +181,7 @@ class Player:
         self.log = on_log or (lambda s: None)
         self._seg_from = {}                          # servo: where each arm segment started
         self._servo_arms = []                        # tools switched into servo mode
+        self.approach_z = approach_z                 # safe height for the approach to a far first segment
         self._stop = threading.Event()
         self._thread = None
         self.t0 = None
@@ -229,6 +231,27 @@ class Player:
             except Exception as ex:
                 self.log(f"arm{t}: could not leave servo mode: {ex}")
         self._servo_arms = []
+
+    def _approach(self):
+        """An arm whose first segment is far from where it is now (more than APPROACH_MM) is taken there
+        first with planned, waited moves: up to approach_z, across, down. Programs are written as if the
+        arm is already at their first point, as the scripts' own approach does."""
+        for kind, track in self.prog.tracks.items():
+            if not kind.startswith("arm") or not track.segs:
+                continue
+            t = self._tool(kind)
+            cur = tuple(self.cell.pose(t)[:3])
+            first = track.segs[0].value
+            if math.dist(cur, first) <= APPROACH_MM:
+                continue
+            r, p, yw = self.cell.orient[t]
+            a = self.cell.arms[t].arm
+            if self.approach_z is not None:
+                up = max(cur[2], first[2], self.approach_z)
+                a.set_position(cur[0], cur[1], up, r, p, yw, speed=60, wait=True)
+                a.set_position(first[0], first[1], up, r, p, yw, speed=60, wait=True)
+            a.set_position(first[0], first[1], first[2], r, p, yw, speed=20, wait=True)
+            self.log(f"{kind}: approached the start ({math.dist(cur, first):.0f} mm away)")
 
     def _servo_on(self):
         for kind in self.prog.tracks:
@@ -297,6 +320,7 @@ class Player:
         total = self.prog.total()
         n = 0
         try:
+            self._approach()
             if self.arm_mode == "servo":
                 self._servo_on()
             self.t0 = time.monotonic()
