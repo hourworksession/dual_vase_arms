@@ -219,7 +219,8 @@ createApp({
     }
 
     // ---------- three.js
-    let renderer, scene, camera, controls, pathGroup, nozzles = {};
+    let renderer, scene, camera, controls, pathGroup, discGroup, nozzles = {}, pathLines = {};
+    const BED_DIR = -1;                                   // positive bed velocity turns the disc clockwise seen from above
     function initView() {
       const canvas = document.getElementById('view');
       renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -229,10 +230,12 @@ createApp({
       controls = new OrbitControls(camera, canvas); controls.target.set(0, 0, 20);
       scene.add(new THREE.AmbientLight(0xffffff, 0.8));
       const sun = new THREE.DirectionalLight(0xffffff, 0.6); sun.position.set(200, -300, 400); scene.add(sun);
+      discGroup = new THREE.Group(); scene.add(discGroup);          // everything that turns with the bed
       const disc = new THREE.Mesh(new THREE.CylinderGeometry(150, 150, 6, 96), new THREE.MeshStandardMaterial({ color: 0x1d2129, metalness: 0.2, roughness: 0.8 }));
-      disc.rotation.x = Math.PI / 2; disc.position.z = -3; scene.add(disc);
-      const grid = new THREE.PolarGridHelper(150, 8, 6, 64, 0x2a3140, 0x222835); grid.rotation.x = Math.PI / 2; grid.position.z = 0.1; scene.add(grid);
-      pathGroup = new THREE.Group(); scene.add(pathGroup);
+      disc.rotation.x = Math.PI / 2; disc.position.z = -3; discGroup.add(disc);
+      const grid = new THREE.PolarGridHelper(150, 8, 6, 64, 0x2a3140, 0x222835); grid.rotation.x = Math.PI / 2; grid.position.z = 0.1; discGroup.add(grid);
+      const mark = new THREE.Mesh(new THREE.BoxGeometry(6, 2, 1), new THREE.MeshBasicMaterial({ color: 0x8b93a7 })); mark.position.set(146, 0, 0.6); discGroup.add(mark);   // a notch so the turn is visible
+      pathGroup = new THREE.Group(); discGroup.add(pathGroup);
       for (const [t, c] of [[0, COLORS.right], [1, COLORS.left]]) {
         const cone = new THREE.Mesh(new THREE.ConeGeometry(4, 14, 24), new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.25 }));
         cone.rotation.x = -Math.PI / 2;                              // tip down
@@ -244,15 +247,29 @@ createApp({
     }
     function draw() {
       if (!pathGroup || !preview.value) return;
-      pathGroup.clear();
+      pathGroup.clear(); pathLines = {};
       for (const [t, arm] of Object.entries(preview.value.arms)) {
         const pts = arm.bed_frame.map(p => new THREE.Vector3(p[0], p[1], p[2] - zBase(t)));
-        pathGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: t == 0 ? COLORS.right : COLORS.left })));
+        const c = t == 0 ? COLORS.right : COLORS.left;
+        const done = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: c }));
+        const todo = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.18 }));
+        pathGroup.add(done); pathGroup.add(todo); pathLines[t] = { done, todo, n: pts.length };
       }
-      drawTimeline();
+      showProgress(); drawTimeline();
+    }
+    function showProgress() {                               // laid part bright, the rest dim; all of it when idle
+      if (!preview.value) return;
+      const running = prog.value && prog.value.running && prog.value.total;
+      for (const [t, l] of Object.entries(pathLines)) {
+        const k = running ? Math.max(1, Math.round(l.n * prog.value.t / prog.value.total)) : l.n;
+        l.done.geometry.setDrawRange(0, k);
+        l.todo.visible = !!running;
+      }
     }
     function zBase(t) { const a = state.arms[t]; return a ? a.z0 : 0; }       // show heights above the disc
     function drawNozzles() {
+      if (discGroup && state.bed && state.bed.deg !== null && state.bed.deg !== undefined) discGroup.rotation.z = BED_DIR * state.bed.deg * Math.PI / 180;   // the disc turns, the nozzles stay on their lines
+      showProgress();
       for (const [t, cone] of Object.entries(nozzles)) {
         const a = state.arms[t]; if (!a || !a.pose) { cone.visible = false; continue; }
         // nozzle in the disc frame: along the arm's print direction at its current radius; height above its Z0
