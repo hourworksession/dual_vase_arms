@@ -235,7 +235,8 @@ createApp({
       pathGroup = new THREE.Group(); scene.add(pathGroup);
       for (const [t, c] of [[0, COLORS.right], [1, COLORS.left]]) {
         const cone = new THREE.Mesh(new THREE.ConeGeometry(4, 14, 24), new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.25 }));
-        cone.rotation.x = -Math.PI / 2; cone.visible = false;   // tip down nozzles[t] = cone; scene.add(cone);
+        cone.rotation.x = -Math.PI / 2;                              // tip down
+        cone.visible = false; nozzles[t] = cone; scene.add(cone);
       }
       const resize = () => { const w = canvas.clientWidth, h = canvas.clientHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); };
       new ResizeObserver(resize).observe(canvas); resize();
