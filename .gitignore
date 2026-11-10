@@ -15,7 +15,7 @@ dist/
 *.plan.json
 !tests/fixtures/*.plan.json
 build/
-runs/
+/runs/
 scripts/motion_debug.csv
 scripts/cells_*.json
 notebooks/runs/
