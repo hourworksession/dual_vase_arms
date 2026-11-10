@@ -25,6 +25,12 @@ Two ways to drive the arms (Player(arm_mode=...)):
                 1.6 or later. The Player refuses a segment that would ask for more than
                 SERVO_MAX_STEP mm between two poses, and puts the arm back in position mode at
                 the end or on abort.
+    "velocity"  xArm Cartesian velocity mode (set_mode(5), vc_set_cartesian_velocity, firmware
+                1.6.9+): the arm track is spoken in the same language as the bed and the extruders,
+                a velocity for a time. Every tick the Player sends the segment's planned velocity
+                plus a small position correction, VEL_KP x (planned point - measured point), so
+                the motion is the controller's own smooth integration and cannot drift. Each
+                command carries a VEL_DEADMAN duration: if the stream stops, so does the arm.
 """
 from __future__ import annotations
 
@@ -38,6 +44,10 @@ TICK = 0.05                         # player period in position mode, s (20 Hz)
 SERVO_TICK = 0.01                   # player period in servo mode, s (100 Hz)
 ARM_BLEND = 2.0                     # blend radius for queued arm moves, mm (never more than half a segment)
 SERVO_MAX_STEP = 2.0                # mm the nozzle may be asked to jump between two servo poses
+VEL_TICK = 0.02                     # player period in velocity mode, s (50 Hz)
+VEL_KP = 4.0                        # position correction gain, 1/s: v = v_planned + KP x (planned - measured)
+VEL_MAX = 100.0                     # mm/s ceiling on the commanded arm velocity
+VEL_DEADMAN = 0.1                   # s a velocity command stays valid: a dropped stream stops the arm
 APPROACH_MM = 20.0                  # a first segment farther than this gets a planned approach first
 EXTRUDE_TIMEOUT_MARGIN = 1.0        # EXTRUDE_ON TIMEOUT = segment time + this, so the watchdog never cuts a segment
 KINDS = ("bed", "ext0", "ext1", "arm0", "arm1")
@@ -172,11 +182,11 @@ class Player:
     Progress and the last applied values are in .status()."""
 
     def __init__(self, cell, prog, z_floor=None, on_log=None, arm_mode="position", tick=None, approach_z=None):
-        if arm_mode not in ("position", "servo"):
-            raise ValueError("arm_mode must be 'position' or 'servo'")
+        if arm_mode not in ("position", "servo", "velocity"):
+            raise ValueError("arm_mode must be 'position', 'servo' or 'velocity'")
         self.cell, self.prog = cell, prog
         self.arm_mode = arm_mode
-        self.tick = tick or (SERVO_TICK if arm_mode == "servo" else TICK)
+        self.tick = tick or {"servo": SERVO_TICK, "velocity": VEL_TICK}.get(arm_mode, TICK)
         self.z_floor = z_floor or {}                 # {"arm0": z0, "arm1": z0}: refuse targets below these
         self.log = on_log or (lambda s: None)
         self._seg_from = {}                          # servo: where each arm segment started
@@ -226,6 +236,8 @@ class Player:
         for t in list(self._servo_arms):                 # back to position mode, always
             try:
                 a = self.cell.arms[t].arm
+                if self.arm_mode == "velocity":
+                    a.vc_set_cartesian_velocity([0, 0, 0, 0, 0, 0], duration=0.01)
                 a.set_mode(0)
                 a.set_state(0)
             except Exception as ex:
@@ -252,6 +264,42 @@ class Player:
                 a.set_position(first[0], first[1], up, r, p, yw, speed=60, wait=True)
             a.set_position(first[0], first[1], first[2], r, p, yw, speed=20, wait=True)
             self.log(f"{kind}: approached the start ({math.dist(cur, first):.0f} mm away)")
+
+    def _velocity_on(self):
+        for kind in self.prog.tracks:
+            if not kind.startswith("arm"):
+                continue
+            t = self._tool(kind)
+            a = self.cell.arms[t].arm
+            if not hasattr(a, "vc_set_cartesian_velocity"):
+                raise RuntimeError(f"arm{t}: this SDK/firmware has no Cartesian velocity mode (needs 1.6.9+)")
+            a.set_mode(5)
+            a.set_state(0)
+            time.sleep(0.1)
+            self._servo_arms.append(t)                       # same restore path: back to mode 0 at the end
+            self._seg_from[kind] = tuple(self.cell.pose(t)[:3])
+
+    def _apply_velocity(self, kind, seg, idx, into):
+        """Planned velocity of the segment plus a correction towards the planned point for this instant."""
+        t = self._tool(kind)
+        prev_idx = self.idx[kind]
+        if prev_idx is not None and prev_idx != idx:
+            self._seg_from[kind] = self.prog.tracks[kind].segs[prev_idx].value
+        self.idx[kind] = idx
+        self.applied[kind] = seg.value
+        a, b = self._seg_from[kind], seg.value
+        f = min(1.0, into / seg.dur)
+        planned = tuple(a[j] + (b[j] - a[j]) * f for j in range(3))
+        v_plan = tuple((b[j] - a[j]) / seg.dur for j in range(3))
+        meas = tuple(self.cell.pose(t)[:3])
+        v = [v_plan[j] + VEL_KP * (planned[j] - meas[j]) for j in range(3)]
+        floor = self.z_floor.get(kind)
+        if floor is not None and meas[2] <= floor + 1e-6 and v[2] < 0:
+            v[2] = 0.0                                       # never drive below Z0
+        mag = math.sqrt(sum(c * c for c in v))
+        if mag > VEL_MAX:
+            v = [c * VEL_MAX / mag for c in v]
+        self.cell.arms[t].arm.vc_set_cartesian_velocity([v[0], v[1], v[2], 0.0, 0.0, 0.0], duration=VEL_DEADMAN)
 
     def _servo_on(self):
         for kind in self.prog.tracks:
@@ -323,6 +371,8 @@ class Player:
             self._approach()
             if self.arm_mode == "servo":
                 self._servo_on()
+            elif self.arm_mode == "velocity":
+                self._velocity_on()
             self.t0 = time.monotonic()
             while not self._stop.is_set():
                 t = time.monotonic() - self.t0
@@ -337,6 +387,11 @@ class Player:
                                 self._apply_bed(0.0)
                             elif kind.startswith("ext"):
                                 self._apply_ext(kind, 0.0, 0.0)
+                            elif self.arm_mode == "velocity":
+                                self.cell.arms[self._tool(kind)].arm.vc_set_cartesian_velocity([0, 0, 0, 0, 0, 0], duration=0.01)
+                        continue
+                    if kind.startswith("arm") and self.arm_mode == "velocity":
+                        self._apply_velocity(kind, seg, idx, into)
                         continue
                     if kind.startswith("arm") and self.arm_mode == "servo":
                         prev_idx = self.idx[kind]

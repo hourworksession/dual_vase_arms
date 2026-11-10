@@ -745,7 +745,12 @@ def stream_outline(g, k, cell, arms, per, lead, L, s_end, a0, live, stream, set_
         w_raw = (total - prev_total) / max(now - prev_t, 1e-3)
         w_filt = 0.5 * w_filt + 0.5 * w_raw
         prev_total, prev_t = total, now
-        total_lead = total + w_filt * g["SERVO_LEAD_S"]   # where the bed will be when the pose lands
+        # where the bed will be when the pose lands: lead ahead of the measured angle, but never past the
+        # index it is driving to (90 deg per corner started). Without the clamp the filtered speed keeps
+        # predicting during the bed's deceleration, the arm pre-positions beyond the index, then comes
+        # back through it as the lead collapses: a small zigzag at the start of every straight.
+        target = 90.0 * corners_started
+        total_lead = max(total, min(total + w_filt * g["SERVO_LEAD_S"], target)) if w_filt > 0 else total
         s = min(s_end, v * (now - t0))
         seg = int(s // (d2 + arc)) * 2                    # side k then corner k, per quarter
         s_in = s - (seg // 2) * (d2 + arc)

@@ -124,6 +124,30 @@ class _SimXArm:
     def set_state(self, state):
         return 0
 
+    def vc_set_cartesian_velocity(self, speeds, is_radian=None, is_tool_coord=False, duration=-1, **_):
+        """Velocity mode: the pose integrates the commanded velocity until `duration` runs out."""
+        code = self._gate("velocity")
+        if code:
+            return code
+        self._integrate()
+        self._vel = [float(v) for v in speeds[:3]]
+        self._vel_until = time.time() + (duration if duration and duration > 0 else 3600)
+        return 0
+
+    def _integrate(self):
+        vel = getattr(self, "_vel", None)
+        if not vel:
+            return
+        now = time.time()
+        t_prev = getattr(self, "_vel_t", now)
+        t_end = min(now, getattr(self, "_vel_until", now))
+        dt = max(0.0, t_end - t_prev)
+        if dt > 0:
+            self.o._pose = [self.o._pose[0] + vel[0] * dt, self.o._pose[1] + vel[1] * dt, self.o._pose[2] + vel[2] * dt] + list(self.o._pose[3:])
+        self._vel_t = now
+        if now >= getattr(self, "_vel_until", now):
+            self._vel = None
+
     def set_servo_cartesian(self, mvpose, speed=None, mvacc=None, **_):
         """Servo mode: go straight to the pose (the simulator teleports)."""
         code = self._gate("servo")
@@ -146,6 +170,7 @@ class _SimXArm:
         return 0
 
     def get_position(self):
+        self._integrate()
         return 0, list(self.o._pose)
 
     def get_servo_angle(self, is_radian=False):
