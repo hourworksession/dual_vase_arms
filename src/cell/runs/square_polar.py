@@ -370,7 +370,25 @@ def run(g, k, cell, cold=False):
         cell.move(tl, *live["xy"][tl], guard(tl, live["z"][tl] + 10), speed=20, wait=True)
     for tl in arms:
         cell.move(tl, *PARK, speed=v_arm, wait=True)
-    print("7. Bed stopped. Done.")
+    # square up: a face centre faces the arm at every 90 deg from the start angle, so turn the bed to the
+    # nearest one (the ironing arm sits 180 deg round, which is also a face). Then the next step, e.g. the
+    # ironing notebook, starts square to a side without a jog.
+    square = a0 + 90.0 * round((cell.tt.get_angle() - a0) / 90.0)
+    square_up(cell.tt, square)
+    print(f"7. Bed stopped at {cell.tt.get_angle():.2f} deg (a face centre faces the arm). Done.")
+
+
+def square_up(tt, angle_deg, speed_dps=15.0):
+    """Turn the bed to angle_deg (absolute, continuous angle) and wait. Falls back to a timed
+    free-run on a turntable without rotate_absolute (the simulator)."""
+    if hasattr(tt, "rotate_absolute"):
+        tt.rotate_absolute(angle_deg, speed_dps, wait=True)
+        return
+    delta = angle_deg - tt.get_angle()
+    if abs(delta) > 0.05:
+        tt.rotate_velocity(speed_dps if delta > 0 else -speed_dps)
+        time.sleep(abs(delta) / speed_dps)
+        tt.stop_rotation()
 
 
 def logger(g, cell, live, log_path, cold):
