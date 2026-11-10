@@ -42,3 +42,22 @@ def test_arm_mode_moves_the_arm_along_the_arc_with_the_bed_still():
     assert abs((max(angs) - min(angs)) - math.degrees(40 / r_face)) < 1.0
     radii = [math.hypot(q[0] - arm["CX"], q[1] - arm["CY"]) for q in pts]
     assert abs(min(radii) - (r_face - 0.3)) < 0.05
+
+
+def test_flat_face_is_a_straight_line_along_the_side_at_apothem_minus_pressure():
+    arm = dict(DEFAULTS[1], T=1)
+    apothem = 40 + arm["DR"]
+    zones = [dict(pressure=0.3, x_start=-20, x_end=20, z_start=10, passes=[0], motif="line", step=1)]
+    p = ir.compile_zones(arm, apothem, zones, face="flat", flat_half_width=30, iron_speed=5)
+    rows = prg.simulate(p, tick=0.1)
+    ang = math.radians(arm["ANGLE"])
+    pressing = [r["arm1"] for r in rows if r["arm1"] and 4 < r["t"] < p.total() - 3]
+    outs = [(q[0] - arm["CX"]) * math.cos(ang) + (q[1] - arm["CY"]) * math.sin(ang) for q in pressing]
+    sides = [-(q[0] - arm["CX"]) * math.sin(ang) + (q[1] - arm["CY"]) * math.cos(ang) for q in pressing]
+    assert max(outs) - min(outs) < 1e-6 and abs(outs[0] - (apothem - 0.3)) < 1e-6   # constant distance to the side
+    assert abs(max(sides) - 20) < 0.5 and abs(min(sides) + 20) < 0.5                  # straight along it
+    import pytest
+    with pytest.raises(ValueError):
+        ir.compile_zones(arm, apothem, zones, face="flat", flat_half_width=15)         # past the flat part
+    with pytest.raises(ValueError):
+        ir.compile_zones(arm, apothem, zones, face="flat", mode="bed")

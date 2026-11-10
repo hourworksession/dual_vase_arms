@@ -6,12 +6,14 @@ each with its own range along the wall, start height, pressure, list of passes a
 approaches the wall straight on until it presses by `pressure`, sweeps back and forth, one pass
 per entry in `passes` (each shifted in z), then backs away before the next zone.
 
-On the cell the column is round, so "along the wall" is an arc about the turntable axis. Two ways
-to make that motion, same zones, same motifs (mode= in compile_zones):
-    "arm"  Nino's way: the bed stays still and the arm does everything, moving along the arc at
-           the pressing radius in its own XYZ (the default)
-    "bed"  the bed turns the face past the nozzle (arc length / R_face as bed angle) and the arm
-           holds its radius and does only the z part of the motif
+On the cell the face can be FLAT (a square column's side) or ROUND (a cylinder), and the motion
+along it can come from the arm or from the bed (face= and mode= in compile_zones):
+    face "flat"  Nino's wall as she wrote it: a straight line along the side at apothem - pressure
+                 from the axis, the arm moving in its own XYZ with the bed still (mode "arm" only)
+    face "round" "along the wall" is an arc about the axis at R - pressure:
+        mode "arm"  the bed stays still, the arm moves along the arc in XYZ (the default)
+        mode "bed"  the bed turns the face past the nozzle (arc length / R as bed angle) and the
+                    arm holds its radius and does only the z part of the motif
 The pattern functions below are Nino's, with (x, y, z) replaced by (s, z): s = mm along the
 face, z = height.
 
@@ -127,22 +129,36 @@ def check_zones(zones, z_bottom, z_top):
 
 
 # ---------------------------------------------------------------- the cell: bed turns, arm holds radius
-def compile_zones(arm, r_face, zones, *, mode="arm", iron_speed=5.0, safe_distance=5.0, approach_speed=2.0,
-                  travel_speed=20.0, bed_dir=-1, name="ironing"):
-    """Nino's zone sequence as a Program for one arm pressing the face of a round column.
+def compile_zones(arm, r_face, zones, *, face="round", mode="arm", flat_half_width=None, iron_speed=5.0,
+                  safe_distance=5.0, approach_speed=2.0, travel_speed=20.0, bed_dir=-1, name="ironing"):
+    """Nino's zone sequence as a Program for one arm pressing the face of a column.
 
     arm:      the ironing arm's DEFAULTS entry (CX, CY, ANGLE, Z0)
-    r_face:   radius of the face the nozzle sees (column radius + that arm's DR), mm
-    zones:    list of zone dicts (see module docstring); x along the face = arc length, mm
-    mode:     "arm" (bed still, the arm moves along the arc in XYZ) or "bed" (the bed turns the
-              face past the nozzle, the arm holds its radius and does z)
+    r_face:   distance from the axis to the face the nozzle sees: the cylinder's radius, or a square
+              column's apothem (half side), plus that arm's DR, mm
+    zones:    list of zone dicts (see module docstring); x along the face in mm (arc length on a
+              round face, straight distance from the face centre on a flat one)
+    face:     "round" or "flat"
+    mode:     "arm" (bed still, the arm moves along the face in XYZ) or "bed" (round faces only:
+              the bed turns the face past the nozzle, the arm holds its radius and does z)
+    flat_half_width: flat faces: how far the flat part extends from the face centre (half side
+              minus the fillet radius); zones beyond it would run onto the fillet and are refused
     iron_speed: mm/s along the pattern; approach/back-off at approach_speed; between zones at travel_speed
     bed_dir:  "bed" mode only: sign that makes +s turn the face past the nozzle the same way as +x
               did on Nino's wall (only mirrors the pattern; -1 as measured on the cell)
     """
     if mode not in ("arm", "bed"):
         raise ValueError("mode must be 'arm' or 'bed'")
-    prog = Program(name, f"{len(zones)} zones, {mode} moves, {iron_speed:g} mm/s, safe {safe_distance:g} mm")
+    if face not in ("round", "flat"):
+        raise ValueError("face must be 'round' or 'flat'")
+    if face == "flat" and mode == "bed":
+        raise ValueError("a flat face cannot be ironed by turning the bed (its distance from the axis changes); use mode='arm'")
+    if face == "flat" and flat_half_width is not None:
+        for k, cfg in enumerate(zones, start=1):
+            reach = max(abs(cfg["x_start"]), abs(cfg["x_end"])) + (cfg.get("r", 0.0) if cfg["motif"] == "spiral" else 0.0)
+            if reach > flat_half_width + 1e-9:
+                raise ValueError(f"zone {k} reaches {reach:g} mm from the face centre, past the flat part ({flat_half_width:g} mm)")
+    prog = Program(name, f"{len(zones)} zones, {face} face, {mode} moves, {iron_speed:g} mm/s, safe {safe_distance:g} mm")
     bed = prog.track("bed") if mode == "bed" else None
     tr = prog.track(f"arm{arm['T']}")
     z0 = arm["Z0"]
@@ -152,10 +168,13 @@ def compile_zones(arm, r_face, zones, *, mode="arm", iron_speed=5.0, safe_distan
         return bed_dir * math.degrees(s / r_face)
 
     def point(r, s):
-        """Nozzle (x, y) in the arm's frame for radius r at arc length s along the face."""
+        """Nozzle (x, y) in the arm's frame at distance r from the axis and s along the face."""
         if mode == "bed":
             return arm_point(arm, r)                              # fixed direction; the bed brings s round
-        phi = ang0 + s / r_face                                   # s along the face = an angle about the axis
+        if face == "flat":                                        # straight along the side: r out, s sideways
+            return (arm["CX"] + r * math.cos(ang0) - s * math.sin(ang0),
+                    arm["CY"] + r * math.sin(ang0) + s * math.cos(ang0))
+        phi = ang0 + s / r_face                                   # round: s along the face = an angle about the axis
         return (arm["CX"] + r * math.cos(phi), arm["CY"] + r * math.sin(phi))
 
     def seg(r, s_from, z_from, s_to, z_to, speed):
