@@ -1,0 +1,30 @@
+"""Nino's ironing motifs and the zone compiler: pure maths."""
+import math
+
+from cell import ironing as ir, program as prg
+from cell.runs.cylinder import DEFAULTS
+
+
+def test_motifs_end_on_the_line_at_p_end():
+    assert ir.line((0, 5), (10, 5), 1)[-1] == (10, 5)
+    zz = ir.zigzag((0, 5), (10, 5), amp=2, pitch=0.5)
+    assert zz[-1] == (10, 5) and max(z for _, z in zz) == 7
+    sp = ir.spiral((0, 5), (10, 5), radius=1, pitch=2, n_seg=12)
+    assert abs(sp[-1][0] - 10) < 1e-9 and abs(sp[-1][1] - 5) < 1e-9
+    assert ir.motif_height(dict(motif="spiral", r=1)) == 2
+
+
+def test_zone_compiles_to_bed_rotation_and_held_radius():
+    arm = dict(DEFAULTS[1], T=1)
+    r_face = 40 + arm["DR"]
+    zones = [dict(pressure=0.3, x_start=-20, x_end=20, z_start=10, passes=range(0, 21, 10), motif="line", step=1)]
+    p = ir.compile_zones(arm, r_face, zones, iron_speed=5)
+    rows = prg.simulate(p, tick=0.1)
+    radii = [math.hypot(r["arm1"][0] - arm["CX"], r["arm1"][1] - arm["CY"]) for r in rows if r["arm1"]]
+    assert abs(min(radii) - (r_face - 0.3)) < 0.05           # pressing
+    assert abs(max(radii) - (r_face + 5)) < 0.05             # safe distance
+    span = max(r["bed_deg"] for r in rows) - min(r["bed_deg"] for r in rows)
+    assert abs(span - math.degrees(40 / r_face)) < 1.0        # the zone's 40 mm as bed angle
+    zs = [r["arm1"][2] - arm["Z0"] for r in rows if r["arm1"]]
+    assert abs(min(zs) - 10) < 1e-6 and abs(max(zs) - 30) < 1e-6
+    assert ir.check_zones(zones, 0.6, 25) == ["zone 1: ironing goes up to 30 mm, above the top of the wall (25 mm)"]

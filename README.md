@@ -14,6 +14,7 @@ Working branch: `lab-merged`. Run everything from the repo root.
       runs/              the printing tests: cylinder.py, square_indexing.py, square_polar.py
       program.py         speed-and-time programs: tracks of (speed, seconds) per device, a Player and a simulator
       shapes.py          outlines compiled into programs (cylinder, rounded square, rounded polygon) and manual actions
+      ironing.py         Nino's ironing zones and motifs (line, zigzag, spiral) compiled into a bed + arm program
     src/rehearsal/       the LLM rehearsal test bed (docs/rehearsal_testbed.md)
     notebooks/           the same processes laid out part by part: 00 cell control, 01 rounded square, 02 column and ironing
     ui/web/              the browser panel: python3 ui/web/server.py --sim  then open http://localhost:8000
