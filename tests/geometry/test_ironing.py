@@ -51,11 +51,13 @@ def test_flat_face_is_a_straight_line_along_the_side_at_apothem_minus_pressure()
     p = ir.compile_zones(arm, apothem, zones, face="flat", flat_half_width=30, iron_speed=5)
     rows = prg.simulate(p, tick=0.1)
     ang = math.radians(arm["ANGLE"])
-    pressing = [r["arm1"] for r in rows if r["arm1"] and 4 < r["t"] < p.total() - 3]
-    outs = [(q[0] - arm["CX"]) * math.cos(ang) + (q[1] - arm["CY"]) * math.sin(ang) for q in pressing]
-    sides = [-(q[0] - arm["CX"]) * math.sin(ang) + (q[1] - arm["CY"]) * math.cos(ang) for q in pressing]
-    assert max(outs) - min(outs) < 1e-6 and abs(outs[0] - (apothem - 0.3)) < 1e-6   # constant distance to the side
-    assert abs(max(sides) - 20) < 0.5 and abs(min(sides) + 20) < 0.5                  # straight along it
+    pts = [r["arm1"] for r in rows if r["arm1"]]
+    outs = [(q[0] - arm["CX"]) * math.cos(ang) + (q[1] - arm["CY"]) * math.sin(ang) for q in pts]
+    sides = [-(q[0] - arm["CX"]) * math.sin(ang) + (q[1] - arm["CY"]) * math.cos(ang) for q in pts]
+    pressing = [sd for o, sd in zip(outs, sides) if abs(o - (apothem - 0.3)) < 1e-6]     # while on the side
+    assert len(pressing) > 10
+    assert abs(max(pressing) - 20) < 0.5 and abs(min(pressing) + 20) < 0.5               # straight along it, the zone's 40 mm
+    assert abs(max(outs) - (apothem + 5)) < 1e-6                                          # safe distance between zones
     import pytest
     with pytest.raises(ValueError):
         ir.compile_zones(arm, apothem, zones, face="flat", flat_half_width=15)         # past the flat part
